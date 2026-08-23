@@ -30,12 +30,19 @@ public:
 
     bool isRunning() const;
 
+    // True once the attached process has exited. The widget keeps showing
+    // the last screen (dimmed, with a banner) rather than vanishing, so a
+    // box that dies while you're looking elsewhere leaves evidence behind
+    // instead of silently closing its own tab.
+    bool isDisconnected() const { return m_disconnected; }
+
 signals:
     // The attached process exited (box was stopped/removed, or `docker
     // attach` itself died). exitCode mirrors PtySession::finished.
     void sessionFinished(int exitCode);
 
 protected:
+    bool event(QEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
@@ -55,6 +62,9 @@ private:
     int m_cellHeight = 16;
     int m_rows = 24;
     int m_cols = 80;
+
+    bool m_disconnected = false;
+    QString m_exitNote;
 
     int m_cursorRow = 0;
     int m_cursorCol = 0;
