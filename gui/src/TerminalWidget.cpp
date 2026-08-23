@@ -1,5 +1,6 @@
 #include "TerminalWidget.h"
 #include "PtySession.h"
+#include "Theme.h"
 
 #include <QApplication>
 #include <QColor>
@@ -134,7 +135,52 @@ void TerminalWidget::onPtyData(const QByteArray &data)
 
 void TerminalWidget::onPtyFinished(int exitCode)
 {
+    m_disconnected = true;
+    m_exitNote = exitCode == 0
+        ? QStringLiteral("Session ended.\nThis box is no longer attached.")
+        : QStringLiteral("Session ended (exit %1).\nThis box is no longer attached.").arg(exitCode);
+    update();
     emit sessionFinished(exitCode);
+}
+
+namespace {
+// Chords this application keeps for itself. Everything else belongs to
+// whatever is running inside the terminal.
+//
+// The split follows terminal-emulator convention: Ctrl+Shift+X is the
+// app's, plain Ctrl+X is the inner program's. That matters here more than
+// in a normal terminal, because the inner program is Claude Code -- it
+// binds a lot of Ctrl chords, and silently swallowing them into a menu
+// would be maddening.
+bool isApplicationChord(const QKeyEvent *e)
+{
+    const Qt::KeyboardModifiers m = e->modifiers();
+    if ((m & Qt::ControlModifier) && (m & Qt::ShiftModifier))
+        return true;
+    if ((m & Qt::AltModifier) && e->key() >= Qt::Key_1 && e->key() <= Qt::Key_9)
+        return true;
+    if (e->key() == Qt::Key_F5)
+        return true;
+    return false;
+}
+}
+
+bool TerminalWidget::event(QEvent *event)
+{
+    // Qt resolves QAction/QShortcut chords in QShortcutMap *before* the
+    // focused widget sees the key. Left alone, every menu accelerator
+    // would be stolen out from under the terminal. Accepting the
+    // ShortcutOverride tells Qt to deliver the key here as an ordinary
+    // press instead -- except for the chords reserved above, which are
+    // allowed to reach the menus.
+    if (event->type() == QEvent::ShortcutOverride) {
+        auto *ke = static_cast<QKeyEvent *>(event);
+        if (!m_disconnected && !isApplicationChord(ke)) {
+            event->accept();
+            return true;
+        }
+    }
+    return QWidget::event(event);
 }
 
 void TerminalWidget::sendToPty(const QByteArray &data)
@@ -201,7 +247,7 @@ void TerminalWidget::paintEvent(QPaintEvent *event)
 {
     QPainter painter(this);
     painter.setFont(m_font);
-    painter.fillRect(rect(), Qt::black);
+    painter.fillRect(rect(), Theme::terminalBg());
 
     if (!m_screen)
         return;
@@ -252,6 +298,16 @@ void TerminalWidget::paintEvent(QPaintEvent *event)
             }
         }
     }
+
+    if (m_disconnected) {
+        painter.fillRect(rect(), QColor(0, 0, 0, 140));
+        QFont banner = m_font;
+        banner.setPointSizeF(banner.pointSizeF() + 2);
+        banner.setBold(true);
+        painter.setFont(banner);
+        painter.setPen(Theme::stopped());
+        painter.drawText(rect(), Qt::AlignCenter, m_exitNote);
+    }
 }
 
 namespace {
@@ -270,6 +326,13 @@ VTermModifier qtModsToVterm(Qt::KeyboardModifiers mods)
 
 void TerminalWidget::keyPressEvent(QKeyEvent *event)
 {
+    if (m_disconnected) {
+        // Nothing to type into any more; let the key bubble up so window
+        // shortcuts still work while a dead tab happens to hold focus.
+        event->ignore();
+        return;
+    }
+
     if (!m_vterm) {
         QWidget::keyPressEvent(event);
         return;
