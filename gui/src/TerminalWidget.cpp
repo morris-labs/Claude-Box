@@ -75,19 +75,43 @@ TerminalWidget::~TerminalWidget()
         vterm_free(m_vterm); // also frees m_screen, owned by the VTerm
 }
 
+// vterm_screen_set_callbacks() stores this pointer rather than copying the
+// struct, so whatever we hand it has to outlive every TerminalWidget -- a
+// stack local is a dangling pointer that segfaults on the first byte of
+// output. The contents are identical for every instance (per-instance
+// state rides in the `user` pointer), so one shared constant is both
+// correct and sufficient. Built field-by-field rather than with a braced
+// initializer so it stays right regardless of the field order libvterm
+// happens to declare.
+static const VTermScreenCallbacks &screenCallbacks()
+{
+    static const VTermScreenCallbacks cbs = [] {
+        VTermScreenCallbacks c{};
+        c.damage = vtermDamageCallback;
+        c.movecursor = vtermMoveCursorCallback;
+        c.bell = vtermBellCallback;
+        return c;
+    }();
+    return cbs;
+}
+
 void TerminalWidget::setupVterm()
 {
     m_vterm = vterm_new(m_rows, m_cols);
     vterm_set_utf8(m_vterm, 1);
 
     m_screen = vterm_obtain_screen(m_vterm);
-    vterm_screen_reset(m_screen, 1);
+    vterm_screen_set_callbacks(m_screen, &screenCallbacks(), this);
 
-    VTermScreenCallbacks callbacks{};
-    callbacks.damage = vtermDamageCallback;
-    callbacks.movecursor = vtermMoveCursorCallback;
-    callbacks.bell = vtermBellCallback;
-    vterm_screen_set_callbacks(m_screen, &callbacks, this);
+    // Claude Code's TUI runs on the alternate screen, and libvterm only
+    // allocates that second buffer when asked. Without this the altscreen
+    // escape is silently ignored and alt-screen output is drawn straight
+    // over the primary buffer instead.
+    vterm_screen_enable_altscreen(m_screen, 1);
+
+    // reset() emits the initial damage, so it comes last -- after the
+    // callbacks that are supposed to receive it are registered.
+    vterm_screen_reset(m_screen, 1);
 
     vterm_output_set_callback(m_vterm, vtermOutputCallback, this);
 }
@@ -263,6 +287,14 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event)
         return;
     case Qt::Key_Tab:
         vterm_keyboard_key(m_vterm, VTERM_KEY_TAB, mod);
+        return;
+    case Qt::Key_Backtab:
+        // Qt delivers Shift+Tab as Key_Backtab, and depending on platform
+        // may drop ShiftModifier while doing so. Claude Code uses Shift+Tab
+        // to cycle permission modes, so re-assert the modifier explicitly
+        // rather than letting it fall through as a plain tab.
+        vterm_keyboard_key(m_vterm, VTERM_KEY_TAB,
+                           static_cast<VTermModifier>(mod | VTERM_MOD_SHIFT));
         return;
     case Qt::Key_Escape:
         vterm_keyboard_key(m_vterm, VTERM_KEY_ESCAPE, mod);
