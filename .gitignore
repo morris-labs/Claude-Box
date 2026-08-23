@@ -1,0 +1,11 @@
+# Build output
+gui/build/
+
+# Legacy bash launcher/manager -- kept on disk as a working fallback while
+# the C++/Qt6 app in gui/ is being built out, but not tracked here.
+/claude-box.bash
+/claude-box-manager.bash
+/claude-box-lib.bash
+/claude-box-resume-all.bash
+/claude-box-resume.service
+/docker-compose.yml
