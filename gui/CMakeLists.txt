@@ -5,7 +5,7 @@
 # Run:   ./build/claude-box-gui
 
 cmake_minimum_required(VERSION 3.16)
-project(claude-box-gui LANGUAGES CXX)
+project(claude-box-gui VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +32,11 @@ add_executable(claude-box-gui
     src/TerminalWidget.h
     src/NewBoxDialog.cpp
     src/NewBoxDialog.h
+)
+
+target_compile_definitions(claude-box-gui
+    PRIVATE
+        CLAUDE_BOX_VERSION="${PROJECT_VERSION}"
 )
 
 target_link_libraries(claude-box-gui
