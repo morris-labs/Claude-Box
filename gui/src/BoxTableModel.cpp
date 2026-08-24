@@ -163,6 +163,12 @@ QVariant BoxTableModel::headerData(int section, Qt::Orientation orientation, int
 
 void BoxTableModel::setBoxes(const QList<BoxInfo> &boxes)
 {
+    // Most polls find nothing changed. Resetting anyway would drop the
+    // selection, re-measure every column and repaint the table several
+    // times a minute for no reason.
+    if (boxes == m_boxes)
+        return;
+
     beginResetModel();
     m_boxes = boxes;
     endResetModel();
