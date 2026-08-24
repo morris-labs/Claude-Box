@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QElapsedTimer>
+#include <QHash>
 #include <QString>
 #include <QStringList>
 #include <QList>
@@ -19,21 +21,37 @@ struct BoxInfo {
     QString conversationName;
     QString targetDir;
     QString detail; // human-readable status text for the Details column
+
+    bool operator==(const BoxInfo &o) const
+    {
+        return status == o.status && name == o.name && conversationName == o.conversationName
+            && targetDir == o.targetDir && detail == o.detail;
+    }
+    bool operator!=(const BoxInfo &o) const { return !(*this == o); }
 };
 
 // Every interaction with `docker` for managing claude-box containers.
-// Deliberately synchronous (QProcess::waitForFinished): these are short,
-// local, non-network commands invoked either from explicit user actions
-// or a several-second refresh timer, and a blocking call here is far
-// easier to get right without a compiler in the loop than a fully async
-// design would be. PtySession (the long-lived attach connection) is the
-// one place that genuinely needs to be event-driven.
+//
+// These calls are synchronous (QProcess::waitForFinished), which is fine
+// only because MainWindow runs the polling ones on a worker thread. That
+// is not a stylistic choice: `docker stats` costs 1-2 SECONDS per
+// invocation, so calling it on the GUI thread every few seconds froze the
+// entire application more often than it ran. Anything added here should be
+// assumed slow and kept off the UI thread.
 class DockerBackend {
 public:
     // Running + stopped-but-not-removed + known-but-not-running boxes,
-    // merged with ~/.claude-box/known/ records. Running entries include a
-    // `docker stats` snapshot in detail.
-    QList<BoxInfo> listBoxes() const;
+    // merged with ~/.claude-box/known/ records. Running entries carry a
+    // cached `docker stats` snapshot in detail.
+    //
+    // SLOW -- call from a worker thread, never the GUI thread. The `ps`
+    // queries are milliseconds, but when `sampleStats` is true and the
+    // cache has gone stale this also spends a second or two refreshing it.
+    QList<BoxInfo> listBoxes(bool sampleStats = true) const;
+
+    // Forces the next listBoxes(true) to re-sample stats regardless of
+    // cache age. Used by the explicit Refresh action.
+    void invalidateStats();
 
     bool isRunning(const QString &name) const;
 
@@ -56,6 +74,17 @@ public:
     bool remove(const QString &name, QString *errorOut) const; // docker rm
 
 private:
+    // `docker stats --no-stream` takes 1-2 seconds to return no matter how
+    // many containers it reports on, because it samples CPU over an
+    // interval before printing. So it is asked for every container at once
+    // and the answer is cached: the old code ran it once PER running box
+    // on every refresh tick, which cost more time than the interval
+    // between ticks as soon as a second box existed.
+    mutable QHash<QString, QString> m_statsCache;
+    mutable QElapsedTimer m_statsAge;
+    mutable bool m_statsSampled = false;
+    void refreshStatsCache() const;
+
     bool runDocker(const QStringList &args, QString *stdoutOut, QString *errorOut, int timeoutMs) const;
     bool runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const;
     QString uniqueBoxName(const QString &base) const;

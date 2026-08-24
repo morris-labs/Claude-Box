@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QFutureWatcher>
 #include <QMainWindow>
 #include <QModelIndex>
 #include <QPoint>
@@ -36,7 +37,10 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private slots:
+    // Kicks off a background poll. Cheap and non-blocking; the results
+    // land in onBoxesLoaded().
     void refreshBoxes();
+    void onBoxesLoaded();
     void updateActionStates();
     void onRowDoubleClicked(const QModelIndex &index);
     void showTableContextMenu(const QPoint &pos);
@@ -73,6 +77,14 @@ private:
     QSplitter *m_topSplitter = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
+
+    // Docker polling runs on a worker thread: `docker stats` alone costs
+    // 1-2 seconds per call, which froze the GUI for most of every refresh
+    // interval when it ran inline. Only one poll is ever in flight, which
+    // is also what makes DockerBackend's stats cache safe to touch without
+    // a mutex.
+    QFutureWatcher<QList<BoxInfo>> *m_refreshWatcher = nullptr;
+    bool m_hasLoadedOnce = false;
     QLabel *m_statusCounts = nullptr;
     QLabel *m_statusRefreshed = nullptr;
 

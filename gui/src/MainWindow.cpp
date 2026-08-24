@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDateTime>
+#include <QtConcurrent>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -59,6 +60,10 @@ MainWindow::MainWindow(QWidget *parent)
     buildToolBar();
     buildStatusBar();
 
+    m_refreshWatcher = new QFutureWatcher<QList<BoxInfo>>(this);
+    connect(m_refreshWatcher, &QFutureWatcher<QList<BoxInfo>>::finished,
+            this, &MainWindow::onBoxesLoaded);
+
     m_refreshTimer = new QTimer(this);
     m_refreshTimer->setInterval(kRefreshIntervalMs);
     connect(m_refreshTimer, &QTimer::timeout, this, &MainWindow::refreshBoxes);
@@ -99,7 +104,10 @@ void MainWindow::buildActions()
     m_refreshAction = new QAction(Icons::refresh(), QStringLiteral("&Refresh Now"), this);
     m_refreshAction->setShortcut(QKeySequence(Qt::Key_F5));
     m_refreshAction->setStatusTip(QStringLiteral("Re-read docker state immediately"));
-    connect(m_refreshAction, &QAction::triggered, this, &MainWindow::refreshBoxes);
+    connect(m_refreshAction, &QAction::triggered, this, [this] {
+        m_docker.invalidateStats(); // explicit refresh means "now", not "cached"
+        refreshBoxes();
+    });
 
     m_detailsAction = new QAction(QStringLiteral("Show &Details Panel"), this);
     m_detailsAction->setCheckable(true);
@@ -346,9 +354,33 @@ void MainWindow::reselectByName(const QString &name)
 
 void MainWindow::refreshBoxes()
 {
+    // One poll at a time. If the previous one is still going (a stats
+    // sample takes a second or two) just let it finish -- queueing more
+    // work behind it is how the old synchronous version fell permanently
+    // behind its own timer.
+    if (m_refreshWatcher->isRunning())
+        return;
+
+    const bool sampleStats = m_hasLoadedOnce;
+    m_refreshWatcher->setFuture(QtConcurrent::run([this, sampleStats] {
+        return m_docker.listBoxes(sampleStats);
+    }));
+}
+
+void MainWindow::onBoxesLoaded()
+{
+    // The very first poll deliberately skips stats so the table appears
+    // immediately instead of after a two-second sample; the next tick
+    // fills the cpu/mem readouts in.
+    const bool wasFirstLoad = !m_hasLoadedOnce;
+    m_hasLoadedOnce = true;
+
     const QString selected = currentSelectedName();
-    m_model->setBoxes(m_docker.listBoxes());
+    m_model->setBoxes(m_refreshWatcher->result());
     reselectByName(selected);
+
+    if (wasFirstLoad)
+        QTimer::singleShot(0, this, &MainWindow::refreshBoxes);
 
     int running = 0, stopped = 0, known = 0;
     for (int i = 0; i < m_model->rowCount(); ++i) {
@@ -783,5 +815,14 @@ void MainWindow::restoreSettings()
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     saveSettings();
+
+    // The worker holds a `this` pointer; letting it outlive the window
+    // would be a use-after-free.
+    m_refreshTimer->stop();
+    if (m_refreshWatcher->isRunning()) {
+        m_refreshWatcher->disconnect(this); // don't touch widgets while tearing down
+        m_refreshWatcher->waitForFinished();
+    }
+
     QMainWindow::closeEvent(event);
 }
