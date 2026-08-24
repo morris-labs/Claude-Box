@@ -75,8 +75,8 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
     if (pid == 0) {
         // Child: fds 0/1/2 are already the pty slave and it's already our
         // controlling terminal (forkpty() handles setsid()/TIOCSCTTY).
-        if (!workingDirBytes.isEmpty())
-            ::chdir(workingDirBytes.constData());
+        if (!workingDirBytes.isEmpty() && ::chdir(workingDirBytes.constData()) != 0)
+            ::_exit(127); // better to fail visibly than exec in the wrong directory
         ::execvp(argv[0], argv.data());
         ::_exit(127); // only reached if exec failed
     }

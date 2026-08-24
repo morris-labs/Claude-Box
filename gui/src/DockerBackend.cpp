@@ -98,8 +98,45 @@ QString DockerBackend::uniqueBoxName(const QString &base) const
     return candidate;
 }
 
-QList<BoxInfo> DockerBackend::listBoxes() const
+namespace {
+// How long a stats sample stays usable. Longer than the refresh interval
+// on purpose -- cpu/mem readouts are ambient information, and paying a
+// second of worker time for them on every tick is not worth it.
+constexpr qint64 kStatsMaxAgeMs = 10000;
+}
+
+void DockerBackend::invalidateStats()
 {
+    m_statsSampled = false;
+}
+
+void DockerBackend::refreshStatsCache() const
+{
+    if (m_statsSampled && m_statsAge.isValid() && m_statsAge.elapsed() < kStatsMaxAgeMs)
+        return;
+
+    QString out, err;
+    m_statsCache.clear();
+    // One call for every running container, rather than one call each.
+    if (runDocker({"stats", "--no-stream", "--format", "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"},
+                   &out, &err, 30000)) {
+        const QStringList lines = out.split('\n', Qt::SkipEmptyParts);
+        for (const QString &line : lines) {
+            const QStringList parts = line.split('\t');
+            if (parts.size() == 3)
+                m_statsCache.insert(parts.at(0), QString("cpu %1 · mem %2").arg(parts.at(1), parts.at(2)));
+        }
+    }
+
+    m_statsSampled = true;
+    m_statsAge.restart();
+}
+
+QList<BoxInfo> DockerBackend::listBoxes(bool sampleStats) const
+{
+    if (sampleStats)
+        refreshStatsCache();
+
     QList<BoxInfo> result;
     QSet<QString> seen;
     QString out, err;
@@ -126,13 +163,9 @@ QList<BoxInfo> DockerBackend::listBoxes() const
                 info.conversationName = info.name;
             }
 
-            QString statOut, statErr;
-            if (runDocker({"stats", "--no-stream", "--format", "{{.CPUPerc}}\t{{.MemUsage}}", info.name},
-                           &statOut, &statErr, 5000)) {
-                const QStringList statParts = statOut.trimmed().split('\t');
-                if (statParts.size() == 2)
-                    info.detail += QString(" · cpu %1 · mem %2").arg(statParts.at(0), statParts.at(1));
-            }
+            const QString stats = m_statsCache.value(info.name);
+            if (!stats.isEmpty())
+                info.detail += QStringLiteral(" · ") + stats;
 
             result.append(info);
             seen.insert(info.name);
