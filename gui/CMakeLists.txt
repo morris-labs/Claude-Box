@@ -62,14 +62,44 @@ configure_file(
 file(GENERATE OUTPUT "${CLAUDE_BOX_DESKTOP}"
      INPUT "${CMAKE_CURRENT_BINARY_DIR}/claude-box-gui.desktop.pre")
 
-add_custom_target(desktop-install
+# A .desktop file without the executable bit is a document, not a
+# launcher: clicking one hands it to the default text handler (or, in a
+# file manager that tries to run it, to a terminal that flashes and dies)
+# instead of starting the app. The generated copy gets marked executable
+# for the same reason -- it sits in the build tree where it's easy to
+# click by mistake.
+add_custom_command(TARGET claude-box-gui POST_BUILD
+    COMMAND chmod +x "${CLAUDE_BOX_DESKTOP}"
+    COMMENT "Marking the generated desktop entry executable"
+    VERBATIM
+)
+
+find_program(UPDATE_DESKTOP_DATABASE update-desktop-database)
+find_program(GIO_TOOL gio)
+
+set(desktop_install_commands
     COMMAND ${CMAKE_COMMAND} -E make_directory "$ENV{HOME}/.local/share/applications"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$ENV{HOME}/.local/share/icons/hicolor/scalable/apps"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/claude-box.svg"
             "$ENV{HOME}/.local/share/icons/hicolor/scalable/apps/claude-box.svg"
     COMMAND ${CMAKE_COMMAND} -E copy "${CLAUDE_BOX_DESKTOP}"
             "$ENV{HOME}/.local/share/applications/claude-box-gui.desktop"
-    COMMAND update-desktop-database "$ENV{HOME}/.local/share/applications" || true
+    COMMAND chmod +x "$ENV{HOME}/.local/share/applications/claude-box-gui.desktop"
+)
+if(GIO_TOOL)
+    # GNOME's "Allow Launching": without the trusted bit, Files opens the
+    # entry rather than running it, however set the executable bit is.
+    list(APPEND desktop_install_commands
+        COMMAND ${GIO_TOOL} set "$ENV{HOME}/.local/share/applications/claude-box-gui.desktop"
+                metadata::trusted true)
+endif()
+if(UPDATE_DESKTOP_DATABASE)
+    list(APPEND desktop_install_commands
+        COMMAND ${UPDATE_DESKTOP_DATABASE} "$ENV{HOME}/.local/share/applications")
+endif()
+
+add_custom_target(desktop-install
+    ${desktop_install_commands}
     DEPENDS claude-box-gui
     COMMENT "Installing claude-box-gui.desktop and its icon into ~/.local/share"
     VERBATIM
