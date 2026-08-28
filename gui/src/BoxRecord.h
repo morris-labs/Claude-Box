@@ -19,6 +19,11 @@ struct BoxRecord {
     // and in the UI changed, to say what the flag actually does.
     bool skipPermissions = false;
     QString model;            // `claude --model <alias-or-name>`; empty = whatever the settings say
+    // Subfolder of targetDir the agent was pointed at, when the box was
+    // created with a workspace folder; empty when it works in the target
+    // directory itself. Informational -- the container mounts and runs in
+    // targetDir either way, so nothing about reopening depends on it.
+    QString workspaceDir;
     QString effort;           // `claude --effort <level>`; empty = whatever the settings say
     QStringList ports;        // "HOST:CONTAINER", repeatable
     QStringList dirs;         // "HOSTPATH:CONTAINERPATH", repeatable

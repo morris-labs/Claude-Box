@@ -265,7 +265,7 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
     return runDocker(args, nullptr, errorOut, 30000);
 }
 
-bool DockerBackend::createNew(BoxRecord &rec, QString *errorOut) const
+bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut) const
 {
     // A caller may hand us the uuid of a conversation that already exists
     // on disk (see ConversationCatalog / NewBoxDialog) -- typically one
@@ -278,10 +278,19 @@ bool DockerBackend::createNew(BoxRecord &rec, QString *errorOut) const
 
     QString slug;
     QString openingPrompt;
-    const bool provisionIssue = !resumeExisting && !rec.conversationName.isEmpty()
-        && QFileInfo(rec.targetDir + "/new-issue.sh").isExecutable();
+    // The container still mounts and runs in the *base* directory either
+    // way -- the workspace is a subfolder the agent is pointed at, not a
+    // different -w. That's deliberate, and inherited from the old bash
+    // launcher: the sibling folders (and the tooling beside them) stay
+    // visible, and every box for a tree keeps the same mount and the same
+    // ~/.claude/projects encoding.
+    const bool provisionWorkspace = workspaceSubdir && !resumeExisting && !rec.conversationName.isEmpty();
+    // A project can script its own provisioning; app.odinhelp.com's
+    // new-issue.sh clones the repo and writes a CLAUDE.md into the folder.
+    // Without one, the folder is simply created empty.
+    const bool hasProvisioner = QFileInfo(rec.targetDir + "/new-issue.sh").isExecutable();
 
-    if (provisionIssue) {
+    if (provisionWorkspace) {
         slug = slugifyIssueName(rec.conversationName);
         if (slug.isEmpty()) {
             if (errorOut)
@@ -289,24 +298,37 @@ bool DockerBackend::createNew(BoxRecord &rec, QString *errorOut) const
             return false;
         }
 
-        const QString issueDir = rec.targetDir + "/" + slug;
-        if (!QDir(issueDir).exists()) {
-            QProcess p;
-            p.setWorkingDirectory(rec.targetDir);
-            p.start(rec.targetDir + "/new-issue.sh", {rec.conversationName});
-            if (!p.waitForFinished(30000) || p.exitCode() != 0) {
-                if (errorOut) {
-                    const QString stderrText = QString::fromUtf8(p.readAllStandardError()).trimmed();
-                    *errorOut = "new-issue.sh failed" + (stderrText.isEmpty() ? QString() : (": " + stderrText));
+        const QString workspacePath = rec.targetDir + "/" + slug;
+        // An existing folder means "you are resuming, not starting fresh"
+        // (new-issue.sh refuses outright in that case), so leave it alone.
+        if (!QDir(workspacePath).exists()) {
+            if (hasProvisioner) {
+                QProcess p;
+                p.setWorkingDirectory(rec.targetDir);
+                p.start(rec.targetDir + "/new-issue.sh", {rec.conversationName});
+                if (!p.waitForFinished(30000) || p.exitCode() != 0) {
+                    if (errorOut) {
+                        const QString stderrText = QString::fromUtf8(p.readAllStandardError()).trimmed();
+                        *errorOut = "new-issue.sh failed" + (stderrText.isEmpty() ? QString() : (": " + stderrText));
+                    }
+                    return false;
                 }
+            } else if (!QDir().mkpath(workspacePath)) {
+                if (errorOut)
+                    *errorOut = "could not create workspace folder " + workspacePath;
                 return false;
             }
         }
 
-        openingPrompt = QString(
-            "Issue: %1. Your workspace folder %2/ already exists, so do not run "
-            "new-issue.sh. Read %2/CLAUDE.md and work there. Wait for the ticket "
-            "details before changing anything.").arg(rec.conversationName, slug);
+        rec.workspaceDir = slug;
+
+        openingPrompt = hasProvisioner
+            ? QString("Issue: %1. Your workspace folder %2/ already exists, so do not run "
+                      "new-issue.sh. Read %2/CLAUDE.md and work there. Wait for the ticket "
+                      "details before changing anything.").arg(rec.conversationName, slug)
+            : QString("Your workspace for \"%1\" is the %2/ folder inside this directory; it "
+                      "already exists. Work there rather than in the directory above it, and "
+                      "wait for details before changing anything.").arg(rec.conversationName, slug);
     }
 
     const QString base = slug.isEmpty() ? QFileInfo(rec.targetDir).fileName() : slug;
@@ -317,8 +339,14 @@ bool DockerBackend::createNew(BoxRecord &rec, QString *errorOut) const
         rec.conversationName = rec.name;
 
     QStringList claudeArgs = baseClaudeArgs(rec);
-    if (provisionIssue)
-        claudeArgs << "--name" << rec.conversationName << openingPrompt;
+    // --name is claude's own session display name, and it applies to any
+    // named conversation -- the old launcher always forwarded it, and only
+    // the folder provisioning was conditional. The opening prompt is the
+    // part that depends on there being a workspace to point at.
+    if (!rec.conversationName.isEmpty())
+        claudeArgs << "--name" << rec.conversationName;
+    if (!openingPrompt.isEmpty())
+        claudeArgs << openingPrompt;
     claudeArgs << (resumeExisting ? "--resume" : "--session-id") << rec.sessionUuid;
 
     if (!runContainer(rec, claudeArgs, errorOut))
