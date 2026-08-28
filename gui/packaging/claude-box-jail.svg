@@ -1,5 +1,5 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!--
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!--
   Alternative app icon: the Claude mark behind bars, which is the joke
   the whole project runs on — a box is a cell you put an agent in.
 
@@ -9,8 +9,7 @@
 
   The starburst is a stylized homage, not Anthropic's official mark;
   don't pass it off as the real logo.
--->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  -->
   <defs>
     <linearGradient id="steel" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0"    stop-color="#5c626c"/>
