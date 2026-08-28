@@ -15,6 +15,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QIntValidator>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -35,10 +37,6 @@ constexpr int kTitleRole = Qt::UserRole + 1;
 const char *kWorkspaceDirsKey = "newBox/workspaceDirs";
 const QString kNoWorkspaceMarker = QStringLiteral("!");
 
-// Shown for model/effort when nothing should be passed on the command
-// line at all, leaving ~/.claude/settings.json in charge.
-const char *kDefaultChoice = "Default (from settings)";
-
 // `claude --effort <level>` accepts exactly these, per `claude --help`.
 const QStringList kEffortLevels = {"low", "medium", "high", "xhigh", "max"};
 
@@ -46,6 +44,50 @@ const QStringList kEffortLevels = {"low", "medium", "high", "xhigh", "max"};
 // latest model") or a full model name like claude-fable-5 -- which is why
 // the combo is editable rather than a fixed list.
 const QStringList kModelAliases = {"opus", "sonnet", "haiku", "fable"};
+
+// Used only when the settings files name nothing at all, so that the
+// combos always open on a real value rather than a placeholder.
+const QString kFallbackModel = QStringLiteral("opus");
+const QString kFallbackEffort = QStringLiteral("high");
+
+// What `claude` itself would pick for `key`, read from the same files it
+// reads and in the same precedence order (the project's local settings
+// beat the project's, which beat the user's). Returns empty if none of
+// them mention it.
+QString settingsValue(const QString &targetDir, const QString &key)
+{
+    QStringList files;
+    if (!targetDir.isEmpty()) {
+        files << targetDir + "/.claude/settings.local.json"
+              << targetDir + "/.claude/settings.json";
+    }
+    files << QDir::homePath() + "/.claude/settings.json";
+
+    for (const QString &path : files) {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly))
+            continue;
+        const QJsonObject obj = QJsonDocument::fromJson(f.readAll()).object();
+        const QString value = obj.value(key).toString();
+        if (!value.isEmpty())
+            return value;
+    }
+    return QString();
+}
+
+// Selects `value` in a combo, adding it first if it isn't one of the
+// known choices -- settings can name a pinned model like claude-opus-5,
+// and dropping it on the floor would silently change which model runs.
+void selectValue(QComboBox *combo, const QString &value)
+{
+    const int existing = combo->findData(value);
+    if (existing >= 0) {
+        combo->setCurrentIndex(existing);
+        return;
+    }
+    combo->insertItem(0, value, value);
+    combo->setCurrentIndex(0);
+}
 
 // Same rule as DockerBackend's slugifyIssueName (which in turn matches
 // the old bash `tr -cs '[:alnum:]' '_'` pipeline). Duplicated rather than
@@ -171,19 +213,26 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     // Editable so a pinned full model name (claude-opus-5, a dated
     // snapshot, whatever a project standardizes on) can be typed in
     // instead of an alias.
+    // Both combos open on the value the settings files already resolve to
+    // (see reloadForDirectory) rather than on a "leave it to the settings"
+    // placeholder: the point of the row is to show what this box will run
+    // with, and a placeholder makes you go and look that up elsewhere.
+    // The flag is then always passed explicitly.
     m_modelCombo = new QComboBox(this);
     m_modelCombo->setEditable(true);
     m_modelCombo->setInsertPolicy(QComboBox::NoInsert);
-    m_modelCombo->addItem(kDefaultChoice, QString());
     for (const QString &alias : kModelAliases)
         m_modelCombo->addItem(alias, alias);
     form->addRow("Model:", m_modelCombo);
 
     m_effortCombo = new QComboBox(this);
-    m_effortCombo->addItem(kDefaultChoice, QString());
     for (const QString &level : kEffortLevels)
         m_effortCombo->addItem(level, level);
     form->addRow("Effort:", m_effortCombo);
+
+    connect(m_modelCombo, &QComboBox::currentTextChanged, this, [this] { m_modelTouched = true; });
+    connect(m_effortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this] { m_effortTouched = true; });
 
     // The old bash launcher did this only for the one project that ships
     // a new-issue.sh; it works anywhere, so it's a checkbox. Ticked
@@ -316,6 +365,25 @@ void NewBoxDialog::reloadForDirectory()
     blocker.unblock();
     m_sessionCombo->setCurrentIndex(0);
     onConversationChanged(0);
+
+    // Settings are per-directory too (a project can pin its own model), so
+    // the two selections are re-resolved whenever the target changes --
+    // but only while the user hasn't overridden them, since re-resolving
+    // over a deliberate choice would quietly undo it.
+    // Signals blocked while doing it: selecting a value here is this
+    // dialog resolving settings, not the user choosing, and letting it
+    // through would immediately mark the combo as overridden and freeze
+    // it on the first directory ever shown.
+    if (!m_modelTouched) {
+        const QSignalBlocker block(m_modelCombo);
+        const QString model = settingsValue(absDir, QStringLiteral("model"));
+        selectValue(m_modelCombo, model.isEmpty() ? kFallbackModel : model);
+    }
+    if (!m_effortTouched) {
+        const QSignalBlocker block(m_effortCombo);
+        const QString effort = settingsValue(absDir, QStringLiteral("effortLevel"));
+        selectValue(m_effortCombo, effort.isEmpty() ? kFallbackEffort : effort);
+    }
 
     // Whether to give the agent its own folder is a property of the tree,
     // not of the moment, so the choice is remembered per directory. A tree
@@ -516,10 +584,9 @@ bool NewBoxDialog::workspaceSubdir() const
 
 QString NewBoxDialog::model() const
 {
-    // The combo is editable, so the placeholder label can end up as the
-    // literal text; either way it means "pass no --model at all".
-    const QString text = m_modelCombo->currentText().trimmed();
-    return text == QLatin1String(kDefaultChoice) ? QString() : text;
+    // currentText, not currentData: the combo is editable, so a full model
+    // name typed straight into it has no item behind it.
+    return m_modelCombo->currentText().trimmed();
 }
 
 QString NewBoxDialog::effort() const

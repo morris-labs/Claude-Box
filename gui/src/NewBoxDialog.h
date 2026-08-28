@@ -43,8 +43,8 @@ public:
     // True when the agent should get a subfolder of the target directory
     // named after the conversation, instead of working in the tree root.
     bool workspaceSubdir() const;
-    // Both empty when left on "default", meaning: pass no flag and let
-    // the settings in ~/.claude/settings.json decide.
+    // Both start out showing what the settings files already resolve to,
+    // and are always passed on to claude explicitly.
     QString model() const;
     QString effort() const;
     QStringList ports() const; // "HOST:CONTAINER"
@@ -91,6 +91,10 @@ private:
     // new-issue.sh from the bash era. Never run; it only seeds the
     // workspace checkbox for a tree that has no remembered answer yet.
     bool m_hasProvisioner = false;
+    // Set once the user picks a model/effort by hand, after which changing
+    // the target directory no longer re-resolves that combo from settings.
+    bool m_modelTouched = false;
+    bool m_effortTouched = false;
     // Last title this dialog auto-filled into m_nameEdit, so it can be
     // replaced when the selection changes but a name the user typed
     // themselves is never overwritten.
