@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Claude Box
+GenericName=Claude Code Sandbox Manager
+Comment=Manage sandboxed Claude Code containers and their embedded terminals
+Exec=@CLAUDE_BOX_EXEC@
+Icon=@CLAUDE_BOX_ICON@
+Terminal=false
+Categories=Development;
+Keywords=claude;code;docker;container;sandbox;agent;terminal;
+StartupNotify=true
+# Matches QGuiApplication::setDesktopFileName() in main.cpp. Without the
+# two agreeing, GNOME/Wayland can't tie a window back to this entry and
+# falls back to a generic icon in the dash and alt-tab.
+StartupWMClass=claude-box-gui

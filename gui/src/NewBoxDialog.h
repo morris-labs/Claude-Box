@@ -10,7 +10,7 @@ class QCheckBox;
 class QListWidget;
 
 // Form for creating a new box: target directory, which conversation to
-// run in it, name, agent/effort, the permission-bypass toggle, and
+// run in it, name, model/effort, the permission-bypass toggle, and
 // repeatable port-mapping / extra-dir-mount rows.
 //
 // The conversation picker lists every transcript Claude already has for
@@ -42,7 +42,7 @@ public:
     bool skipPermissions() const;
     // Both empty when left on "default", meaning: pass no flag and let
     // the settings in ~/.claude/settings.json decide.
-    QString agent() const;
+    QString model() const;
     QString effort() const;
     QStringList ports() const; // "HOST:CONTAINER"
     QStringList dirs() const;  // "HOSTPATH:CONTAINERPATH"
@@ -63,7 +63,7 @@ private:
     QComboBox *m_sessionCombo = nullptr;
     QLabel *m_sessionHint = nullptr;
     QLineEdit *m_nameEdit = nullptr;
-    QComboBox *m_agentCombo = nullptr;
+    QComboBox *m_modelCombo = nullptr;
     QComboBox *m_effortCombo = nullptr;
     QCheckBox *m_skipPermsCheck = nullptr;
 
@@ -75,7 +75,7 @@ private:
     QLineEdit *m_hostDirEdit = nullptr;
     QLineEdit *m_containerDirEdit = nullptr;
 
-    // Directory the conversation/agent lists were built from, so
+    // Directory the conversation list was built from, so
     // re-entering the same path doesn't rescan (and doesn't reset a
     // selection the user already made).
     QString m_scannedDir;
