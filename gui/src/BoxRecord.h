@@ -18,7 +18,7 @@ struct BoxRecord {
     // `yolo=` key so existing records keep working; only the name here
     // and in the UI changed, to say what the flag actually does.
     bool skipPermissions = false;
-    QString agent;            // `claude --agent <name>`; empty = whatever the settings say
+    QString model;            // `claude --model <alias-or-name>`; empty = whatever the settings say
     QString effort;           // `claude --effort <level>`; empty = whatever the settings say
     QStringList ports;        // "HOST:CONTAINER", repeatable
     QStringList dirs;         // "HOSTPATH:CONTAINERPATH", repeatable
