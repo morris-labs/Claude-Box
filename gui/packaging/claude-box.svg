@@ -5,7 +5,7 @@
   Hand-written rather than exported from a drawing tool so it stays
   reviewable in diffs, and deliberately built from the same palette as
   gui/src/Theme.cpp (window #1b1c1e, terminal #101113, border #33353a,
-  accent #d97757, running green #5fb37a) -- the launcher icon should
+  accent #d97757, running green #5fb37a) — the launcher icon should
   look like the application it opens. The glyph is the ">_" prompt
   Icons::terminal() draws on terminal tabs, and the green dot is the
   table's Running status indicator.
