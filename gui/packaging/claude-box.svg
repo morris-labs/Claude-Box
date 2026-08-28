@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  App icon for claude-box-gui.
+
+  Hand-written rather than exported from a drawing tool so it stays
+  reviewable in diffs, and deliberately built from the same palette as
+  gui/src/Theme.cpp (window #1b1c1e, terminal #101113, border #33353a,
+  accent #d97757, running green #5fb37a) -- the launcher icon should
+  look like the application it opens. The glyph is the ">_" prompt
+  Icons::terminal() draws on terminal tabs, and the green dot is the
+  table's Running status indicator.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#1b1c1e"/>
+  <rect x="8.75" y="8.75" width="238.5" height="238.5" rx="51.25" fill="none" stroke="#33353a" stroke-width="1.5"/>
+
+  <!-- terminal pane -->
+  <rect x="44" y="52" width="168" height="152" rx="20" fill="#101113" stroke="#33353a" stroke-width="2"/>
+
+  <!-- ">_" prompt, mirroring Icons::terminal() -->
+  <g fill="none" stroke="#d97757" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="80,102 116,128 80,154"/>
+    <line x1="134" y1="166" x2="176" y2="166"/>
+  </g>
+
+  <!-- Running status dot -->
+  <circle cx="196" cy="68" r="15" fill="#5fb37a"/>
+  <circle cx="196" cy="68" r="15" fill="none" stroke="#1b1c1e" stroke-width="5"/>
+</svg>

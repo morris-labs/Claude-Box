@@ -56,7 +56,7 @@ public:
     bool isRunning(const QString &name) const;
 
     // Creates a box. `rec` must have targetDir/conversationName/
-    // skipPermissions/agent/effort/ports/dirs set; on success this fills in rec.name, saves the
+    // skipPermissions/model/effort/ports/dirs set; on success this fills in rec.name, saves the
     // record, and starts the container detached
     // (`docker run -d -i -t --rm ...`).
     //

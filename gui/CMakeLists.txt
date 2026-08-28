@@ -5,7 +5,7 @@
 # Run:   ./build/claude-box-gui
 
 cmake_minimum_required(VERSION 3.16)
-project(claude-box-gui VERSION 1.4.0 LANGUAGES CXX)
+project(claude-box-gui VERSION 1.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,6 +40,39 @@ add_executable(claude-box-gui
     src/Theme.h
     src/Icons.cpp
     src/Icons.h
+)
+
+# --- desktop entry -------------------------------------------------------
+#
+# Generated rather than committed ready-made because Exec= and Icon= have
+# to be absolute paths, and those depend on where this checkout lives.
+# `cmake --build build --target desktop-install` drops the result into the
+# per-user XDG directories; nothing is installed automatically.
+set(CLAUDE_BOX_EXEC "$<TARGET_FILE:claude-box-gui>")
+set(CLAUDE_BOX_ICON "claude-box")
+set(CLAUDE_BOX_DESKTOP "${CMAKE_CURRENT_BINARY_DIR}/claude-box-gui.desktop")
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/claude-box-gui.desktop.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/claude-box-gui.desktop.pre"
+    @ONLY
+)
+# A second pass is needed for the $<TARGET_FILE:...> generator expression,
+# which configure_file() cannot expand on its own.
+file(GENERATE OUTPUT "${CLAUDE_BOX_DESKTOP}"
+     INPUT "${CMAKE_CURRENT_BINARY_DIR}/claude-box-gui.desktop.pre")
+
+add_custom_target(desktop-install
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$ENV{HOME}/.local/share/applications"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$ENV{HOME}/.local/share/icons/hicolor/scalable/apps"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/claude-box.svg"
+            "$ENV{HOME}/.local/share/icons/hicolor/scalable/apps/claude-box.svg"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CLAUDE_BOX_DESKTOP}"
+            "$ENV{HOME}/.local/share/applications/claude-box-gui.desktop"
+    COMMAND update-desktop-database "$ENV{HOME}/.local/share/applications" || true
+    DEPENDS claude-box-gui
+    COMMENT "Installing claude-box-gui.desktop and its icon into ~/.local/share"
+    VERBATIM
 )
 
 target_compile_definitions(claude-box-gui

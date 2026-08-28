@@ -50,8 +50,8 @@ BoxRecord BoxRecord::load(const QString &name)
             rec.conversationName = value;
         else if (key == "yolo")
             rec.skipPermissions = (value == "1");
-        else if (key == "agent")
-            rec.agent = value;
+        else if (key == "model")
+            rec.model = value;
         else if (key == "effort")
             rec.effort = value;
         else if (key == "port")
@@ -80,8 +80,8 @@ bool BoxRecord::save() const
     out << "session_uuid=" << sessionUuid << '\n';
     out << "conversation_name=" << conversationName << '\n';
     out << "yolo=" << (skipPermissions ? "1" : "0") << '\n';
-    if (!agent.isEmpty())
-        out << "agent=" << agent << '\n';
+    if (!model.isEmpty())
+        out << "model=" << model << '\n';
     if (!effort.isEmpty())
         out << "effort=" << effort << '\n';
     for (const QString &p : ports)

@@ -659,7 +659,7 @@ void MainWindow::onNew()
     rec.conversationName = dlg.conversationName();
     rec.sessionUuid = dlg.sessionUuid(); // empty => createNew mints a new one
     rec.skipPermissions = dlg.skipPermissions();
-    rec.agent = dlg.agent();
+    rec.model = dlg.model();
     rec.effort = dlg.effort();
     rec.ports = dlg.ports();
     rec.dirs = dlg.dirs();
