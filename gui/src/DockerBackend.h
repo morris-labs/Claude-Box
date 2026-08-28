@@ -62,15 +62,20 @@ public:
     //
     // Two modes, chosen by whether rec.sessionUuid is already set:
     //   empty  -- brand-new conversation: a uuid is minted and passed as
-    //             --session-id. If rec.conversationName is non-empty and
-    //             targetDir has an executable new-issue.sh, the
-    //             issue-provisioning workflow runs first (matching the
-    //             old claude-box.bash --name behavior).
+    //             --session-id.
     //   set    -- adopt the existing transcript with that uuid (one the
     //             user picked out of ConversationCatalog, possibly
     //             started outside this app) and pass --resume instead.
-    //             Issue provisioning is skipped in this mode.
-    bool createNew(BoxRecord &rec, QString *errorOut) const;
+    //             Workspace provisioning is skipped in this mode.
+    //
+    // workspaceSubdir asks for a folder named after the conversation
+    // inside targetDir, which the agent is told to work in (the container
+    // still mounts and runs in targetDir). If the target dir ships an
+    // executable new-issue.sh it provisions the folder; otherwise an empty
+    // one is created. Existing folders are left untouched -- that means
+    // "resuming", not "starting fresh". On success rec.workspaceDir holds
+    // the folder's name.
+    bool createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut) const;
 
     // Restarts a known conversation's container with `claude --resume
     // <rec.sessionUuid>`. rec must already be fully populated (from
