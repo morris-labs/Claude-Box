@@ -119,7 +119,15 @@ void TerminalWidget::setupVterm()
 
 bool TerminalWidget::attachToContainer(const QString &containerName)
 {
-    return m_pty->start(QStringLiteral("docker"), {QStringLiteral("attach"), containerName});
+    // Now that the container is run with -i, docker's default detach chord
+    // (Ctrl+P Ctrl+Q) is live -- and docker holds the first key back until it
+    // sees what follows, so a bare Ctrl+P inside the box arrives late or, with
+    // a Ctrl+Q after it, tears the tab down instead. Tabs are closed from the
+    // GUI, so move the chord onto a sequence nothing in here types.
+    return m_pty->start(QStringLiteral("docker"),
+                        {QStringLiteral("attach"),
+                         QStringLiteral("--detach-keys=ctrl-],ctrl-]"),
+                         containerName});
 }
 
 bool TerminalWidget::isRunning() const
