@@ -20,6 +20,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
@@ -27,6 +28,12 @@ namespace {
 
 // Per-item role holding a conversation's untagged title.
 constexpr int kTitleRole = Qt::UserRole + 1;
+
+// QSettings key holding the directories whose workspace-folder answer is
+// remembered; a "no" is stored as the path with kNoWorkspaceMarker glued
+// on, so the two answers live in one list without a nested group.
+const char *kWorkspaceDirsKey = "newBox/workspaceDirs";
+const QString kNoWorkspaceMarker = QStringLiteral("!");
 
 // Shown for model/effort when nothing should be passed on the command
 // line at all, leaving ~/.claude/settings.json in charge.
@@ -310,10 +317,19 @@ void NewBoxDialog::reloadForDirectory()
     m_sessionCombo->setCurrentIndex(0);
     onConversationChanged(0);
 
+    // Whether to give the agent its own folder is a property of the tree,
+    // not of the moment, so the choice is remembered per directory. A tree
+    // that still carries a new-issue.sh from the bash era seeds that as
+    // "yes" the first time it's seen -- the script isn't run any more (the
+    // agent does its own setup now), but its presence is a reliable marker
+    // that this tree is organised into per-issue folders.
     m_hasProvisioner = !absDir.isEmpty()
         && QFileInfo(absDir + "/new-issue.sh").isExecutable();
-    if (m_hasProvisioner)
-        m_workspaceCheck->setChecked(true);
+    if (!absDir.isEmpty()) {
+        const QStringList remembered = QSettings().value(kWorkspaceDirsKey).toStringList();
+        m_workspaceCheck->setChecked(remembered.contains(absDir)
+                                     || (m_hasProvisioner && !remembered.contains(kNoWorkspaceMarker + absDir)));
+    }
     updateWorkspaceHint();
 }
 
@@ -337,10 +353,9 @@ void NewBoxDialog::updateWorkspaceHint()
     const QString path = dir + "/" + slug;
     if (QDir(path).exists())
         m_workspaceHint->setText(QStringLiteral("%1/ already exists -- it will be reused as-is.").arg(slug));
-    else if (m_hasProvisioner)
-        m_workspaceHint->setText(QStringLiteral("%1/ will be provisioned by this directory's new-issue.sh.").arg(slug));
     else
-        m_workspaceHint->setText(QStringLiteral("%1/ will be created inside the target directory.").arg(slug));
+        m_workspaceHint->setText(QStringLiteral("%1/ will be created, and the agent told to set it up "
+                                               "per this directory's CLAUDE.md and work there.").arg(slug));
 }
 
 void NewBoxDialog::onConversationChanged(int index)
@@ -452,7 +467,26 @@ void NewBoxDialog::tryAccept()
                              "to work in the target directory itself.");
         return;
     }
+    rememberWorkspaceChoice();
     accept();
+}
+
+// Records this directory's answer so the next box for the same tree opens
+// with the box already in the right state. Both answers are stored: an
+// explicit "no" has to outrank the new-issue.sh seeding above, or a tree
+// that still has that script could never be unticked for good.
+void NewBoxDialog::rememberWorkspaceChoice()
+{
+    const QString dir = targetDir();
+    if (dir.isEmpty())
+        return;
+
+    QSettings settings;
+    QStringList remembered = settings.value(kWorkspaceDirsKey).toStringList();
+    remembered.removeAll(dir);
+    remembered.removeAll(kNoWorkspaceMarker + dir);
+    remembered << (m_workspaceCheck->isChecked() ? dir : (kNoWorkspaceMarker + dir));
+    settings.setValue(kWorkspaceDirsKey, remembered);
 }
 
 QString NewBoxDialog::targetDir() const
