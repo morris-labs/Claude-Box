@@ -160,11 +160,15 @@ void BoxDetailsPanel::setBox(const BoxInfo *info)
 
     m_sessionUuid->setText(rec.sessionUuid.isEmpty() ? kNone : rec.sessionUuid);
 
+    // --remote-control isn't listed: it's passed to every box
+    // unconditionally, so saying so per row is noise.
     QStringList flags;
-    if (rec.yolo)
-        flags << "yolo (--dangerously-skip-permissions)";
-    if (rec.rc)
-        flags << "rc (--remote-control)";
+    if (rec.skipPermissions)
+        flags << "--dangerously-skip-permissions";
+    if (!rec.agent.isEmpty())
+        flags << ("--agent " + rec.agent);
+    if (!rec.effort.isEmpty())
+        flags << ("--effort " + rec.effort);
     m_flags->setText(flags.isEmpty() ? QStringLiteral("none") : flags.join(", "));
 
     m_ports->setText(rec.ports.isEmpty() ? kNone : rec.ports.join("\n"));

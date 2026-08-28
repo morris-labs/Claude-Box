@@ -55,8 +55,8 @@ public:
 
     bool isRunning(const QString &name) const;
 
-    // Creates a box. `rec` must have targetDir/conversationName/yolo/rc/
-    // ports/dirs set; on success this fills in rec.name, saves the
+    // Creates a box. `rec` must have targetDir/conversationName/
+    // skipPermissions/agent/effort/ports/dirs set; on success this fills in rec.name, saves the
     // record, and starts the container detached
     // (`docker run -d -i -t --rm ...`).
     //
@@ -94,5 +94,9 @@ private:
 
     bool runDocker(const QStringList &args, QString *stdoutOut, QString *errorOut, int timeoutMs) const;
     bool runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const;
+
+    // Flags shared by createNew() and reopen(): --remote-control (always),
+    // plus whatever the record asks for.
+    static QStringList baseClaudeArgs(const BoxRecord &rec);
     QString uniqueBoxName(const QString &base) const;
 };
