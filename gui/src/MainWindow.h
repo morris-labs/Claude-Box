@@ -109,6 +109,10 @@ private:
     QString currentSelectedName() const;
     void reselectByName(const QString &name);
 
+    // False if the conversation the user picked in the New Box dialog
+    // can't (or shouldn't) be adopted -- see the definition.
+    bool confirmConversationAdoption(const QString &sessionUuid);
+
     void openKnownBox(const QString &name);
     void openTerminalTab(const QString &name, const QString &title);
     void closeTabForBox(const QString &name);

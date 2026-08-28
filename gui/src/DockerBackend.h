@@ -55,14 +55,21 @@ public:
 
     bool isRunning(const QString &name) const;
 
-    // Starts a brand-new conversation. `rec` must have targetDir/
-    // conversationName/yolo/rc/ports/dirs set; on success this fills in
-    // rec.name/rec.sessionUuid, saves the record, and starts the
-    // container detached (`docker run -d -t --rm ...`) with a freshly
-    // minted --session-id. If rec.conversationName is non-empty and
-    // targetDir has an executable new-issue.sh, this also runs the
-    // issue-provisioning workflow (matching the old claude-box.bash
-    // --name behavior) before starting the container.
+    // Creates a box. `rec` must have targetDir/conversationName/yolo/rc/
+    // ports/dirs set; on success this fills in rec.name, saves the
+    // record, and starts the container detached
+    // (`docker run -d -i -t --rm ...`).
+    //
+    // Two modes, chosen by whether rec.sessionUuid is already set:
+    //   empty  -- brand-new conversation: a uuid is minted and passed as
+    //             --session-id. If rec.conversationName is non-empty and
+    //             targetDir has an executable new-issue.sh, the
+    //             issue-provisioning workflow runs first (matching the
+    //             old claude-box.bash --name behavior).
+    //   set    -- adopt the existing transcript with that uuid (one the
+    //             user picked out of ConversationCatalog, possibly
+    //             started outside this app) and pass --resume instead.
+    //             Issue provisioning is skipped in this mode.
     bool createNew(BoxRecord &rec, QString *errorOut) const;
 
     // Restarts a known conversation's container with `claude --resume

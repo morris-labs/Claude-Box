@@ -5,7 +5,7 @@
 # Run:   ./build/claude-box-gui
 
 cmake_minimum_required(VERSION 3.16)
-project(claude-box-gui VERSION 1.2.0 LANGUAGES CXX)
+project(claude-box-gui VERSION 1.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,6 +24,8 @@ add_executable(claude-box-gui
     src/BoxTableModel.h
     src/BoxRecord.cpp
     src/BoxRecord.h
+    src/ConversationCatalog.cpp
+    src/ConversationCatalog.h
     src/DockerBackend.cpp
     src/DockerBackend.h
     src/PtySession.cpp
