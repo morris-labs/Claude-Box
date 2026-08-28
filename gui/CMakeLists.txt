@@ -49,7 +49,12 @@ add_executable(claude-box-gui
 # `cmake --build build --target desktop-install` drops the result into the
 # per-user XDG directories; nothing is installed automatically.
 set(CLAUDE_BOX_EXEC "$<TARGET_FILE:claude-box-gui>")
+# The name the entry and QIcon::fromTheme() both look up; the file below
+# is installed under exactly this name, so swapping the artwork never
+# means touching either lookup.
 set(CLAUDE_BOX_ICON "claude-box")
+set(CLAUDE_BOX_ICON_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/claude-box-jail.svg"
+    CACHE FILEPATH "SVG installed as the application icon")
 set(CLAUDE_BOX_DESKTOP "${CMAKE_CURRENT_BINARY_DIR}/claude-box-gui.desktop")
 
 configure_file(
@@ -76,12 +81,13 @@ add_custom_command(TARGET claude-box-gui POST_BUILD
 
 find_program(UPDATE_DESKTOP_DATABASE update-desktop-database)
 find_program(GIO_TOOL gio)
+find_program(GTK_UPDATE_ICON_CACHE gtk-update-icon-cache)
 
 set(desktop_install_commands
     COMMAND ${CMAKE_COMMAND} -E make_directory "$ENV{HOME}/.local/share/applications"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$ENV{HOME}/.local/share/icons/hicolor/scalable/apps"
-    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/claude-box.svg"
-            "$ENV{HOME}/.local/share/icons/hicolor/scalable/apps/claude-box.svg"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CLAUDE_BOX_ICON_SOURCE}"
+            "$ENV{HOME}/.local/share/icons/hicolor/scalable/apps/${CLAUDE_BOX_ICON}.svg"
     COMMAND ${CMAKE_COMMAND} -E copy "${CLAUDE_BOX_DESKTOP}"
             "$ENV{HOME}/.local/share/applications/claude-box-gui.desktop"
     COMMAND chmod +x "$ENV{HOME}/.local/share/applications/claude-box-gui.desktop"
@@ -96,6 +102,15 @@ endif()
 if(UPDATE_DESKTOP_DATABASE)
     list(APPEND desktop_install_commands
         COMMAND ${UPDATE_DESKTOP_DATABASE} "$ENV{HOME}/.local/share/applications")
+endif()
+if(GTK_UPDATE_ICON_CACHE)
+    # ~/.local/share/icons/hicolor already carries an icon-theme.cache
+    # from other apps, and a stale one hides a newly dropped icon from
+    # GTK entirely. --ignore-theme-index because this per-user hicolor
+    # tree has no index.theme of its own.
+    list(APPEND desktop_install_commands
+        COMMAND ${GTK_UPDATE_ICON_CACHE} -f -t --ignore-theme-index
+                "$ENV{HOME}/.local/share/icons/hicolor")
 endif()
 
 add_custom_target(desktop-install
