@@ -316,11 +316,7 @@ bool DockerBackend::createNew(BoxRecord &rec, QString *errorOut) const
     if (rec.conversationName.isEmpty())
         rec.conversationName = rec.name;
 
-    QStringList claudeArgs;
-    if (rec.rc)
-        claudeArgs << "--remote-control";
-    if (rec.yolo)
-        claudeArgs << "--dangerously-skip-permissions";
+    QStringList claudeArgs = baseClaudeArgs(rec);
     if (provisionIssue)
         claudeArgs << "--name" << rec.conversationName << openingPrompt;
     claudeArgs << (resumeExisting ? "--resume" : "--session-id") << rec.sessionUuid;
@@ -332,13 +328,32 @@ bool DockerBackend::createNew(BoxRecord &rec, QString *errorOut) const
     return true;
 }
 
+// The per-box `claude` flags that are the same whether a box is being
+// created or reopened. Kept in one place so the two paths can't drift --
+// a box that reopened with different flags than it started with is a
+// confusing bug to chase.
+QStringList DockerBackend::baseClaudeArgs(const BoxRecord &rec)
+{
+    QStringList args;
+
+    // Unconditional, and not recorded per box: remote control is how you
+    // pick a conversation up on another device, and there is no reason to
+    // run a sandbox without that available.
+    args << "--remote-control";
+
+    if (rec.skipPermissions)
+        args << "--dangerously-skip-permissions";
+    if (!rec.agent.isEmpty())
+        args << "--agent" << rec.agent;
+    if (!rec.effort.isEmpty())
+        args << "--effort" << rec.effort;
+
+    return args;
+}
+
 bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
 {
-    QStringList claudeArgs;
-    if (rec.rc)
-        claudeArgs << "--remote-control";
-    if (rec.yolo)
-        claudeArgs << "--dangerously-skip-permissions";
+    QStringList claudeArgs = baseClaudeArgs(rec);
     claudeArgs << "--resume" << rec.sessionUuid;
 
     return runContainer(rec, claudeArgs, errorOut);
