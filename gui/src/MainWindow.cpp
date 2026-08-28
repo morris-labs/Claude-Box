@@ -668,7 +668,7 @@ void MainWindow::onNew()
         return;
 
     QString error;
-    if (!m_docker.createNew(rec, &error)) {
+    if (!m_docker.createNew(rec, dlg.workspaceSubdir(), &error)) {
         QMessageBox::warning(this, QStringLiteral("New Box"),
                              QStringLiteral("Failed to start box:\n") + error);
         return;

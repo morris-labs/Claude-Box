@@ -52,6 +52,8 @@ BoxRecord BoxRecord::load(const QString &name)
             rec.skipPermissions = (value == "1");
         else if (key == "model")
             rec.model = value;
+        else if (key == "workspace")
+            rec.workspaceDir = value;
         else if (key == "effort")
             rec.effort = value;
         else if (key == "port")
@@ -82,6 +84,8 @@ bool BoxRecord::save() const
     out << "yolo=" << (skipPermissions ? "1" : "0") << '\n';
     if (!model.isEmpty())
         out << "model=" << model << '\n';
+    if (!workspaceDir.isEmpty())
+        out << "workspace=" << workspaceDir << '\n';
     if (!effort.isEmpty())
         out << "effort=" << effort << '\n';
     for (const QString &p : ports)

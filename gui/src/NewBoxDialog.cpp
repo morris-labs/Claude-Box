@@ -40,6 +40,31 @@ const QStringList kEffortLevels = {"low", "medium", "high", "xhigh", "max"};
 // the combo is editable rather than a fixed list.
 const QStringList kModelAliases = {"opus", "sonnet", "haiku", "fable"};
 
+// Same rule as DockerBackend's slugifyIssueName (which in turn matches
+// the old bash `tr -cs '[:alnum:]' '_'` pipeline). Duplicated rather than
+// shared because this copy only ever feeds a preview label -- the folder
+// that actually gets created is named by the backend's copy.
+QString slugify(const QString &name)
+{
+    QString out;
+    bool lastWasUnderscore = false;
+    for (const QChar &c : name) {
+        const bool alnum = c.unicode() < 128 && c.isLetterOrNumber();
+        if (alnum) {
+            out += c;
+            lastWasUnderscore = false;
+        } else if (!lastWasUnderscore) {
+            out += '_';
+            lastWasUnderscore = true;
+        }
+    }
+    while (out.startsWith('_'))
+        out.remove(0, 1);
+    while (out.endsWith('_'))
+        out.chop(1);
+    return out;
+}
+
 // The "list of things you can add to and remove from" frame shared by
 // the port and mount groups. The caller fills `entryRow` with whatever
 // fields that particular group needs.
@@ -152,6 +177,19 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     for (const QString &level : kEffortLevels)
         m_effortCombo->addItem(level, level);
     form->addRow("Effort:", m_effortCombo);
+
+    // The old bash launcher did this only for the one project that ships
+    // a new-issue.sh; it works anywhere, so it's a checkbox. Ticked
+    // automatically for a directory that has a provisioner, which is what
+    // that project's boxes did implicitly before.
+    m_workspaceCheck = new QCheckBox("Give the agent its own subfolder, named after the conversation", this);
+    form->addRow(QString(), m_workspaceCheck);
+    m_workspaceHint = new QLabel(this);
+    m_workspaceHint->setWordWrap(true);
+    m_workspaceHint->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+    form->addRow(QString(), m_workspaceHint);
+    connect(m_workspaceCheck, &QCheckBox::toggled, this, &NewBoxDialog::updateWorkspaceHint);
+    connect(m_nameEdit, &QLineEdit::textChanged, this, &NewBoxDialog::updateWorkspaceHint);
 
     // On by default: these boxes are the sandbox the flag asks for, and
     // stopping at every permission prompt is the whole thing they exist
@@ -271,6 +309,38 @@ void NewBoxDialog::reloadForDirectory()
     blocker.unblock();
     m_sessionCombo->setCurrentIndex(0);
     onConversationChanged(0);
+
+    m_hasProvisioner = !absDir.isEmpty()
+        && QFileInfo(absDir + "/new-issue.sh").isExecutable();
+    if (m_hasProvisioner)
+        m_workspaceCheck->setChecked(true);
+    updateWorkspaceHint();
+}
+
+// Says, in the form, exactly what will appear on disk -- the slug rules
+// are the container's (alphanumeric runs joined by underscores), so
+// showing the result beats explaining it.
+void NewBoxDialog::updateWorkspaceHint()
+{
+    if (!m_workspaceCheck->isChecked()) {
+        m_workspaceHint->setText(QStringLiteral("The agent works in the target directory itself."));
+        return;
+    }
+
+    const QString slug = slugify(m_nameEdit->text().trimmed());
+    if (slug.isEmpty()) {
+        m_workspaceHint->setText(QStringLiteral("Needs a conversation name -- the folder is named after it."));
+        return;
+    }
+
+    const QString dir = m_dirEdit->text().trimmed();
+    const QString path = dir + "/" + slug;
+    if (QDir(path).exists())
+        m_workspaceHint->setText(QStringLiteral("%1/ already exists -- it will be reused as-is.").arg(slug));
+    else if (m_hasProvisioner)
+        m_workspaceHint->setText(QStringLiteral("%1/ will be provisioned by this directory's new-issue.sh.").arg(slug));
+    else
+        m_workspaceHint->setText(QStringLiteral("%1/ will be created inside the target directory.").arg(slug));
 }
 
 void NewBoxDialog::onConversationChanged(int index)
@@ -374,6 +444,14 @@ void NewBoxDialog::tryAccept()
         QMessageBox::warning(this, "New Box", "Target directory does not exist.");
         return;
     }
+
+    if (m_workspaceCheck->isChecked() && slugify(m_nameEdit->text().trimmed()).isEmpty()) {
+        QMessageBox::warning(this, "New Box",
+                             "A workspace folder is named after the conversation, so give this "
+                             "one a name (with at least one letter or digit) -- or untick the box "
+                             "to work in the target directory itself.");
+        return;
+    }
     accept();
 }
 
@@ -395,6 +473,11 @@ QString NewBoxDialog::sessionUuid() const
 bool NewBoxDialog::skipPermissions() const
 {
     return m_skipPermsCheck->isChecked();
+}
+
+bool NewBoxDialog::workspaceSubdir() const
+{
+    return m_workspaceCheck->isChecked();
 }
 
 QString NewBoxDialog::model() const

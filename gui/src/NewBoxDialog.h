@@ -40,6 +40,9 @@ public:
     // existing transcript the new box should resume.
     QString sessionUuid() const;
     bool skipPermissions() const;
+    // True when the agent should get a subfolder of the target directory
+    // named after the conversation, instead of working in the tree root.
+    bool workspaceSubdir() const;
     // Both empty when left on "default", meaning: pass no flag and let
     // the settings in ~/.claude/settings.json decide.
     QString model() const;
@@ -52,6 +55,7 @@ private slots:
     void browseForMountDir();
     void reloadForDirectory();
     void onConversationChanged(int index);
+    void updateWorkspaceHint();
     void addPort();
     void removeSelectedPort();
     void addDirMount();
@@ -66,6 +70,8 @@ private:
     QComboBox *m_modelCombo = nullptr;
     QComboBox *m_effortCombo = nullptr;
     QCheckBox *m_skipPermsCheck = nullptr;
+    QCheckBox *m_workspaceCheck = nullptr;
+    QLabel *m_workspaceHint = nullptr;
 
     QListWidget *m_portList = nullptr;
     QLineEdit *m_hostPortEdit = nullptr;
@@ -79,6 +85,9 @@ private:
     // re-entering the same path doesn't rescan (and doesn't reset a
     // selection the user already made).
     QString m_scannedDir;
+    // Whether the scanned directory ships an executable new-issue.sh,
+    // which changes both the default and what the hint promises.
+    bool m_hasProvisioner = false;
     // Last title this dialog auto-filled into m_nameEdit, so it can be
     // replaced when the selection changes but a name the user typed
     // themselves is never overwritten.
