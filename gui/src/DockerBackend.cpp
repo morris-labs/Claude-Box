@@ -224,7 +224,11 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
     QString gitSetup = "git config --global --add safe.directory \"$1\"";
 
     QStringList args;
-    args << "run" << "-d" << "-t" << "--rm"
+    // -i is as load-bearing as -t: without OpenStdin the container's stdin is
+    // never wired to a stream, so `docker attach` can render output but has
+    // nowhere to put keystrokes -- the terminal tab looks alive and silently
+    // swallows everything you type (no trust prompt answer, no messages).
+    args << "run" << "-d" << "-i" << "-t" << "--rm"
          << "--name" << rec.name
          << "--user" << "prime"
          << "-e" << "IS_SANDBOX=1"
@@ -263,9 +267,18 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
 
 bool DockerBackend::createNew(BoxRecord &rec, QString *errorOut) const
 {
+    // A caller may hand us the uuid of a conversation that already exists
+    // on disk (see ConversationCatalog / NewBoxDialog) -- typically one
+    // started outside this app. Then the box adopts it with --resume
+    // instead of minting a session, and the issue-provisioning workflow
+    // is skipped: that workflow exists to *open* a new conversation with
+    // a scaffolded folder and an opening prompt, which is meaningless
+    // when the conversation is already underway.
+    const bool resumeExisting = !rec.sessionUuid.isEmpty();
+
     QString slug;
     QString openingPrompt;
-    const bool provisionIssue = !rec.conversationName.isEmpty()
+    const bool provisionIssue = !resumeExisting && !rec.conversationName.isEmpty()
         && QFileInfo(rec.targetDir + "/new-issue.sh").isExecutable();
 
     if (provisionIssue) {
@@ -298,7 +311,8 @@ bool DockerBackend::createNew(BoxRecord &rec, QString *errorOut) const
 
     const QString base = slug.isEmpty() ? QFileInfo(rec.targetDir).fileName() : slug;
     rec.name = uniqueBoxName(base);
-    rec.sessionUuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    if (!resumeExisting)
+        rec.sessionUuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
     if (rec.conversationName.isEmpty())
         rec.conversationName = rec.name;
 
@@ -309,7 +323,7 @@ bool DockerBackend::createNew(BoxRecord &rec, QString *errorOut) const
         claudeArgs << "--dangerously-skip-permissions";
     if (provisionIssue)
         claudeArgs << "--name" << rec.conversationName << openingPrompt;
-    claudeArgs << "--session-id" << rec.sessionUuid;
+    claudeArgs << (resumeExisting ? "--resume" : "--session-id") << rec.sessionUuid;
 
     if (!runContainer(rec, claudeArgs, errorOut))
         return false;

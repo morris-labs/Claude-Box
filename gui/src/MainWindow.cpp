@@ -3,6 +3,7 @@
 #include "BoxDetailsPanel.h"
 #include "BoxRecord.h"
 #include "Icons.h"
+#include "ConversationCatalog.h"
 #include "NewBoxDialog.h"
 #include "TerminalWidget.h"
 #include "Theme.h"
@@ -612,6 +613,40 @@ void MainWindow::onTerminalSessionFinished(int exitCode)
 
 // --- box actions --------------------------------------------------------
 
+// Guards the case where the conversation picked in the New Box dialog is
+// already spoken for. Two containers resuming the same session both
+// append to the same transcript in ~/.claude/projects, so a running
+// owner is a hard no; a merely-known one is the user's call (it's a
+// reasonable way to branch off an old box's conversation).
+bool MainWindow::confirmConversationAdoption(const QString &sessionUuid)
+{
+    // Walks the *source* model for the same reason Purge does: a box
+    // filtered out of the view is still running.
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        const BoxInfo *row = m_model->boxAt(i);
+        if (!row || row->status != BoxInfo::Status::Running)
+            continue;
+        if (BoxRecord::load(row->name).sessionUuid == sessionUuid) {
+            QMessageBox::warning(this, QStringLiteral("New Box"),
+                                 row->name + QStringLiteral(" is already running this conversation.\n\n"
+                                 "Two boxes resuming the same session would write over each other's "
+                                 "transcript -- close that box first, or pick another conversation."));
+            return false;
+        }
+    }
+
+    for (const BoxRecord &known : BoxRecord::loadAll()) {
+        if (known.sessionUuid != sessionUuid)
+            continue;
+        const QString msg = QStringLiteral("Box %1 already tracks this conversation.\n\n"
+            "Creating another box for it is fine as long as they don't run at the same "
+            "time.\n\nProceed?").arg(known.name);
+        return QMessageBox::question(this, QStringLiteral("New Box"), msg) == QMessageBox::Yes;
+    }
+
+    return true;
+}
+
 void MainWindow::onNew()
 {
     NewBoxDialog dlg(this);
@@ -622,10 +657,14 @@ void MainWindow::onNew()
     BoxRecord rec;
     rec.targetDir = dlg.targetDir();
     rec.conversationName = dlg.conversationName();
+    rec.sessionUuid = dlg.sessionUuid(); // empty => createNew mints a new one
     rec.yolo = dlg.yolo();
     rec.rc = dlg.rc();
     rec.ports = dlg.ports();
     rec.dirs = dlg.dirs();
+
+    if (!rec.sessionUuid.isEmpty() && !confirmConversationAdoption(rec.sessionUuid))
+        return;
 
     QString error;
     if (!m_docker.createNew(rec, &error)) {
@@ -724,9 +763,12 @@ void MainWindow::onPurge()
         }
     }
 
-    QString encoded = dir;
-    encoded.replace('/', '-');
-    const QString projectDir = QDir::homePath() + "/.claude/projects/" + encoded;
+    // Claude's own path encoding, not a naive slash swap: it collapses
+    // every non-alphanumeric byte, so a directory like app.odinhelp.com
+    // lands in -home-...-app-odinhelp-com. Purging with '/'-only encoding
+    // pointed at a path that never exists and silently left the
+    // transcripts behind.
+    const QString projectDir = ConversationCatalog::projectDirFor(dir);
 
     QStringList toRemove;
     if (QDir(projectDir).exists())
