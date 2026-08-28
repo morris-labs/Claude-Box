@@ -63,6 +63,8 @@ private slots:
     void tryAccept();
 
 private:
+    void rememberWorkspaceChoice();
+
     QLineEdit *m_dirEdit = nullptr;
     QComboBox *m_sessionCombo = nullptr;
     QLabel *m_sessionHint = nullptr;
@@ -85,8 +87,9 @@ private:
     // re-entering the same path doesn't rescan (and doesn't reset a
     // selection the user already made).
     QString m_scannedDir;
-    // Whether the scanned directory ships an executable new-issue.sh,
-    // which changes both the default and what the hint promises.
+    // Whether the scanned directory still carries an executable
+    // new-issue.sh from the bash era. Never run; it only seeds the
+    // workspace checkbox for a tree that has no remembered answer yet.
     bool m_hasProvisioner = false;
     // Last title this dialog auto-filled into m_nameEdit, so it can be
     // replaced when the selection changes but a name the user typed
