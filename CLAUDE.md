@@ -54,6 +54,8 @@ If `libvterm-dev` isn't packaged/workable on your host, `QTermWidget` is the doc
 
 **Desktop entry.** `gui/packaging/` holds `claude-box-gui.desktop.in` and `claude-box.svg` (hand-written, in `Theme.cpp`'s palette). The `.desktop` is *generated* rather than committed ready-made because `Exec=` needs an absolute path to the built binary, which depends on where the checkout lives: `configure_file` + `file(GENERATE)` produce `build/claude-box-gui.desktop`, and `cmake --build build --target desktop-install` copies it plus the icon into `~/.local/share/{applications,icons/hicolor/scalable/apps}`. Nothing is installed by a plain build. `main()` calls `QGuiApplication::setDesktopFileName("claude-box-gui")` to match; on Wayland there's no WM_CLASS to fall back on, so without that pairing GNOME shows a generic icon in the dash and alt-tab.
 
+The entry is meant to be launched *by name* (Activities → "Claude Box", or `gtk-launch claude-box-gui`), not by clicking the file. Both copies are nonetheless marked executable and the installed one is flagged `metadata::trusted`, because a `.desktop` without those is a document: clicking it hands it to the default text handler, and a file manager that tries to run it anyway spawns a terminal that flashes and dies. The build-tree copy is easy to click by mistake, which is exactly how that gets discovered.
+
 ## Working in this repo
 
 - `Dockerfile` changes: keep the uid/gid remapping (`user` = 1000:1000) in mind — it exists specifically to avoid file-permission mismatches between host and container. (The `USER_ID`/`GROUP_ID` build args are currently declared but unused; the remapping is hardcoded to 1000.)
