@@ -1,6 +1,11 @@
 #include "NewBoxDialog.h"
 
+#include "ConversationCatalog.h"
+#include "Theme.h"
+
 #include <QCheckBox>
+#include <QComboBox>
+#include <QSignalBlocker>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
@@ -15,6 +20,9 @@
 #include <QVBoxLayout>
 
 namespace {
+// Per-item role holding a conversation's untagged title.
+constexpr int kTitleRole = Qt::UserRole + 1;
+
 // A labeled "list of strings you can add/remove from" block, used
 // identically for port mappings and dir mounts below.
 QListWidget *makeRepeatableListGroup(QVBoxLayout *parent, const QString &title,
@@ -64,6 +72,24 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     dirRow->addWidget(browseButton);
     form->addRow("Target directory:", dirRow);
     connect(browseButton, &QPushButton::clicked, this, &NewBoxDialog::browseForDir);
+    // Typing a path by hand should populate the picker too, not just Browse.
+    connect(m_dirEdit, &QLineEdit::editingFinished, this, &NewBoxDialog::reloadConversations);
+
+    m_sessionCombo = new QComboBox(this);
+    // Conversation labels are long; without this the combo demands its
+    // widest item and drags the whole dialog out past the screen. The
+    // popup still sizes itself to the contents.
+    m_sessionCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_sessionCombo->setMinimumContentsLength(30);
+    m_sessionCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    form->addRow("Conversation:", m_sessionCombo);
+    connect(m_sessionCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &NewBoxDialog::onConversationChanged);
+
+    m_sessionHint = new QLabel(this);
+    m_sessionHint->setWordWrap(true);
+    m_sessionHint->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+    form->addRow(QString(), m_sessionHint);
 
     m_nameEdit = new QLineEdit(this);
     m_nameEdit->setPlaceholderText("optional -- used as-is, or as the issue name if new-issue.sh exists");
@@ -92,14 +118,87 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
 void NewBoxDialog::setInitialDir(const QString &dir)
 {
     m_dirEdit->setText(dir);
+    reloadConversations();
 }
 
 void NewBoxDialog::browseForDir()
 {
     const QString start = m_dirEdit->text().isEmpty() ? QDir::homePath() : m_dirEdit->text();
     const QString dir = QFileDialog::getExistingDirectory(this, "Select Target Directory", start);
-    if (!dir.isEmpty())
+    if (!dir.isEmpty()) {
         m_dirEdit->setText(dir);
+        reloadConversations();
+    }
+}
+
+// Rebuilds the conversation picker for whatever directory is currently
+// in the path field. Index 0 is always "new conversation" so the default
+// behaviour is unchanged from before this picker existed.
+void NewBoxDialog::reloadConversations()
+{
+    const QString dir = m_dirEdit->text().trimmed();
+    if (dir == m_scannedDir)
+        return;
+    m_scannedDir = dir;
+
+    const QList<ConversationInfo> conversations =
+        dir.isEmpty() ? QList<ConversationInfo>() : ConversationCatalog::forDirectory(QDir(dir).absolutePath());
+
+    QSignalBlocker blocker(m_sessionCombo);
+    m_sessionCombo->clear();
+    m_sessionCombo->addItem(QStringLiteral("Start a new conversation"), QString());
+
+    for (const ConversationInfo &c : conversations) {
+        QString label = c.title;
+        if (!c.trackedBy.isEmpty())
+            label += QStringLiteral("  [%1]").arg(c.trackedBy);
+        label += QStringLiteral("  ·  %1  ·  %2 turns")
+                     .arg(ConversationCatalog::relativeTime(c.lastActive))
+                     .arg(c.userTurns);
+
+        m_sessionCombo->addItem(label, c.sessionUuid);
+        // The bare title, kept aside for the name auto-fill: the visible
+        // label has the tracked-by tag and the age/turns tail glued on.
+        m_sessionCombo->setItemData(m_sessionCombo->count() - 1, c.title, kTitleRole);
+
+        QString tip = c.sessionUuid;
+        if (!c.lastPrompt.isEmpty())
+            tip += QStringLiteral("\n\nLast prompt: ") + c.lastPrompt;
+        if (!c.trackedBy.isEmpty())
+            tip += QStringLiteral("\n\nAlready tracked by box ") + c.trackedBy;
+        m_sessionCombo->setItemData(m_sessionCombo->count() - 1, tip, Qt::ToolTipRole);
+    }
+
+    blocker.unblock();
+    m_sessionCombo->setCurrentIndex(0);
+    onConversationChanged(0);
+}
+
+void NewBoxDialog::onConversationChanged(int index)
+{
+    const QString uuid = m_sessionCombo->itemData(index).toString();
+
+    if (uuid.isEmpty()) {
+        const int existing = m_sessionCombo->count() - 1;
+        m_sessionHint->setText(existing > 0
+            ? QStringLiteral("A fresh session id is minted for this box. %1 existing conversation(s) "
+                             "for this directory can be resumed instead.").arg(existing)
+            : QStringLiteral("A fresh session id is minted for this box. "
+                             "No existing conversations found for this directory."));
+    } else {
+        QString hint = QStringLiteral("Resumes %1 in the new box.").arg(uuid);
+        const QString tip = m_sessionCombo->itemData(index, Qt::ToolTipRole).toString();
+        if (tip.contains(QStringLiteral("Already tracked by box ")))
+            hint += QStringLiteral(" This conversation already belongs to another box.");
+        m_sessionHint->setText(hint);
+    }
+
+    // Give the box a meaningful name for free, without ever clobbering
+    // something the user typed themselves.
+    if (m_nameEdit && (m_nameEdit->text().isEmpty() || m_nameEdit->text() == m_autoFilledName)) {
+        m_autoFilledName = uuid.isEmpty() ? QString() : m_sessionCombo->itemData(index, kTitleRole).toString();
+        m_nameEdit->setText(m_autoFilledName);
+    }
 }
 
 void NewBoxDialog::addPort()
@@ -152,6 +251,11 @@ QString NewBoxDialog::targetDir() const
 QString NewBoxDialog::conversationName() const
 {
     return m_nameEdit->text().trimmed();
+}
+
+QString NewBoxDialog::sessionUuid() const
+{
+    return m_sessionCombo->currentData().toString();
 }
 
 bool NewBoxDialog::yolo() const
