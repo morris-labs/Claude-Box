@@ -49,8 +49,14 @@ bars = "\n    ".join(
     f'<rect x="{x + 3.5}" y="40" width="3.5" height="176" rx="1.75" fill="#ffffff" opacity="0.16"/>'
     for x in BAR_X)
 
-SVG = f'''<?xml version="1.0" encoding="UTF-8"?>
-<!--
+# The root element comes FIRST, with no XML declaration and the comment
+# moved inside it. gdk-pixbuf picks a loader by sniffing a short window at
+# the head of the file, so a header comment pushes "<svg" out of range and
+# librsvg reports "couldn't recognize the image file format" -- which in
+# practice means GNOME shows no icon at all while Qt, which parses instead
+# of sniffing, renders it fine.
+SVG = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!--
   Alternative app icon: the Claude mark behind bars, which is the joke
   the whole project runs on — a box is a cell you put an agent in.
 
@@ -60,8 +66,7 @@ SVG = f'''<?xml version="1.0" encoding="UTF-8"?>
 
   The starburst is a stylized homage, not Anthropic's official mark;
   don't pass it off as the real logo.
--->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  -->
   <defs>
     <linearGradient id="steel" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0"    stop-color="#5c626c"/>
