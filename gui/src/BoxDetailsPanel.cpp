@@ -165,8 +165,8 @@ void BoxDetailsPanel::setBox(const BoxInfo *info)
     QStringList flags;
     if (rec.skipPermissions)
         flags << "--dangerously-skip-permissions";
-    if (!rec.agent.isEmpty())
-        flags << ("--agent " + rec.agent);
+    if (!rec.model.isEmpty())
+        flags << ("--model " + rec.model);
     if (!rec.effort.isEmpty())
         flags << ("--effort " + rec.effort);
     m_flags->setText(flags.isEmpty() ? QStringLiteral("none") : flags.join(", "));

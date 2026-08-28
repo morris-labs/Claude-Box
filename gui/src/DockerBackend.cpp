@@ -343,8 +343,8 @@ QStringList DockerBackend::baseClaudeArgs(const BoxRecord &rec)
 
     if (rec.skipPermissions)
         args << "--dangerously-skip-permissions";
-    if (!rec.agent.isEmpty())
-        args << "--agent" << rec.agent;
+    if (!rec.model.isEmpty())
+        args << "--model" << rec.model;
     if (!rec.effort.isEmpty())
         args << "--effort" << rec.effort;
 

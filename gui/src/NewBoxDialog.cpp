@@ -28,61 +28,17 @@ namespace {
 // Per-item role holding a conversation's untagged title.
 constexpr int kTitleRole = Qt::UserRole + 1;
 
-// Shown for agent/effort when nothing should be passed on the command
+// Shown for model/effort when nothing should be passed on the command
 // line at all, leaving ~/.claude/settings.json in charge.
 const char *kDefaultChoice = "Default (from settings)";
 
 // `claude --effort <level>` accepts exactly these, per `claude --help`.
 const QStringList kEffortLevels = {"low", "medium", "high", "xhigh", "max"};
 
-// Agent definitions live in <dir>/.claude/agents/*.md, both per-project
-// and in the home directory; the frontmatter `name:` is the identifier
-// `--agent` wants, falling back to the filename for files without one.
-// This is only used to populate a combo the user can also type into, so
-// an agent this misses is still reachable.
-QStringList discoverAgents(const QString &targetDir)
-{
-    QStringList result;
-
-    QStringList roots;
-    if (!targetDir.isEmpty())
-        roots << targetDir + "/.claude/agents";
-    roots << QDir::homePath() + "/.claude/agents";
-
-    for (const QString &root : roots) {
-        const QFileInfoList files = QDir(root).entryInfoList({"*.md"}, QDir::Files, QDir::Name);
-        for (const QFileInfo &fi : files) {
-            QString name = fi.completeBaseName();
-
-            QFile f(fi.absoluteFilePath());
-            if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                // Frontmatter only: stop at the closing --- so a `name:`
-                // deeper in the prose can't be mistaken for the header.
-                bool inFrontmatter = false;
-                while (!f.atEnd()) {
-                    const QString line = QString::fromUtf8(f.readLine()).trimmed();
-                    if (line == "---") {
-                        if (inFrontmatter)
-                            break;
-                        inFrontmatter = true;
-                        continue;
-                    }
-                    if (inFrontmatter && line.startsWith("name:")) {
-                        const QString value = line.mid(5).trimmed();
-                        if (!value.isEmpty())
-                            name = value;
-                        break;
-                    }
-                }
-            }
-
-            if (!name.isEmpty() && !result.contains(name))
-                result << name;
-        }
-    }
-
-    return result;
-}
+// `claude --model` takes either one of these aliases ("an alias for the
+// latest model") or a full model name like claude-fable-5 -- which is why
+// the combo is editable rather than a fixed list.
+const QStringList kModelAliases = {"opus", "sonnet", "haiku", "fable"};
 
 // The "list of things you can add to and remove from" frame shared by
 // the port and mount groups. The caller fills `entryRow` with whatever
@@ -180,12 +136,16 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     m_nameEdit->setPlaceholderText("optional -- used as-is, or as the issue name if new-issue.sh exists");
     form->addRow("Conversation name:", m_nameEdit);
 
-    // Editable: agent definitions can come from plugins and other places
-    // this dialog doesn't scan, and typing one in has to stay possible.
-    m_agentCombo = new QComboBox(this);
-    m_agentCombo->setEditable(true);
-    m_agentCombo->setInsertPolicy(QComboBox::NoInsert);
-    form->addRow("Agent:", m_agentCombo);
+    // Editable so a pinned full model name (claude-opus-5, a dated
+    // snapshot, whatever a project standardizes on) can be typed in
+    // instead of an alias.
+    m_modelCombo = new QComboBox(this);
+    m_modelCombo->setEditable(true);
+    m_modelCombo->setInsertPolicy(QComboBox::NoInsert);
+    m_modelCombo->addItem(kDefaultChoice, QString());
+    for (const QString &alias : kModelAliases)
+        m_modelCombo->addItem(alias, alias);
+    form->addRow("Model:", m_modelCombo);
 
     m_effortCombo = new QComboBox(this);
     m_effortCombo->addItem(kDefaultChoice, QString());
@@ -269,10 +229,9 @@ void NewBoxDialog::browseForMountDir()
         m_hostDirEdit->setText(dir);
 }
 
-// Rebuilds the conversation and agent pickers for whatever directory is
-// currently in the path field. Conversation index 0 is always "new
-// conversation" so the default behaviour is unchanged from before the
-// picker existed.
+// Rebuilds the conversation picker for whatever directory is currently
+// in the path field. Index 0 is always "new conversation" so the default
+// behaviour is unchanged from before the picker existed.
 void NewBoxDialog::reloadForDirectory()
 {
     const QString dir = m_dirEdit->text().trimmed();
@@ -312,26 +271,6 @@ void NewBoxDialog::reloadForDirectory()
     blocker.unblock();
     m_sessionCombo->setCurrentIndex(0);
     onConversationChanged(0);
-
-    // Agents are per-directory too (a project can define its own), so
-    // they get rebuilt here as well -- preserving whatever was typed or
-    // chosen, since it may well name an agent from somewhere this scan
-    // doesn't look.
-    const QString previousAgent = m_agentCombo->currentIndex() == 0 ? QString() : m_agentCombo->currentText().trimmed();
-    QSignalBlocker agentBlocker(m_agentCombo);
-    m_agentCombo->clear();
-    m_agentCombo->addItem(kDefaultChoice, QString());
-    for (const QString &agent : discoverAgents(absDir))
-        m_agentCombo->addItem(agent, agent);
-    if (previousAgent.isEmpty()) {
-        m_agentCombo->setCurrentIndex(0);
-    } else {
-        const int existing = m_agentCombo->findText(previousAgent);
-        if (existing >= 0)
-            m_agentCombo->setCurrentIndex(existing);
-        else
-            m_agentCombo->setCurrentText(previousAgent);
-    }
 }
 
 void NewBoxDialog::onConversationChanged(int index)
@@ -458,11 +397,11 @@ bool NewBoxDialog::skipPermissions() const
     return m_skipPermsCheck->isChecked();
 }
 
-QString NewBoxDialog::agent() const
+QString NewBoxDialog::model() const
 {
     // The combo is editable, so the placeholder label can end up as the
-    // literal text; either way it means "pass no --agent at all".
-    const QString text = m_agentCombo->currentText().trimmed();
+    // literal text; either way it means "pass no --model at all".
+    const QString text = m_modelCombo->currentText().trimmed();
     return text == QLatin1String(kDefaultChoice) ? QString() : text;
 }
 
