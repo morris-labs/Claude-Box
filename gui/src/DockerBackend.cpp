@@ -285,10 +285,6 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
     // visible, and every box for a tree keeps the same mount and the same
     // ~/.claude/projects encoding.
     const bool provisionWorkspace = workspaceSubdir && !resumeExisting && !rec.conversationName.isEmpty();
-    // A project can script its own provisioning; app.odinhelp.com's
-    // new-issue.sh clones the repo and writes a CLAUDE.md into the folder.
-    // Without one, the folder is simply created empty.
-    const bool hasProvisioner = QFileInfo(rec.targetDir + "/new-issue.sh").isExecutable();
 
     if (provisionWorkspace) {
         slug = slugifyIssueName(rec.conversationName);
@@ -299,36 +295,35 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
         }
 
         const QString workspacePath = rec.targetDir + "/" + slug;
-        // An existing folder means "you are resuming, not starting fresh"
-        // (new-issue.sh refuses outright in that case), so leave it alone.
-        if (!QDir(workspacePath).exists()) {
-            if (hasProvisioner) {
-                QProcess p;
-                p.setWorkingDirectory(rec.targetDir);
-                p.start(rec.targetDir + "/new-issue.sh", {rec.conversationName});
-                if (!p.waitForFinished(30000) || p.exitCode() != 0) {
-                    if (errorOut) {
-                        const QString stderrText = QString::fromUtf8(p.readAllStandardError()).trimmed();
-                        *errorOut = "new-issue.sh failed" + (stderrText.isEmpty() ? QString() : (": " + stderrText));
-                    }
-                    return false;
-                }
-            } else if (!QDir().mkpath(workspacePath)) {
-                if (errorOut)
-                    *errorOut = "could not create workspace folder " + workspacePath;
-                return false;
-            }
+        // Creating the folder is all this does. Anything a particular tree
+        // needs inside it -- a repo clone, an .env, a seeded CLAUDE.md --
+        // is the agent's job, described in that directory's own CLAUDE.md.
+        // Scripting it here instead (this used to shell out to a project's
+        // new-issue.sh) put per-project knowledge in the launcher, where
+        // it can't be read by the agent that has to live with it.
+        //
+        // An existing folder is left exactly as it is: that means you're
+        // resuming prior work, not starting fresh.
+        if (!QDir(workspacePath).exists() && !QDir().mkpath(workspacePath)) {
+            if (errorOut)
+                *errorOut = "could not create workspace folder " + workspacePath;
+            return false;
         }
 
         rec.workspaceDir = slug;
 
-        openingPrompt = hasProvisioner
-            ? QString("Issue: %1. Your workspace folder %2/ already exists, so do not run "
-                      "new-issue.sh. Read %2/CLAUDE.md and work there. Wait for the ticket "
-                      "details before changing anything.").arg(rec.conversationName, slug)
-            : QString("Your workspace for \"%1\" is the %2/ folder inside this directory; it "
-                      "already exists. Work there rather than in the directory above it, and "
-                      "wait for details before changing anything.").arg(rec.conversationName, slug);
+        openingPrompt = QString(
+            "Your workspace for this conversation is the %1/ folder in this directory, and it "
+            "already exists. Read this directory's CLAUDE.md for how a workspace here is set up, "
+            "do that setup inside %1/, and work there rather than in the directory above it. The "
+            "conversation was opened as \"%2\". Wait for details before changing anything.")
+            .arg(slug, rec.conversationName);
+
+        // One name for everything: the folder, the box, the record and
+        // claude's own session name all become the slug, so a row in the
+        // dashboard, a container in `docker ps` and a directory listing
+        // all say the same word.
+        rec.conversationName = slug;
     }
 
     const QString base = slug.isEmpty() ? QFileInfo(rec.targetDir).fileName() : slug;
