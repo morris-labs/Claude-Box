@@ -658,8 +658,9 @@ void MainWindow::onNew()
     rec.targetDir = dlg.targetDir();
     rec.conversationName = dlg.conversationName();
     rec.sessionUuid = dlg.sessionUuid(); // empty => createNew mints a new one
-    rec.yolo = dlg.yolo();
-    rec.rc = dlg.rc();
+    rec.skipPermissions = dlg.skipPermissions();
+    rec.agent = dlg.agent();
+    rec.effort = dlg.effort();
     rec.ports = dlg.ports();
     rec.dirs = dlg.dirs();
 

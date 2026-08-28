@@ -49,9 +49,11 @@ BoxRecord BoxRecord::load(const QString &name)
         else if (key == "conversation_name")
             rec.conversationName = value;
         else if (key == "yolo")
-            rec.yolo = (value == "1");
-        else if (key == "rc")
-            rec.rc = (value == "1");
+            rec.skipPermissions = (value == "1");
+        else if (key == "agent")
+            rec.agent = value;
+        else if (key == "effort")
+            rec.effort = value;
         else if (key == "port")
             rec.ports.append(value);
         else if (key == "dir")
@@ -77,8 +79,11 @@ bool BoxRecord::save() const
     out << "target_dir=" << targetDir << '\n';
     out << "session_uuid=" << sessionUuid << '\n';
     out << "conversation_name=" << conversationName << '\n';
-    out << "yolo=" << (yolo ? "1" : "0") << '\n';
-    out << "rc=" << (rc ? "1" : "0") << '\n';
+    out << "yolo=" << (skipPermissions ? "1" : "0") << '\n';
+    if (!agent.isEmpty())
+        out << "agent=" << agent << '\n';
+    if (!effort.isEmpty())
+        out << "effort=" << effort << '\n';
     for (const QString &p : ports)
         out << "port=" << p << '\n';
     for (const QString &d : dirs)
