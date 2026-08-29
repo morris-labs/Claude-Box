@@ -26,12 +26,17 @@ struct ConversationInfo {
 
 namespace ConversationCatalog {
 
-// ~/.claude/projects/<encoded>, where <encoded> is the absolute target
-// dir with every non-alphanumeric byte replaced by '-'. That encoding is
-// Claude Code's, not ours; it is reproduced here (and verified against
-// the `cwd` recorded inside the transcripts) because it's the only way
-// to find a directory's conversations. Note it collapses '.' as well as
-// '/', so `/a/b/app.example.com` becomes `-a-b-app-example-com`.
+// ~/.claude/projects/<encoded>, where <encoded> is every non-alphanumeric
+// byte of the path replaced by '-'. That encoding is Claude Code's, not
+// ours; it is reproduced here (and verified against the `cwd` recorded
+// inside the transcripts) because it's the only way to find a directory's
+// conversations. Note it collapses '.' as well as '/', so
+// `/a/b/app.example.com` becomes `-a-b-app-example-com`.
+//
+// The path encoded is the *container-side* path (via
+// ContainerPaths::hostToContainer), not targetDir itself -- Claude Code
+// names this directory after whatever cwd its own process sees, which on
+// Linux is textually identical to the host path but on Windows never is.
 QString projectDirFor(const QString &targetDir);
 
 // Every resumable conversation for targetDir, newest first. Transcripts

@@ -1,6 +1,7 @@
 #include "NewBoxDialog.h"
 
 #include "ConversationCatalog.h"
+#include "ContainerPaths.h"
 #include "Theme.h"
 
 #include <QCheckBox>
@@ -500,9 +501,11 @@ void NewBoxDialog::addDirMount()
     }
 
     // Mirroring the host path is both the common case and the one that
-    // keeps file references copied out of the box meaningful.
+    // keeps file references copied out of the box meaningful -- "mirror"
+    // meaning the mapped container path, since on Windows the literal
+    // host string can't be a container path at all (see ContainerPaths.h).
     const QString container = m_containerDirEdit->text().trimmed().isEmpty()
-        ? host : m_containerDirEdit->text().trimmed();
+        ? ContainerPaths::hostToContainer(host) : m_containerDirEdit->text().trimmed();
 
     const QString value = host + ":" + container;
     if (!listContainsValue(m_dirList, value))
