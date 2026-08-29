@@ -1,5 +1,6 @@
 #include "DockerBackend.h"
 
+#include "ContainerPaths.h"
 #include "DockerApi.h"
 
 #include <QDir>
@@ -391,9 +392,13 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
                                                     const QStringList &claudeArgs)
 {
     LaunchSpec spec;
-    spec.workingDir = rec.targetDir;
+    // The container-side path: identical to rec.targetDir on Linux/macOS,
+    // something real (e.g. /mnt/host/c/Users/...) on Windows, where a host
+    // path can't be a container path at all. See ContainerPaths.h.
+    const QString containerDir = ContainerPaths::hostToContainer(rec.targetDir);
+    spec.workingDir = containerDir;
     spec.env << "IS_SANDBOX=1";
-    spec.binds << (rec.targetDir + ":" + rec.targetDir)
+    spec.binds << (rec.targetDir + ":" + containerDir)
                << (QDir::homePath() + "/.claude:/home/user/.claude")
                << (QDir::homePath() + "/.claude.json:/home/user/.claude.json");
 
@@ -410,14 +415,19 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
 
     spec.ports = rec.ports;
     for (const QString &d : rec.dirs) {
-        const int colon = d.indexOf(':');
-        const QString hostRaw = colon < 0 ? d : d.left(colon);
-        const QString containerPath = colon < 0 ? d : d.mid(colon + 1);
-        spec.binds << (QFileInfo(hostRaw).absoluteFilePath() + ":" + containerPath);
+        QString hostRaw, containerPath;
+        ContainerPaths::splitMountSpec(d, hostRaw, containerPath);
+        const QString hostAbs = QFileInfo(hostRaw).absoluteFilePath();
+        // No container side given means "mirror the host path" -- which on
+        // Windows has to mean the mapped path, not the literal host string
+        // (that can't be a container path at all there).
+        if (containerPath.isEmpty())
+            containerPath = ContainerPaths::hostToContainer(hostAbs);
+        spec.binds << (hostAbs + ":" + containerPath);
     }
 
     spec.cmd << "bash" << "-c" << (gitSetup + " && shift && exec claude \"$@\"")
-             << "_" << rec.targetDir;
+             << "_" << containerDir;
     spec.cmd += claudeArgs;
     return spec;
 }
@@ -430,6 +440,7 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
         return false; // a real failure, already reported -- don't retry differently
 
     QString gitSetup = "git config --global --add safe.directory \"$1\"";
+    const QString containerDir = ContainerPaths::hostToContainer(rec.targetDir);
 
     QStringList args;
     // -i is as load-bearing as -t: without OpenStdin the container's stdin is
@@ -440,8 +451,8 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
          << "--name" << rec.name
          << "--user" << "user"
          << "-e" << "IS_SANDBOX=1"
-         << "-w" << rec.targetDir
-         << "-v" << (rec.targetDir + ":" + rec.targetDir)
+         << "-w" << containerDir
+         << "-v" << (rec.targetDir + ":" + containerDir)
          << "-v" << (QDir::homePath() + "/.claude:/home/user/.claude")
          << "-v" << (QDir::homePath() + "/.claude.json:/home/user/.claude.json");
 
@@ -459,15 +470,19 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
         args << "-p" << p;
 
     for (const QString &d : rec.dirs) {
-        const int colon = d.indexOf(':');
-        const QString hostRaw = colon < 0 ? d : d.left(colon);
-        const QString containerPath = colon < 0 ? d : d.mid(colon + 1);
+        QString hostRaw, containerPath;
+        ContainerPaths::splitMountSpec(d, hostRaw, containerPath);
         const QString hostPath = QFileInfo(hostRaw).absoluteFilePath();
+        // No container side given means "mirror the host path" -- which on
+        // Windows has to mean the mapped path, not the literal host string
+        // (that can't be a container path at all there).
+        if (containerPath.isEmpty())
+            containerPath = ContainerPaths::hostToContainer(hostPath);
         args << "-v" << (hostPath + ":" + containerPath);
     }
 
     args << "claude-code" << "bash" << "-c" << (gitSetup + " && shift && exec claude \"$@\"")
-         << "_" << rec.targetDir;
+         << "_" << containerDir;
     args += claudeArgs;
 
     return runDocker(args, nullptr, errorOut, 30000);
