@@ -1,8 +1,15 @@
 #include "DockerBackend.h"
 
+#include "DockerApi.h"
+
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QFile>
 #include <QProcess>
+#include <QUrl>
 #include <QSet>
 #include <QUuid>
 
@@ -47,6 +54,32 @@ QString slugifyIssueName(const QString &issueName)
     while (squeezed.endsWith('_'))
         squeezed.chop(1);
     return squeezed;
+}
+
+// docker reports names as a list, each with a leading slash.
+QString containerName(const QJsonObject &container)
+{
+    const QJsonArray names = container.value("Names").toArray();
+    if (names.isEmpty())
+        return QString();
+    QString name = names.first().toString();
+    if (name.startsWith('/'))
+        name.remove(0, 1);
+    return name;
+}
+
+// docker's own sizing: binary units, four significant digits, so these
+// read identically to `docker stats` / `docker ps -s` output.
+QString humanBytes(quint64 bytes)
+{
+    static const char *units[] = {"B", "KiB", "MiB", "GiB", "TiB"};
+    double value = double(bytes);
+    int unit = 0;
+    while (value >= 1024.0 && unit < 4) {
+        value /= 1024.0;
+        ++unit;
+    }
+    return QString::number(value, 'g', 4) + units[unit];
 }
 
 } // namespace
@@ -134,11 +167,154 @@ void DockerBackend::refreshStatsCache() const
 
 QList<BoxInfo> DockerBackend::listBoxes(bool sampleStats) const
 {
+    QList<BoxInfo> result;
+    QSet<QString> seen;
+
+    // The API first, the CLI if it isn't reachable. Both fill the same two
+    // containers, so the "merge in the known records" tail below doesn't
+    // care which one ran.
+    if (!listViaApi(result, seen, sampleStats))
+        listViaCli(result, seen, sampleStats);
+
+    // Known (reopenable): every tracked record not already accounted for.
+    const QList<BoxRecord> known = BoxRecord::loadAll();
+    for (const BoxRecord &rec : known) {
+        if (seen.contains(rec.name))
+            continue;
+
+        BoxInfo info;
+        info.status = BoxInfo::Status::Known;
+        info.name = rec.name;
+        info.conversationName = rec.conversationName;
+        info.targetDir = rec.targetDir;
+        info.detail = "not running";
+        result.append(info);
+        seen.insert(rec.name);
+    }
+
+    return result;
+}
+
+// Containers as the daemon reports them, plus a stats sample per running
+// box. The name filter is the same regex the CLI used; the daemon matches
+// it against names with their leading slash stripped.
+bool DockerBackend::listViaApi(QList<BoxInfo> &result, QSet<QString> &seen, bool sampleStats) const
+{
+    if (!DockerApi::isAvailable())
+        return false;
+
+    const QString base = QStringLiteral("/") + DockerApi::kApiVersion + "/containers/json";
+    const QString nameFilter = QUrl::toPercentEncoding("{\"name\":[\"^claude-agent-\"]}");
+
+    QString error;
+    const QJsonDocument running = DockerApi::get(base + "?filters=" + nameFilter, &error);
+    if (running.isNull() || !running.isArray())
+        return false; // fall back rather than show an empty dashboard
+
+    for (const QJsonValue &value : running.array()) {
+        const QJsonObject container = value.toObject();
+
+        BoxInfo info;
+        info.status = BoxInfo::Status::Running;
+        info.name = containerName(container);
+        info.detail = container.value("Status").toString();
+
+        const BoxRecord rec = BoxRecord::load(info.name);
+        if (rec.isValid()) {
+            info.conversationName = rec.conversationName;
+            info.targetDir = rec.targetDir;
+        } else {
+            info.conversationName = info.name;
+        }
+
+        if (sampleStats) {
+            const QString stats = statsDetail(container.value("Id").toString());
+            if (!stats.isEmpty())
+                info.detail += QStringLiteral(" · ") + stats;
+        }
+
+        result.append(info);
+        seen.insert(info.name);
+    }
+
+    // Stopped but not yet removed -- rare, since containers run with
+    // --rm, but can happen if dockerd restarted mid-cleanup.
+    const QString exitedFilter =
+        QUrl::toPercentEncoding("{\"name\":[\"^claude-agent-\"],\"status\":[\"exited\"]}");
+    const QJsonDocument exited = DockerApi::get(base + "?all=1&size=1&filters=" + exitedFilter, &error);
+    for (const QJsonValue &value : exited.array()) {
+        const QJsonObject container = value.toObject();
+        const QString name = containerName(container);
+        if (seen.contains(name))
+            continue;
+
+        BoxInfo info;
+        info.status = BoxInfo::Status::Stopped;
+        info.name = name;
+        info.detail = container.value("Status").toString() + " · "
+            + humanBytes(quint64(container.value("SizeRw").toDouble()))
+            + " (virtual " + humanBytes(quint64(container.value("SizeRootFs").toDouble())) + ")";
+        result.append(info);
+        seen.insert(name);
+    }
+
+    return true;
+}
+
+// One sample of a container's counters, turned into the same
+// "cpu N% · mem A / B" string the CLI path produces. CPU is a rate, so it
+// needs the previous tick's sample; memory is absolute and always shown.
+QString DockerBackend::statsDetail(const QString &id) const
+{
+    if (id.isEmpty())
+        return QString();
+
+    // one-shot skips the daemon's own second sample -- the whole reason
+    // this path exists, since that wait is what costs the CLI ~2 seconds.
+    const QJsonDocument doc = DockerApi::get(
+        QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + id
+            + "/stats?stream=false&one-shot=true",
+        nullptr, 5000);
+    if (doc.isNull())
+        return QString();
+
+    const QJsonObject stats = doc.object();
+    const QJsonObject cpu = stats.value("cpu_stats").toObject();
+    const QJsonObject memory = stats.value("memory_stats").toObject();
+
+    CpuSample sample;
+    sample.containerUsage = quint64(cpu.value("cpu_usage").toObject().value("total_usage").toDouble());
+    sample.systemUsage = quint64(cpu.value("system_cpu_usage").toDouble());
+    sample.onlineCpus = cpu.value("online_cpus").toInt(1);
+
+    QString cpuText;
+    const auto previous = m_prevCpu.constFind(id);
+    if (previous != m_prevCpu.constEnd() && sample.systemUsage > previous->systemUsage
+        && sample.containerUsage >= previous->containerUsage) {
+        const double containerDelta = double(sample.containerUsage - previous->containerUsage);
+        const double systemDelta = double(sample.systemUsage - previous->systemUsage);
+        cpuText = QString("cpu %1% · ")
+                      .arg(containerDelta / systemDelta * sample.onlineCpus * 100.0, 0, 'f', 2);
+    }
+    m_prevCpu.insert(id, sample);
+
+    // `usage` includes reclaimable page cache; docker stats subtracts
+    // inactive_file before reporting, and matching it to the byte matters
+    // more than being technically arguable.
+    const quint64 usage = quint64(memory.value("usage").toDouble());
+    const quint64 inactiveFile =
+        quint64(memory.value("stats").toObject().value("inactive_file").toDouble());
+    const quint64 used = usage > inactiveFile ? usage - inactiveFile : usage;
+
+    return cpuText + "mem " + humanBytes(used) + " / "
+        + humanBytes(quint64(memory.value("limit").toDouble()));
+}
+
+void DockerBackend::listViaCli(QList<BoxInfo> &result, QSet<QString> &seen, bool sampleStats) const
+{
     if (sampleStats)
         refreshStatsCache();
 
-    QList<BoxInfo> result;
-    QSet<QString> seen;
     QString out, err;
 
     // Running.
@@ -191,36 +367,68 @@ QList<BoxInfo> DockerBackend::listBoxes(bool sampleStats) const
             seen.insert(info.name);
         }
     }
-
-    // Known (reopenable): every tracked record not already accounted for.
-    const QList<BoxRecord> known = BoxRecord::loadAll();
-    for (const BoxRecord &rec : known) {
-        if (seen.contains(rec.name))
-            continue;
-
-        BoxInfo info;
-        info.status = BoxInfo::Status::Known;
-        info.name = rec.name;
-        info.conversationName = rec.conversationName;
-        info.targetDir = rec.targetDir;
-        info.detail = "not running";
-        result.append(info);
-        seen.insert(rec.name);
-    }
-
-    return result;
 }
 
 bool DockerBackend::isRunning(const QString &name) const
 {
+    if (DockerApi::isAvailable()) {
+        const QJsonDocument doc = DockerApi::get(
+            QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + name + "/json");
+        return doc.object().value("State").toObject().value("Running").toBool();
+    }
+
     QString out, err;
     if (!runDocker({"ps", "--filter", "name=^claude-agent-", "--format", "{{.Names}}"}, &out, &err, 5000))
         return false;
     return out.split('\n', Qt::SkipEmptyParts).contains(name);
 }
 
+// Everything a box is launched with, expressed once. runContainer()
+// turns it into `docker run` flags and runContainerViaApi() into a
+// create-container JSON body -- keeping the two derived from one
+// description is what stops them drifting apart.
+DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
+                                                    const QStringList &claudeArgs)
+{
+    LaunchSpec spec;
+    spec.workingDir = rec.targetDir;
+    spec.env << "IS_SANDBOX=1";
+    spec.binds << (rec.targetDir + ":" + rec.targetDir)
+               << (QDir::homePath() + "/.claude:/home/user/.claude")
+               << (QDir::homePath() + "/.claude.json:/home/user/.claude.json");
+
+    QString gitSetup = "git config --global --add safe.directory \"$1\"";
+    const QString gitconfigPath = rec.targetDir + "/gitconfig";
+    if (QFileInfo::exists(gitconfigPath)) {
+        spec.env << ("GIT_CONFIG_GLOBAL=" + gitconfigPath);
+        gitSetup = "true"; // that file already sets safe.directory = *
+    }
+
+    spec.envFile = rec.targetDir + "/agent.env";
+    if (!QFileInfo::exists(spec.envFile))
+        spec.envFile.clear();
+
+    spec.ports = rec.ports;
+    for (const QString &d : rec.dirs) {
+        const int colon = d.indexOf(':');
+        const QString hostRaw = colon < 0 ? d : d.left(colon);
+        const QString containerPath = colon < 0 ? d : d.mid(colon + 1);
+        spec.binds << (QFileInfo(hostRaw).absoluteFilePath() + ":" + containerPath);
+    }
+
+    spec.cmd << "bash" << "-c" << (gitSetup + " && shift && exec claude \"$@\"")
+             << "_" << rec.targetDir;
+    spec.cmd += claudeArgs;
+    return spec;
+}
+
 bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const
 {
+    if (runContainerViaApi(rec, claudeArgs, errorOut))
+        return true;
+    if (DockerApi::isAvailable())
+        return false; // a real failure, already reported -- don't retry differently
+
     QString gitSetup = "git config --global --add safe.directory \"$1\"";
 
     QStringList args;
@@ -263,6 +471,104 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
     args += claudeArgs;
 
     return runDocker(args, nullptr, errorOut, 30000);
+}
+
+bool DockerBackend::runContainerViaApi(const BoxRecord &rec, const QStringList &claudeArgs,
+                                       QString *errorOut) const
+{
+    if (!DockerApi::isAvailable())
+        return false;
+
+    const LaunchSpec spec = launchSpec(rec, claudeArgs);
+
+    QJsonArray cmd;
+    for (const QString &arg : spec.cmd)
+        cmd.append(arg);
+
+    QJsonArray env;
+    for (const QString &e : spec.env)
+        env.append(e);
+    // --env-file is a CLI convenience, not an API feature, so the file is
+    // read here: KEY=VALUE per line, # comments and blanks skipped, and a
+    // bare KEY meaning "inherit that one from this process".
+    if (!spec.envFile.isEmpty()) {
+        QFile file(spec.envFile);
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            while (!file.atEnd()) {
+                const QString line = QString::fromUtf8(file.readLine()).trimmed();
+                if (line.isEmpty() || line.startsWith('#'))
+                    continue;
+                if (line.contains('='))
+                    env.append(line);
+                else if (qEnvironmentVariableIsSet(line.toUtf8()))
+                    env.append(line + "=" + qEnvironmentVariable(line.toUtf8()));
+            }
+        }
+    }
+
+    QJsonArray binds;
+    for (const QString &bind : spec.binds)
+        binds.append(bind);
+
+    // "8080:3000" becomes an exposed 3000/tcp plus a host binding on 8080.
+    QJsonObject exposedPorts;
+    QJsonObject portBindings;
+    for (const QString &mapping : spec.ports) {
+        const int colon = mapping.indexOf(':');
+        if (colon < 0)
+            continue;
+        const QString hostPort = mapping.left(colon);
+        const QString containerPort = mapping.mid(colon + 1) + "/tcp";
+        exposedPorts.insert(containerPort, QJsonObject());
+        QJsonObject binding;
+        binding.insert("HostIp", QString());
+        binding.insert("HostPort", hostPort);
+        portBindings.insert(containerPort, QJsonArray{binding});
+    }
+
+    QJsonObject hostConfig;
+    hostConfig.insert("Binds", binds);
+    hostConfig.insert("AutoRemove", true); // --rm
+    if (!portBindings.isEmpty())
+        hostConfig.insert("PortBindings", portBindings);
+
+    QJsonObject body;
+    body.insert("HostConfig", hostConfig);
+    body.insert("Image", QStringLiteral("claude-code"));
+    body.insert("Cmd", cmd);
+    body.insert("Env", env);
+    body.insert("User", QStringLiteral("user"));
+    body.insert("WorkingDir", spec.workingDir);
+    // -t and -i: a tty for claude's TUI to render into, and an open stdin
+    // so `docker attach` has somewhere to deliver keystrokes.
+    body.insert("Tty", true);
+    body.insert("OpenStdin", true);
+    if (!exposedPorts.isEmpty())
+        body.insert("ExposedPorts", exposedPorts);
+
+    QString error;
+    const QJsonDocument created = DockerApi::post(
+        QStringLiteral("/") + DockerApi::kApiVersion + "/containers/create?name=" + rec.name,
+        body, &error);
+    const QString id = created.object().value("Id").toString();
+    if (id.isEmpty()) {
+        if (errorOut)
+            *errorOut = error.isEmpty() ? QStringLiteral("container create returned no id") : error;
+        return false;
+    }
+
+    if (!DockerApi::post(QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + id + "/start",
+                         {}, &error)
+             .isNull()
+        || error.isEmpty()) {
+        return true;
+    }
+
+    // Started nothing, so don't leave the half-made container behind.
+    DockerApi::del(QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + id + "?force=1");
+    if (errorOut)
+        *errorOut = error;
+    return false;
 }
 
 bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut) const
@@ -384,10 +690,23 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
 
 bool DockerBackend::stop(const QString &name, QString *errorOut) const
 {
+    if (DockerApi::isAvailable()) {
+        QString error;
+        DockerApi::post(QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + name + "/stop",
+                        {}, &error, 20000);
+        if (error.isEmpty())
+            return true;
+        if (errorOut)
+            *errorOut = error;
+        return false;
+    }
     return runDocker({"stop", name}, nullptr, errorOut, 15000);
 }
 
 bool DockerBackend::remove(const QString &name, QString *errorOut) const
 {
+    if (DockerApi::isAvailable())
+        return DockerApi::del(QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + name,
+                              errorOut);
     return runDocker({"rm", name}, nullptr, errorOut, 5000);
 }
