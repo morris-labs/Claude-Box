@@ -2,6 +2,7 @@
 
 #include <QElapsedTimer>
 #include <QHash>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QList>
@@ -86,19 +87,56 @@ public:
     bool remove(const QString &name, QString *errorOut) const; // docker rm
 
 private:
+    // Everything here has two implementations: the Engine API (see
+    // DockerApi -- fast, portable to Windows, and the only way to get a
+    // stats sample in under a second) and the `docker` CLI, kept as the
+    // fallback for setups the socket client deliberately doesn't handle,
+    // such as a tcp:// or ssh:// DOCKER_HOST.
+    bool listViaApi(QList<BoxInfo> &result, QSet<QString> &seen, bool sampleStats) const;
+    void listViaCli(QList<BoxInfo> &result, QSet<QString> &seen, bool sampleStats) const;
+
     // `docker stats --no-stream` takes 1-2 seconds to return no matter how
     // many containers it reports on, because it samples CPU over an
-    // interval before printing. So it is asked for every container at once
-    // and the answer is cached: the old code ran it once PER running box
-    // on every refresh tick, which cost more time than the interval
-    // between ticks as soon as a second box existed.
+    // interval before printing. So on the CLI path it is asked for every
+    // container at once and the answer is cached: the old code ran it once
+    // PER running box on every refresh tick, which cost more time than the
+    // interval between ticks as soon as a second box existed. The API path
+    // needs neither trick -- see statsDetail().
     mutable QHash<QString, QString> m_statsCache;
     mutable QElapsedTimer m_statsAge;
     mutable bool m_statsSampled = false;
     void refreshStatsCache() const;
 
+    // CPU percentage is a rate, and one API sample carries only counters,
+    // so the previous sample is kept and the delta taken across refresh
+    // ticks. First sighting of a container therefore reports memory only.
+    struct CpuSample {
+        quint64 containerUsage = 0;
+        quint64 systemUsage = 0;
+        int onlineCpus = 1;
+    };
+    mutable QHash<QString, CpuSample> m_prevCpu;
+    QString statsDetail(const QString &id) const;
+
     bool runDocker(const QStringList &args, QString *stdoutOut, QString *errorOut, int timeoutMs) const;
     bool runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const;
+    // The API half of runContainer(): POST /containers/create + /start.
+    // Returns false (without having created anything) when the API isn't
+    // usable, which is the caller's cue to shell out instead.
+    bool runContainerViaApi(const BoxRecord &rec, const QStringList &claudeArgs,
+                            QString *errorOut) const;
+
+    // The single description of how a box is launched, from which both
+    // the CLI flags and the API's JSON body are derived.
+    struct LaunchSpec {
+        QStringList cmd;      // the container's argv
+        QStringList env;      // KEY=VALUE
+        QStringList binds;    // "HOSTPATH:CONTAINERPATH"
+        QStringList ports;    // "HOST:CONTAINER"
+        QString envFile;      // agent.env, when the target dir has one
+        QString workingDir;
+    };
+    static LaunchSpec launchSpec(const BoxRecord &rec, const QStringList &claudeArgs);
 
     // Flags shared by createNew() and reopen(): --remote-control (always),
     // plus whatever the record asks for.
