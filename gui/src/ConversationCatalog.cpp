@@ -1,6 +1,7 @@
 #include "ConversationCatalog.h"
 
 #include "BoxRecord.h"
+#include "ContainerPaths.h"
 
 #include <QDir>
 #include <QFile>
@@ -84,7 +85,13 @@ QString ConversationCatalog::projectDirFor(const QString &targetDir)
     if (targetDir.isEmpty())
         return QString();
 
-    QString encoded = QDir(targetDir).absolutePath();
+    // Claude Code names this directory after whatever `cwd` it sees --
+    // which is the path *inside* the container, not the host path that
+    // was mounted there. Those are the same string on Linux (hence no
+    // visible difference before ContainerPaths existed), but on Windows a
+    // host path like C:\Users\... is never what Claude Code's own process
+    // reports as its cwd, since it never runs there directly.
+    QString encoded = ContainerPaths::hostToContainer(targetDir);
     for (QChar &c : encoded) {
         // ASCII-only on purpose, matching the sanitizers in
         // DockerBackend.cpp: this has to byte-match what Claude Code

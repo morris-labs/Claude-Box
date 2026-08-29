@@ -26,6 +26,8 @@ add_executable(claude-box-gui
     src/BoxRecord.h
     src/ConversationCatalog.cpp
     src/ConversationCatalog.h
+    src/ContainerPaths.cpp
+    src/ContainerPaths.h
     src/DockerApi.cpp
     src/DockerApi.h
     src/DockerBackend.cpp
