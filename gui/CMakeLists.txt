@@ -5,13 +5,13 @@
 # Run:   ./build/claude-box-gui
 
 cmake_minimum_required(VERSION 3.16)
-project(claude-box-gui VERSION 1.8.0 LANGUAGES CXX)
+project(claude-box-gui VERSION 1.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Network)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(VTERM REQUIRED IMPORTED_TARGET vterm)
@@ -26,6 +26,8 @@ add_executable(claude-box-gui
     src/BoxRecord.h
     src/ConversationCatalog.cpp
     src/ConversationCatalog.h
+    src/DockerApi.cpp
+    src/DockerApi.h
     src/DockerBackend.cpp
     src/DockerBackend.h
     src/PtySession.cpp
@@ -129,6 +131,7 @@ target_link_libraries(claude-box-gui
     PRIVATE
         Qt6::Widgets
         Qt6::Concurrent
+        Qt6::Network
         PkgConfig::VTERM
 )
 
