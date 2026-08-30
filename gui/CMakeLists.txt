@@ -13,30 +13,25 @@ set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Network)
 
-# libvterm: pkg-config is a Linux/pkg-config-ecosystem convention, so this
-# only runs there. Windows needs a real answer here, deliberately not
-# guessed at: libvterm upstream ships a plain Makefile with a Perl
-# code-generation step for its Unicode tables (tbl2inc_c.pl), not a CMake
-# build, so there is no drop-in FetchContent target to point at. (An
-# earlier pass at this plan believed Neovim's libvterm fork carried its
-# own CMakeLists.txt for exactly this; checked directly against that
-# repo and it does not -- it's Makefile-based like upstream, just with
-# MSVC-compatibility patches to the *source*, not a CMake build of it.)
-# Resolving this for real -- vcpkg port, a vendored build running the
-# Perl step once and committing the generated tables, or Neovim's own
-# CMake glue for building bundled deps adapted from their tree -- needs
-# whatever's actually available on the Windows box, so it's a Windows
-# Phase 3 task there rather than something invented on the Linux side.
+# libvterm: on Linux/macOS the distro ships it and pkg-config is the native
+# way to find it. Windows has neither a package nor a vcpkg port, and libvterm
+# upstream has no CMake build of its own (a plain Makefile with libtool and a
+# Perl Unicode-table code-generation step). The 0.3.3 *release tarball* ships
+# those tables pre-generated and drops the Perl step entirely, and its sources
+# compile as-is with MSVC (verified: cl /std:c11, clean), so the source is
+# vendored under third_party/libvterm/ and built there. Either way the rest of
+# this file links ${VTERM_LINK_LIB}.
 if(WIN32)
-    message(FATAL_ERROR
-        "libvterm has no CMake build of its own on Windows -- this needs "
-        "resolving with real tooling in hand (vcpkg port? vendor the "
-        "source and run its Perl table generation once, or adapt "
-        "Neovim's own CMake glue for it?) rather than guessed at here. "
-        "See the comment above this line.")
+    # The vendored libvterm is C; this project is otherwise CXX-only, so turn
+    # the C compiler on here rather than in project() where it would force C
+    # detection on the Linux/macOS builds that never compile a .c file.
+    enable_language(C)
+    add_subdirectory(third_party/libvterm)
+    set(VTERM_LINK_LIB claude-box::vterm)
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(VTERM REQUIRED IMPORTED_TARGET vterm)
+    set(VTERM_LINK_LIB PkgConfig::VTERM)
 endif()
 
 # PtySession.h declares one interface; exactly one of these backs it --
@@ -177,7 +172,7 @@ target_link_libraries(claude-box-gui
         Qt6::Widgets
         Qt6::Concurrent
         Qt6::Network
-        PkgConfig::VTERM
+        ${VTERM_LINK_LIB}
 )
 
 # forkpty()/openpty() lived in a separate libutil before glibc 2.34 merged
