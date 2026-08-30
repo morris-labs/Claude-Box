@@ -175,6 +175,25 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
     STARTUPINFOEXW startupInfo{};
     startupInfo.StartupInfo.cb = sizeof(startupInfo);
 
+    // STARTF_USESTDHANDLES with all three handles null, even though ConPTY is
+    // what actually supplies the child's stdio. Without it, CreateProcessW
+    // copies *this* process's std-handle values into the child's process
+    // parameters; in a GUI process with no console of its own those values are
+    // meaningless in the child, and -- the non-obvious part -- the
+    // PSEUDOCONSOLE attribute does not overwrite them when they're already
+    // set. The child then sees stdin/stdout/stderr as non-console
+    // (GetConsoleMode fails), so anything that probes for a tty misbehaves:
+    // `docker attach` to a -t container quits with "cannot attach stdin to a
+    // TTY-enabled container because stdin is not a terminal". Passing null
+    // handles here leaves the field clear for ConPTY to wire all three to the
+    // pseudoconsole. (Confirmed against a standalone ConPTY harness: without
+    // this the child's handles are FILE_TYPE_DISK/UNKNOWN; with it they are
+    // proper console handles.)
+    startupInfo.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+    startupInfo.StartupInfo.hStdInput = nullptr;
+    startupInfo.StartupInfo.hStdOutput = nullptr;
+    startupInfo.StartupInfo.hStdError = nullptr;
+
     SIZE_T attrListSize = 0;
     ::InitializeProcThreadAttributeList(nullptr, 1, 0, &attrListSize);
     std::vector<char> attrListBuffer(attrListSize);
