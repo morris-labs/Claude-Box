@@ -5,7 +5,7 @@
 # Run:   ./build/claude-box-gui
 
 cmake_minimum_required(VERSION 3.16)
-project(claude-box-gui VERSION 1.9.0 LANGUAGES CXX)
+project(claude-box-gui VERSION 1.10.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,6 +15,16 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Network)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(VTERM REQUIRED IMPORTED_TARGET vterm)
+
+# PtySession.h declares one interface; exactly one of these backs it --
+# forkpty on Unix, ConPTY on Windows. Picked here rather than compiling
+# both and #ifdef-ing inside one file because the two mechanisms don't
+# share so much as a helper function, only the class they implement.
+if(WIN32)
+    set(PTY_SESSION_SOURCE src/PtySessionWin.cpp)
+else()
+    set(PTY_SESSION_SOURCE src/PtySessionUnix.cpp)
+endif()
 
 add_executable(claude-box-gui
     src/main.cpp
@@ -32,7 +42,7 @@ add_executable(claude-box-gui
     src/DockerApi.h
     src/DockerBackend.cpp
     src/DockerBackend.h
-    src/PtySession.cpp
+    ${PTY_SESSION_SOURCE}
     src/PtySession.h
     src/TerminalWidget.cpp
     src/TerminalWidget.h
