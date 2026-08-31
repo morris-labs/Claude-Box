@@ -403,9 +403,13 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
                << (QDir::homePath() + "/.claude.json:/home/user/.claude.json");
 
     QString gitSetup = "git config --global --add safe.directory \"$1\"";
-    const QString gitconfigPath = rec.targetDir + "/gitconfig";
-    if (QFileInfo::exists(gitconfigPath)) {
-        spec.env << ("GIT_CONFIG_GLOBAL=" + gitconfigPath);
+    // The file is checked for on the host, but the value handed to the
+    // container has to be the *container-side* path -- on Windows the host
+    // string ("C:/.../gitconfig") is meaningless inside the Linux container,
+    // and git silently falls back to no global config (dubious-ownership
+    // errors, none of the file's settings applied).
+    if (QFileInfo::exists(rec.targetDir + "/gitconfig")) {
+        spec.env << ("GIT_CONFIG_GLOBAL=" + containerDir + "/gitconfig");
         gitSetup = "true"; // that file already sets safe.directory = *
     }
 
@@ -456,9 +460,9 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
          << "-v" << (QDir::homePath() + "/.claude:/home/user/.claude")
          << "-v" << (QDir::homePath() + "/.claude.json:/home/user/.claude.json");
 
-    const QString gitconfigPath = rec.targetDir + "/gitconfig";
-    if (QFileInfo::exists(gitconfigPath)) {
-        args << "-e" << ("GIT_CONFIG_GLOBAL=" + gitconfigPath);
+    // Container-side path, not the host one -- see launchSpec() for why.
+    if (QFileInfo::exists(rec.targetDir + "/gitconfig")) {
+        args << "-e" << ("GIT_CONFIG_GLOBAL=" + containerDir + "/gitconfig");
         gitSetup = "true"; // that file already sets safe.directory = *
     }
 
