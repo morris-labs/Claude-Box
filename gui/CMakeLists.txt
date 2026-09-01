@@ -68,6 +68,8 @@ add_executable(claude-box-gui
     src/TerminalWidget.h
     src/NewBoxDialog.cpp
     src/NewBoxDialog.h
+    src/SshForwardsDialog.cpp
+    src/SshForwardsDialog.h
     src/BoxDetailsPanel.cpp
     src/BoxDetailsPanel.h
     src/Theme.cpp
