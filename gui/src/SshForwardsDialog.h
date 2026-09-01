@@ -4,8 +4,10 @@
 #include <QStringList>
 
 class QComboBox;
+class QLabel;
 class QLineEdit;
 class QListWidget;
+class QPushButton;
 
 // Standalone editor for one box's SSH tunnel configuration: the ssh
 // target/identity plus a repeatable list of -L/-R forwards (see
@@ -31,9 +33,22 @@ private slots:
     void browseForIdentity();
     void addForward();
     void removeSelectedForward();
+    void testConnection();
     void tryAccept();
 
 private:
+    // Runs `ssh -o BatchMode=yes ... true` against the current target and
+    // reports what happened, without touching the UI -- shared by
+    // testConnection() (which does update the UI) and the auth-failure
+    // path, which needs to know whether the interactive login actually
+    // fixed anything once it's done.
+    struct ConnectResult {
+        enum class Outcome { Ok, AuthFailed, Unreachable } outcome;
+        QString detail;
+    };
+    ConnectResult probeConnection() const;
+    void offerInteractiveLogin();
+
     QLineEdit *m_hostEdit = nullptr;
     QLineEdit *m_identityEdit = nullptr;
     QListWidget *m_forwardList = nullptr;
@@ -42,4 +57,7 @@ private:
     QLineEdit *m_bindPortEdit = nullptr;
     QLineEdit *m_destHostEdit = nullptr;
     QLineEdit *m_destPortEdit = nullptr;
+
+    QLabel *m_connectionStatus = nullptr;
+    QPushButton *m_testButton = nullptr;
 };
