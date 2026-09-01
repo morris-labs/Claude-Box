@@ -14,7 +14,8 @@ struct BoxRecord;
 
 // Form for creating a new box: target directory, which conversation to
 // run in it, name, model/effort, the permission-bypass toggle, repeatable
-// port-mapping / extra-dir-mount rows, and repeatable SSH -L/-R forwards.
+// port-mapping / extra-dir-mount rows, and a button to configure SSH -L/-R
+// forwards in a separate dialog (SshForwardsDialog).
 //
 // The conversation picker lists every transcript Claude already has for
 // the chosen directory (see ConversationCatalog), so a box can adopt a
@@ -75,7 +76,6 @@ public:
 private slots:
     void browseForDir();
     void browseForMountDir();
-    void browseForIdentity();
     void reloadForDirectory();
     void onConversationChanged(int index);
     void updateWorkspaceHint();
@@ -83,12 +83,12 @@ private slots:
     void removeSelectedPort();
     void addDirMount();
     void removeSelectedDirMount();
-    void addForward();
-    void removeSelectedForward();
+    void configureSshForwards();
     void tryAccept();
 
 private:
     void rememberWorkspaceChoice();
+    void updateSshSummary();
 
     QLineEdit *m_dirEdit = nullptr;
     QPushButton *m_dirBrowseButton = nullptr;
@@ -110,14 +110,15 @@ private:
     QLineEdit *m_hostDirEdit = nullptr;
     QLineEdit *m_containerDirEdit = nullptr;
 
-    QLineEdit *m_sshHostEdit = nullptr;
-    QLineEdit *m_sshIdentityEdit = nullptr;
-    QListWidget *m_forwardList = nullptr;
-    QComboBox *m_forwardDirCombo = nullptr;
-    QLineEdit *m_forwardBindEdit = nullptr;
-    QLineEdit *m_forwardBindPortEdit = nullptr;
-    QLineEdit *m_forwardDestHostEdit = nullptr;
-    QLineEdit *m_forwardDestPortEdit = nullptr;
+    // SSH forwards live in their own dialog (SshForwardsDialog) now, not
+    // inline -- that section alone was enough content to push this
+    // dialog's minimum height past what fits on a real screen. Only the
+    // resulting config is kept here, plus a button + one-line summary.
+    QLabel *m_sshSummaryLabel = nullptr;
+    QPushButton *m_sshConfigButton = nullptr;
+    QString m_sshHost;
+    QString m_sshIdentity;
+    QStringList m_sshForwards;
 
     // Directory the conversation list was built from, so
     // re-entering the same path doesn't rescan (and doesn't reset a
