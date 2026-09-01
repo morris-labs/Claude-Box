@@ -50,6 +50,7 @@ private slots:
 
     void onNew();
     void onEdit();
+    void onSetupWizard();
     void onOpen();
     void onClose();
     void onRemove();
@@ -92,6 +93,7 @@ private:
     QLabel *m_statusRefreshed = nullptr;
 
     QAction *m_newAction = nullptr;
+    QAction *m_setupAction = nullptr;
     QAction *m_editAction = nullptr;
     QAction *m_openAction = nullptr;
     QAction *m_closeAction = nullptr;
