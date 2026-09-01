@@ -70,6 +70,10 @@ add_executable(claude-box-gui
     src/NewBoxDialog.h
     src/SshForwardsDialog.cpp
     src/SshForwardsDialog.h
+    src/SetupWizard.cpp
+    src/SetupWizard.h
+    src/CommandTerminalDialog.cpp
+    src/CommandTerminalDialog.h
     src/BoxDetailsPanel.cpp
     src/BoxDetailsPanel.h
     src/Theme.cpp
@@ -169,6 +173,12 @@ endif() # UNIX AND NOT APPLE
 target_compile_definitions(claude-box-gui
     PRIVATE
         CLAUDE_BOX_VERSION="${PROJECT_VERSION}"
+        # Lets SetupWizard's "Build Image" button find the Dockerfile
+        # without guessing -- meaningful only when this binary is still
+        # running from the checkout it was built in (the only way it's
+        # distributed today); SetupWizard checks the Dockerfile is
+        # actually there before trusting this rather than assuming so.
+        CLAUDE_BOX_REPO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
 
 target_link_libraries(claude-box-gui
