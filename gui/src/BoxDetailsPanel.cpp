@@ -1,6 +1,7 @@
 #include "BoxDetailsPanel.h"
 
 #include "BoxRecord.h"
+#include "CollapsibleSection.h"
 #include "Icons.h"
 #include "Theme.h"
 
@@ -110,6 +111,19 @@ BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
 
     contentLayout->addWidget(m_fields);
 
+    // Collapsed by default, same as the rest of this app's collapsible
+    // sections -- cpu/mem is ambient info refreshed every poll, not
+    // usually what this panel gets opened to check.
+    m_statsSection = new CollapsibleSection("Resource Usage", this);
+    auto *statsLayout = new QVBoxLayout();
+    statsLayout->setContentsMargins(0, 2, 0, 0);
+    m_statsLabel = new QLabel(this);
+    m_statsLabel->setWordWrap(true);
+    m_statsLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    statsLayout->addWidget(m_statsLabel);
+    m_statsSection->setContentLayout(statsLayout);
+    contentLayout->addWidget(m_statsSection);
+
     contentLayout->addStretch(1);
 
     m_placeholder = new QLabel(QStringLiteral("Select a box to see its details."), m_stack);
@@ -160,6 +174,9 @@ void BoxDetailsPanel::setBox(const BoxInfo *info)
     m_conversation->setText(info->name);
     m_directory->setText(info->targetDir.isEmpty() ? kNone : info->targetDir);
     m_detail->setText(info->detail.isEmpty() ? kNone : info->detail);
+    // Separate from `detail` on purpose (see BoxInfo::stats) -- this is
+    // the field the "move cpu/etc to the sidebar" request was about.
+    m_statsLabel->setText(info->stats.isEmpty() ? kNone : info->stats);
 
     // Record-backed fields. A box running outside this app has no record,
     // so these stay blank rather than showing another box's settings.
@@ -191,13 +208,13 @@ void BoxDetailsPanel::setBox(const BoxInfo *info)
     m_ports->setText(rec.ports.isEmpty() ? kNone : rec.ports.join("\n"));
     m_mounts->setText(rec.dirs.isEmpty() ? kNone : rec.dirs.join("\n"));
 
-    if (rec.sshForwards.isEmpty() || rec.sshHost.trimmed().isEmpty()) {
-        m_ssh->setText(kNone);
-    } else {
-        QStringList lines;
-        lines << QStringLiteral("via %1").arg(rec.sshHost);
-        for (const QString &fwd : rec.sshForwards)
-            lines << forwardLabel(fwd);
-        m_ssh->setText(lines.join("\n"));
+    QStringList sshLines;
+    for (const SshRemote &remote : rec.sshRemotes) {
+        if (remote.forwards.isEmpty() || remote.host.trimmed().isEmpty())
+            continue;
+        sshLines << QStringLiteral("via %1").arg(remote.host);
+        for (const QString &fwd : remote.forwards)
+            sshLines << QStringLiteral("  ") + forwardLabel(fwd);
     }
+    m_ssh->setText(sshLines.isEmpty() ? kNone : sshLines.join("\n"));
 }

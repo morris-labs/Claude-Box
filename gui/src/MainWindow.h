@@ -138,7 +138,8 @@ private:
     // it's a no-op for any box whose tunnel is already up with an
     // unchanged configuration.
     void syncTunnels();
-    void stopTunnel(const QString &name);
+    void stopTunnel(const QString &key);
+    void stopTunnelsForBox(const QString &boxName);
 
     void saveSettings();
     void restoreSettings();

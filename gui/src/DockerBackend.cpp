@@ -228,11 +228,8 @@ bool DockerBackend::listViaApi(QList<BoxInfo> &result, QSet<QString> &seen, bool
             info.conversationName = info.name;
         }
 
-        if (sampleStats) {
-            const QString stats = statsDetail(container.value("Id").toString());
-            if (!stats.isEmpty())
-                info.detail += QStringLiteral(" · ") + stats;
-        }
+        if (sampleStats)
+            info.stats = statsDetail(container.value("Id").toString());
 
         result.append(info);
         seen.insert(info.name);
@@ -340,9 +337,7 @@ void DockerBackend::listViaCli(QList<BoxInfo> &result, QSet<QString> &seen, bool
                 info.conversationName = info.name;
             }
 
-            const QString stats = m_statsCache.value(info.name);
-            if (!stats.isEmpty())
-                info.detail += QStringLiteral(" · ") + stats;
+            info.stats = m_statsCache.value(info.name);
 
             result.append(info);
             seen.insert(info.name);
