@@ -191,7 +191,7 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle("New Box");
-    resize(560, 620);
+    resize(640, 640);
 
     // Content lives in a scroll area rather than directly in the dialog:
     // the SSH-forwards section pushed this well past a size that fits on
@@ -201,6 +201,14 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     // every time a field gets added -- it already was one. Scrolling
     // keeps the dialog's own footprint exactly what resize() asked for,
     // no matter how much ends up inside it.
+    //
+    // Horizontal scrolling is deliberately disabled, not just left
+    // unused: setWidgetResizable(true) alone doesn't stop a wrapping
+    // QLabel from reporting a wide sizeHint before it's actually been
+    // laid out at the viewport's width, and a QScrollArea left free to
+    // grow horizontally to satisfy that shows a sideways scrollbar on
+    // first open instead of just wrapping the text. Turning it off forces
+    // the content to actually fit (and wrap) at the viewport's width.
     auto *outerLayout = new QVBoxLayout(this);
     outerLayout->setContentsMargins(0, 0, 0, 0);
     outerLayout->setSpacing(0);
@@ -208,6 +216,7 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     auto *scrollArea = new QScrollArea(this);
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     outerLayout->addWidget(scrollArea, 1);
 
     auto *scrollContent = new QWidget(scrollArea);
