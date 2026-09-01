@@ -28,6 +28,13 @@ public:
     // the terminal. Returns false if the PTY/process spawn itself failed.
     bool attachToContainer(const QString &containerName);
 
+    // Same idea, for any other interactive/long-running command worth
+    // watching live rather than running silently in the background -- an
+    // `ssh`/`ssh-copy-id` login, a `docker build`. See CommandTerminalDialog,
+    // the one thing outside box terminals that uses this.
+    bool attachToCommand(const QString &program, const QStringList &args,
+                        const QString &workingDir = QString());
+
     bool isRunning() const;
 
     // True once the attached process has exited. The widget keeps showing
