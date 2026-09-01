@@ -28,6 +28,18 @@ struct BoxRecord {
     QStringList ports;        // "HOST:CONTAINER", repeatable
     QStringList dirs;         // "HOSTPATH:CONTAINERPATH", repeatable
 
+    // SSH tunnel: a background `ssh -N` runs on the *host* (not inside the
+    // box -- see SshTunnelSession) implementing every forward below over
+    // one connection to sshHost. Empty sshForwards means no tunnel at all,
+    // regardless of what sshHost/sshIdentity hold.
+    QString sshHost;          // "user@host" or "user@host:port"
+    QString sshIdentity;      // optional `-i` path; empty = agent/default key
+    // "L:<bindAddr>:<bindPort>:<destHost>:<destPort>" or "R:...", repeatable.
+    // bindAddr may be empty (ssh's own default bind for that direction).
+    // Mirrors ssh's own -L/-R argument, just with the direction letter
+    // glued on front and always all five fields present.
+    QStringList sshForwards;
+
     // There is deliberately no remote-control field: --remote-control is
     // now passed unconditionally (see DockerBackend::baseClaudeArgs), so
     // the old `rc=` key is read from nothing and written by nothing. It's
