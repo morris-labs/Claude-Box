@@ -81,12 +81,13 @@ SetupWizard::SetupWizard(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle("claude-box Setup");
-    resize(620, 560);
+    resize(640, 560);
 
     // Same lesson as NewBoxDialog: content in a scroll area, Close/Done
     // pinned outside it, so this dialog's footprint is always exactly
     // what resize() asks for regardless of how many checks it grows to
-    // hold later.
+    // hold later. Horizontal scrolling off for the same reason as there
+    // too -- see NewBoxDialog's constructor comment.
     auto *outerLayout = new QVBoxLayout(this);
     outerLayout->setContentsMargins(0, 0, 0, 0);
     outerLayout->setSpacing(0);
@@ -94,6 +95,7 @@ SetupWizard::SetupWizard(QWidget *parent)
     auto *scrollArea = new QScrollArea(this);
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     outerLayout->addWidget(scrollArea, 1);
 
     auto *scrollContent = new QWidget(scrollArea);

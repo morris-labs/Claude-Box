@@ -89,7 +89,7 @@ SshForwardsDialog::SshForwardsDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle("SSH Forwards");
-    resize(520, 420);
+    resize(500, 460);
 
     auto *mainLayout = new QVBoxLayout(this);
 
@@ -149,12 +149,17 @@ SshForwardsDialog::SshForwardsDialog(QWidget *parent)
     m_destPortEdit = new QLineEdit(this);
     m_destPortEdit->setValidator(new QIntValidator(1, 65535, this));
     m_destPortEdit->setPlaceholderText("dest port");
+    // Two rows, not six columns in one -- six fields side by side is what
+    // was leaving this dialog too narrow for its own content on first
+    // open (a fixed width wide enough for that row comfortably wasn't
+    // wide enough for the rest of the dialog, or looked cramped when it
+    // was).
     forwardRow->addWidget(m_dirCombo, 0, 0);
     forwardRow->addWidget(m_bindEdit, 0, 1);
     forwardRow->addWidget(m_bindPortEdit, 0, 2);
-    forwardRow->addWidget(new QLabel("→", this), 0, 3);
-    forwardRow->addWidget(m_destHostEdit, 0, 4);
-    forwardRow->addWidget(m_destPortEdit, 0, 5);
+    forwardRow->addWidget(new QLabel("→", this), 1, 0, Qt::AlignCenter);
+    forwardRow->addWidget(m_destHostEdit, 1, 1);
+    forwardRow->addWidget(m_destPortEdit, 1, 2);
     mainLayout->addLayout(forwardRow);
 
     auto *forwardButtons = new QHBoxLayout();
