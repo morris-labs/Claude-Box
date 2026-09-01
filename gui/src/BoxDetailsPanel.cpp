@@ -6,8 +6,10 @@
 #include "Theme.h"
 
 #include <QFontDatabase>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QScrollArea>
 #include <QSizePolicy>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -62,7 +64,7 @@ BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
     m_stack = new QStackedWidget(this);
     outer->addWidget(m_stack);
 
-    auto *content = new QWidget(m_stack);
+    auto *content = new QWidget();
     auto *contentLayout = new QVBoxLayout(content);
     contentLayout->setContentsMargins(14, 12, 14, 12);
     contentLayout->setSpacing(10);
@@ -131,8 +133,19 @@ BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
     m_placeholder->setWordWrap(true);
     m_placeholder->setStyleSheet(QString("color: %1;").arg(Theme::dimText().name()));
 
+    // Scrollable rather than a fixed-height page: a box with several SSH
+    // remotes each carrying a handful of forwards (see BoxRecord's own
+    // sshRemotes) can easily run past this panel's height, and the point
+    // of a side panel is to never bunch or clip a value rather than to
+    // fit everything on one screen unscrolled.
+    auto *scrollArea = new QScrollArea(m_stack);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scrollArea->setWidget(content);
+
     m_stack->addWidget(m_placeholder); // index 0
-    m_stack->addWidget(content);       // index 1
+    m_stack->addWidget(scrollArea);    // index 1
 
     setBox(nullptr);
 }
