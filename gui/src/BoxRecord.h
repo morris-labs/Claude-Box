@@ -4,6 +4,23 @@
 #include <QStringList>
 #include <QList>
 
+// One SSH target a box tunnels through: a background `ssh -N` runs on
+// the *host* (not inside the box -- see SshTunnelSession) implementing
+// every forward below over one connection to `host`. A box can have any
+// number of these -- e.g. one tunnel to a Windows machine and a separate
+// one to a Mac, each with its own identity and forward set, running
+// concurrently. Empty `forwards` means this remote contributes no live
+// tunnel, regardless of what host/identity hold.
+struct SshRemote {
+    QString host;          // "user@host" or "user@host:port"
+    QString identity;      // optional `-i` path; empty = agent/default key
+    // "L:<bindAddr>:<bindPort>:<destHost>:<destPort>" or "R:...", repeatable.
+    // bindAddr may be empty (ssh's own default bind for that direction).
+    // Mirrors ssh's own -L/-R argument, just with the direction letter
+    // glued on front and always all five fields present.
+    QStringList forwards;
+};
+
 // Persistent record for one claude-box container, stored as a simple
 // key=value file under ~/.claude-box/known/<name>. This is the only
 // file-based state the app keeps -- docker itself is the live "is it
@@ -28,17 +45,12 @@ struct BoxRecord {
     QStringList ports;        // "HOST:CONTAINER", repeatable
     QStringList dirs;         // "HOSTPATH:CONTAINERPATH", repeatable
 
-    // SSH tunnel: a background `ssh -N` runs on the *host* (not inside the
-    // box -- see SshTunnelSession) implementing every forward below over
-    // one connection to sshHost. Empty sshForwards means no tunnel at all,
-    // regardless of what sshHost/sshIdentity hold.
-    QString sshHost;          // "user@host" or "user@host:port"
-    QString sshIdentity;      // optional `-i` path; empty = agent/default key
-    // "L:<bindAddr>:<bindPort>:<destHost>:<destPort>" or "R:...", repeatable.
-    // bindAddr may be empty (ssh's own default bind for that direction).
-    // Mirrors ssh's own -L/-R argument, just with the direction letter
-    // glued on front and always all five fields present.
-    QStringList sshForwards;
+    // Any number of SSH tunnels -- see SshRemote above. Persisted as
+    // indexed ssh_remote=/ssh_identity=/ssh_forward= lines (see save()/
+    // load()); a record written before multi-remote support existed had
+    // one flat ssh_host=/ssh_identity=/ssh_forward= (no index) instead,
+    // which load() reads as a single remote at index 0.
+    QList<SshRemote> sshRemotes;
 
     // There is deliberately no remote-control field: --remote-control is
     // now passed unconditionally (see DockerBackend::baseClaudeArgs), so

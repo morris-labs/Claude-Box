@@ -50,6 +50,7 @@ const QString kWindowStateKey = QStringLiteral("ui/windowState");
 const QString kOuterSplitKey  = QStringLiteral("ui/outerSplitter");
 const QString kTopSplitKey    = QStringLiteral("ui/topSplitter");
 const QString kDetailsKey     = QStringLiteral("ui/detailsVisible");
+const QString kTableHeaderKey = QStringLiteral("ui/tableHeader");
 }
 
 MainWindow::MainWindow(QWidget *parent)
@@ -171,18 +172,24 @@ void MainWindow::buildUi()
     m_table->setWordWrap(false);
     m_table->setTextElideMode(Qt::ElideMiddle);
 
-    // Sizing by content for the short, meaningful columns and giving the
-    // slack to Directory. Letting the last column stretch instead left
-    // container names -- the thing you actually identify a box by --
-    // elided down to "claud...e-box" while Details had room to spare.
+    // Every column interactively resizable -- ResizeToContents/Stretch
+    // both lock a column against manual dragging, which is exactly what
+    // stopped Status/Name/Details from being resized before. Starting
+    // widths mirror what those modes used to compute, so this is a
+    // one-time-editable version of the old layout, not a fresh guess: the
+    // narrow columns get resizeColumnToContents()'s answer and Directory
+    // (previously the one Stretch column, and still the field most likely
+    // to need extra room) starts wide. restoreSettings() overwrites all of
+    // this from QSettings on every launch after the first.
     QHeaderView *header = m_table->horizontalHeader();
     header->setStretchLastSection(false);
-    header->setSectionResizeMode(0, QHeaderView::ResizeToContents); // Status
-    header->setSectionResizeMode(1, QHeaderView::ResizeToContents); // Name
-    header->setSectionResizeMode(2, QHeaderView::Interactive);      // Conversation
-    header->setSectionResizeMode(3, QHeaderView::Stretch);          // Directory
-    header->setSectionResizeMode(4, QHeaderView::ResizeToContents); // Details
-    header->resizeSection(2, 190);
+    for (int col = 0; col < m_model->columnCount(); ++col)
+        header->setSectionResizeMode(col, QHeaderView::Interactive);
+    m_table->resizeColumnToContents(0); // Status
+    m_table->resizeColumnToContents(1); // Name
+    header->resizeSection(2, 190);      // Conversation
+    header->resizeSection(3, 320);      // Directory
+    m_table->resizeColumnToContents(4); // Details
 
     // Shown only when there are no boxes at all. Parented to the viewport
     // with a layout so it stays centered without any resize plumbing.
@@ -596,13 +603,21 @@ void MainWindow::closeTabForBox(const QString &name)
 
 // --- SSH tunnels ---------------------------------------------------------
 
-// A signature of everything that would change what `ssh` is actually
-// asked to do, so a session already running with an unchanged config is
-// left alone rather than being torn down and restarted every poll tick.
+// A box can tunnel to any number of remotes now (a Windows machine and a
+// Mac, say, concurrently), each getting its own ssh -N process -- so
+// m_tunnels/m_tunnelSignatures are keyed by "<boxName>#<remoteIndex>",
+// not just box name. tunnelSignature() covers everything that would
+// change what `ssh` is actually asked to do, so a session already
+// running with an unchanged config is left alone rather than being torn
+// down and restarted every poll tick.
 namespace {
-QString tunnelSignature(const BoxRecord &rec)
+QString tunnelKey(const QString &boxName, int remoteIndex)
 {
-    return rec.sshHost + '\n' + rec.sshIdentity + '\n' + rec.sshForwards.join('\n');
+    return boxName + QStringLiteral("#") + QString::number(remoteIndex);
+}
+QString tunnelSignature(const SshRemote &remote)
+{
+    return remote.host + '\n' + remote.identity + '\n' + remote.forwards.join('\n');
 }
 }
 
@@ -616,45 +631,67 @@ void MainWindow::syncTunnels()
             continue;
 
         const BoxRecord rec = BoxRecord::load(row->name);
-        if (!rec.isValid() || rec.sshForwards.isEmpty() || rec.sshHost.trimmed().isEmpty())
+        if (!rec.isValid())
             continue;
 
-        stillWanted.insert(row->name);
-        const QString sig = tunnelSignature(rec);
+        for (int r = 0; r < rec.sshRemotes.size(); ++r) {
+            const SshRemote &remote = rec.sshRemotes.at(r);
+            if (remote.forwards.isEmpty() || remote.host.trimmed().isEmpty())
+                continue;
 
-        auto existing = m_tunnels.find(row->name);
-        if (existing != m_tunnels.end() && existing.value()->isRunning()
-            && m_tunnelSignatures.value(row->name) == sig)
-            continue; // already up with this exact configuration
+            const QString key = tunnelKey(row->name, r);
+            stillWanted.insert(key);
+            const QString sig = tunnelSignature(remote);
 
-        stopTunnel(row->name); // torn down first if it exists (dead, or config changed)
+            auto existing = m_tunnels.find(key);
+            if (existing != m_tunnels.end() && existing.value()->isRunning()
+                && m_tunnelSignatures.value(key) == sig)
+                continue; // already up with this exact configuration
 
-        auto *session = new SshTunnelSession(this);
-        connect(session, &SshTunnelSession::log, this, [this, name = row->name](const QString &line) {
-            statusBar()->showMessage(name + QStringLiteral(" (ssh tunnel): ") + line, 8000);
-        });
-        session->start(rec);
-        m_tunnels.insert(row->name, session);
-        m_tunnelSignatures.insert(row->name, sig);
+            stopTunnel(key); // torn down first if it exists (dead, or config changed)
+
+            auto *session = new SshTunnelSession(this);
+            const QString boxName = row->name;
+            connect(session, &SshTunnelSession::log, this, [this, boxName, r](const QString &line) {
+                statusBar()->showMessage(
+                    QStringLiteral("%1 [remote %2] (ssh tunnel): %3").arg(boxName).arg(r).arg(line), 8000);
+            });
+            session->start(remote);
+            m_tunnels.insert(key, session);
+            m_tunnelSignatures.insert(key, sig);
+        }
     }
 
     // Anything no longer Running, or no longer configured for a tunnel.
     const QStringList toDrop = m_tunnels.keys();
-    for (const QString &name : toDrop) {
-        if (!stillWanted.contains(name))
-            stopTunnel(name);
+    for (const QString &key : toDrop) {
+        if (!stillWanted.contains(key))
+            stopTunnel(key);
     }
 }
 
-void MainWindow::stopTunnel(const QString &name)
+void MainWindow::stopTunnel(const QString &key)
 {
-    auto it = m_tunnels.find(name);
+    auto it = m_tunnels.find(key);
     if (it == m_tunnels.end())
         return;
     it.value()->stop();
     it.value()->deleteLater();
     m_tunnels.erase(it);
-    m_tunnelSignatures.remove(name);
+    m_tunnelSignatures.remove(key);
+}
+
+// Stops every remote's tunnel for one box (there can be several -- see
+// syncTunnels()) -- used where a box itself is going away and there's no
+// reason to wait for the next poll to notice.
+void MainWindow::stopTunnelsForBox(const QString &boxName)
+{
+    const QString prefix = boxName + QStringLiteral("#");
+    const QStringList keys = m_tunnels.keys();
+    for (const QString &key : keys) {
+        if (key.startsWith(prefix))
+            stopTunnel(key);
+    }
 }
 
 void MainWindow::onCloseCurrentTab()
@@ -755,9 +792,7 @@ void MainWindow::onNew()
     rec.effort = dlg.effort();
     rec.ports = dlg.ports();
     rec.dirs = dlg.dirs();
-    rec.sshHost = dlg.sshTunnelHost();
-    rec.sshIdentity = dlg.sshIdentityFile();
-    rec.sshForwards = dlg.sshForwards();
+    rec.sshRemotes = dlg.sshRemotes();
 
     if (!rec.sessionUuid.isEmpty() && !confirmConversationAdoption(rec.sessionUuid))
         return;
@@ -814,9 +849,7 @@ void MainWindow::onEdit()
     rec.effort = dlg.effort();
     rec.ports = dlg.ports();
     rec.dirs = dlg.dirs();
-    rec.sshHost = dlg.sshTunnelHost();
-    rec.sshIdentity = dlg.sshIdentityFile();
-    rec.sshForwards = dlg.sshForwards();
+    rec.sshRemotes = dlg.sshRemotes();
 
     if (!rec.save()) {
         QMessageBox::warning(this, QStringLiteral("Edit Box"),
@@ -890,7 +923,7 @@ void MainWindow::onClose()
     }
 
     closeTabForBox(name);
-    stopTunnel(name); // don't wait for the next poll to notice it's no longer Running
+    stopTunnelsForBox(name); // don't wait for the next poll to notice it's no longer Running
     refreshBoxes();
 }
 
@@ -1012,6 +1045,7 @@ void MainWindow::saveSettings()
     s.setValue(kOuterSplitKey, m_outerSplitter->saveState());
     s.setValue(kTopSplitKey, m_topSplitter->saveState());
     s.setValue(kDetailsKey, m_detailsAction->isChecked());
+    s.setValue(kTableHeaderKey, m_table->horizontalHeader()->saveState());
 }
 
 void MainWindow::restoreSettings()
@@ -1025,6 +1059,12 @@ void MainWindow::restoreSettings()
         m_outerSplitter->restoreState(s.value(kOuterSplitKey).toByteArray());
     if (s.contains(kTopSplitKey))
         m_topSplitter->restoreState(s.value(kTopSplitKey).toByteArray());
+    // Column widths set up in buildUi() are just the first-run default --
+    // restoreState() (when there's something saved) overrides them with
+    // whatever the user last dragged them to, resize mode included, so
+    // this has to come after that setup, not before it.
+    if (s.contains(kTableHeaderKey))
+        m_table->horizontalHeader()->restoreState(s.value(kTableHeaderKey).toByteArray());
 
     const bool detailsVisible = s.value(kDetailsKey, true).toBool();
     m_detailsAction->setChecked(detailsVisible);
@@ -1047,8 +1087,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
     // tunnel is an external process, and terminating it here (not just
     // relying on the eventual destructor) is what keeps one from
     // outliving the window it belongs to.
-    for (const QString &name : m_tunnels.keys())
-        stopTunnel(name);
+    for (const QString &key : m_tunnels.keys())
+        stopTunnel(key);
 
     QMainWindow::closeEvent(event);
 }

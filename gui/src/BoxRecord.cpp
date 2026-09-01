@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMap>
 #include <QTextStream>
 
 QString BoxRecord::knownDir()
@@ -33,6 +34,14 @@ BoxRecord BoxRecord::load(const QString &name)
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
         return rec; // invalid: name left empty
 
+    // Keyed by remote index while scanning (lines for one remote needn't
+    // be contiguous), turned into rec.sshRemotes in index order once the
+    // whole file's been read -- QMap already iterates that way. A
+    // pre-multi-remote record has no index at all (ssh_host=/ssh_forward=
+    // with no "N|" prefix); that's read as remote 0, same as if it had
+    // been written "0|..." all along.
+    QMap<int, SshRemote> remotesByIndex;
+
     QTextStream in(&file);
     while (!in.atEnd()) {
         const QString line = in.readLine();
@@ -60,14 +69,30 @@ BoxRecord BoxRecord::load(const QString &name)
             rec.ports.append(value);
         else if (key == "dir")
             rec.dirs.append(value);
-        else if (key == "ssh_host")
-            rec.sshHost = value;
-        else if (key == "ssh_identity")
-            rec.sshIdentity = value;
-        else if (key == "ssh_forward")
-            rec.sshForwards.append(value);
+        else if (key == "ssh_remote") {
+            // "N|host" -- no legacy form of this key exists (a
+            // pre-multi-remote record never had ssh_remote= at all).
+            const int bar = value.indexOf('|');
+            if (bar >= 0)
+                remotesByIndex[value.left(bar).toInt()].host = value.mid(bar + 1);
+        } else if (key == "ssh_identity") {
+            const int bar = value.indexOf('|');
+            if (bar >= 0)
+                remotesByIndex[value.left(bar).toInt()].identity = value.mid(bar + 1);
+            else
+                remotesByIndex[0].identity = value; // legacy: flat ssh_identity=, always remote 0
+        } else if (key == "ssh_forward") {
+            const int bar = value.indexOf('|');
+            if (bar >= 0)
+                remotesByIndex[value.left(bar).toInt()].forwards.append(value.mid(bar + 1));
+            else
+                remotesByIndex[0].forwards.append(value); // legacy: flat ssh_forward=, always remote 0
+        } else if (key == "ssh_host") {
+            remotesByIndex[0].host = value; // legacy: flat ssh_host=, always remote 0
+        }
     }
 
+    rec.sshRemotes = remotesByIndex.values(); // QMap::values() is already key-ordered
     rec.name = name; // only set once the file was actually readable
     return rec;
 }
@@ -98,12 +123,14 @@ bool BoxRecord::save() const
         out << "port=" << p << '\n';
     for (const QString &d : dirs)
         out << "dir=" << d << '\n';
-    if (!sshHost.isEmpty())
-        out << "ssh_host=" << sshHost << '\n';
-    if (!sshIdentity.isEmpty())
-        out << "ssh_identity=" << sshIdentity << '\n';
-    for (const QString &f : sshForwards)
-        out << "ssh_forward=" << f << '\n';
+    for (int i = 0; i < sshRemotes.size(); ++i) {
+        const SshRemote &r = sshRemotes.at(i);
+        out << "ssh_remote=" << i << "|" << r.host << '\n';
+        if (!r.identity.isEmpty())
+            out << "ssh_identity=" << i << "|" << r.identity << '\n';
+        for (const QString &f : r.forwards)
+            out << "ssh_forward=" << i << "|" << f << '\n';
+    }
 
     return true;
 }
