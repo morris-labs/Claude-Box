@@ -21,9 +21,11 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QFrame>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -191,7 +193,27 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     setWindowTitle("New Box");
     resize(560, 620);
 
-    auto *mainLayout = new QVBoxLayout(this);
+    // Content lives in a scroll area rather than directly in the dialog:
+    // the SSH-forwards section pushed this well past a size that fits on
+    // a real screen, and a dialog whose *minimum* height is dictated by
+    // however much content it happens to hold (rather than by the fixed
+    // size above) is a WM/multi-monitor placement bug waiting to happen
+    // every time a field gets added -- it already was one. Scrolling
+    // keeps the dialog's own footprint exactly what resize() asked for,
+    // no matter how much ends up inside it.
+    auto *outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->setSpacing(0);
+
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    outerLayout->addWidget(scrollArea, 1);
+
+    auto *scrollContent = new QWidget(scrollArea);
+    scrollArea->setWidget(scrollContent);
+
+    auto *mainLayout = new QVBoxLayout(scrollContent);
 
     auto *form = new QFormLayout();
 
@@ -380,7 +402,12 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     m_buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     connect(m_buttons, &QDialogButtonBox::accepted, this, &NewBoxDialog::tryAccept);
     connect(m_buttons, &QDialogButtonBox::rejected, this, &NewBoxDialog::reject);
-    mainLayout->addWidget(m_buttons);
+    // Outside the scroll area, not appended to mainLayout -- Ok/Cancel
+    // should always be visible, not something you have to scroll down to.
+    auto *buttonRow = new QHBoxLayout();
+    buttonRow->setContentsMargins(9, 6, 9, 9);
+    buttonRow->addWidget(m_buttons);
+    outerLayout->addLayout(buttonRow);
 
     reloadForDirectory();
 }
