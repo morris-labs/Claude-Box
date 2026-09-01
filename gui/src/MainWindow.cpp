@@ -5,6 +5,7 @@
 #include "Icons.h"
 #include "ConversationCatalog.h"
 #include "NewBoxDialog.h"
+#include "SshTunnelSession.h"
 #include "TerminalWidget.h"
 #include "Theme.h"
 
@@ -24,6 +25,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QSet>
 #include <QSettings>
 #include <QShortcut>
 #include <QSortFilterProxyModel>
@@ -84,6 +86,11 @@ void MainWindow::buildActions()
     m_newAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+N")));
     m_newAction->setStatusTip(QStringLiteral("Create a new box and start a conversation in it"));
     connect(m_newAction, &QAction::triggered, this, &MainWindow::onNew);
+
+    m_editAction = new QAction(Icons::editBox(), QStringLiteral("&Edit Box…"), this);
+    m_editAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+E")));
+    m_editAction->setStatusTip(QStringLiteral("Change ports, mounts, model/effort, or SSH forwards"));
+    connect(m_editAction, &QAction::triggered, this, &MainWindow::onEdit);
 
     m_openAction = new QAction(Icons::open(), QStringLiteral("&Open"), this);
     m_openAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")));
@@ -262,6 +269,7 @@ void MainWindow::buildMenus()
 
     QMenu *boxMenu = menuBar()->addMenu(QStringLiteral("&Box"));
     boxMenu->addAction(m_openAction);
+    boxMenu->addAction(m_editAction);
     boxMenu->addAction(m_closeAction);
     boxMenu->addSeparator();
     boxMenu->addAction(m_removeAction);
@@ -300,6 +308,7 @@ void MainWindow::buildToolBar()
     toolbar->addAction(m_newAction);
     toolbar->addSeparator();
     toolbar->addAction(m_openAction);
+    toolbar->addAction(m_editAction);
     toolbar->addAction(m_closeAction);
     toolbar->addSeparator();
     toolbar->addAction(m_removeAction);
@@ -379,6 +388,7 @@ void MainWindow::onBoxesLoaded()
     const QString selected = currentSelectedName();
     m_model->setBoxes(m_refreshWatcher->result());
     reselectByName(selected);
+    syncTunnels();
 
     if (wasFirstLoad)
         QTimer::singleShot(0, this, &MainWindow::refreshBoxes);
@@ -422,6 +432,10 @@ void MainWindow::updateActionStates()
 {
     const BoxInfo *info = selectedBoxInfo();
     m_openAction->setEnabled(info && info->status == BoxInfo::Status::Known);
+    // A box started outside this app has no record to edit -- there's
+    // nothing here to change it with, so the action stays disabled rather
+    // than opening a dialog just to say so.
+    m_editAction->setEnabled(info && BoxRecord::load(info->name).isValid());
     m_closeAction->setEnabled(info && info->status == BoxInfo::Status::Running);
     m_removeAction->setEnabled(info && info->status == BoxInfo::Status::Stopped);
     m_purgeAction->setEnabled(info && !info->targetDir.isEmpty());
@@ -443,6 +457,7 @@ void MainWindow::showTableContextMenu(const QPoint &pos)
 {
     QMenu menu(this);
     menu.addAction(m_openAction);
+    menu.addAction(m_editAction);
     menu.addAction(m_closeAction);
     menu.addSeparator();
     menu.addAction(m_removeAction);
@@ -565,6 +580,69 @@ void MainWindow::closeTabForBox(const QString &name)
     updateTabPlaceholder();
 }
 
+// --- SSH tunnels ---------------------------------------------------------
+
+// A signature of everything that would change what `ssh` is actually
+// asked to do, so a session already running with an unchanged config is
+// left alone rather than being torn down and restarted every poll tick.
+namespace {
+QString tunnelSignature(const BoxRecord &rec)
+{
+    return rec.sshHost + '\n' + rec.sshIdentity + '\n' + rec.sshForwards.join('\n');
+}
+}
+
+void MainWindow::syncTunnels()
+{
+    QSet<QString> stillWanted;
+
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        const BoxInfo *row = m_model->boxAt(i);
+        if (!row || row->status != BoxInfo::Status::Running)
+            continue;
+
+        const BoxRecord rec = BoxRecord::load(row->name);
+        if (!rec.isValid() || rec.sshForwards.isEmpty() || rec.sshHost.trimmed().isEmpty())
+            continue;
+
+        stillWanted.insert(row->name);
+        const QString sig = tunnelSignature(rec);
+
+        auto existing = m_tunnels.find(row->name);
+        if (existing != m_tunnels.end() && existing.value()->isRunning()
+            && m_tunnelSignatures.value(row->name) == sig)
+            continue; // already up with this exact configuration
+
+        stopTunnel(row->name); // torn down first if it exists (dead, or config changed)
+
+        auto *session = new SshTunnelSession(this);
+        connect(session, &SshTunnelSession::log, this, [this, name = row->name](const QString &line) {
+            statusBar()->showMessage(name + QStringLiteral(" (ssh tunnel): ") + line, 8000);
+        });
+        session->start(rec);
+        m_tunnels.insert(row->name, session);
+        m_tunnelSignatures.insert(row->name, sig);
+    }
+
+    // Anything no longer Running, or no longer configured for a tunnel.
+    const QStringList toDrop = m_tunnels.keys();
+    for (const QString &name : toDrop) {
+        if (!stillWanted.contains(name))
+            stopTunnel(name);
+    }
+}
+
+void MainWindow::stopTunnel(const QString &name)
+{
+    auto it = m_tunnels.find(name);
+    if (it == m_tunnels.end())
+        return;
+    it.value()->stop();
+    it.value()->deleteLater();
+    m_tunnels.erase(it);
+    m_tunnelSignatures.remove(name);
+}
+
 void MainWindow::onCloseCurrentTab()
 {
     const int index = m_tabs->currentIndex();
@@ -663,6 +741,9 @@ void MainWindow::onNew()
     rec.effort = dlg.effort();
     rec.ports = dlg.ports();
     rec.dirs = dlg.dirs();
+    rec.sshHost = dlg.sshTunnelHost();
+    rec.sshIdentity = dlg.sshIdentityFile();
+    rec.sshForwards = dlg.sshForwards();
 
     if (!rec.sessionUuid.isEmpty() && !confirmConversationAdoption(rec.sessionUuid))
         return;
@@ -676,6 +757,80 @@ void MainWindow::onNew()
 
     refreshBoxes();
     openTerminalTab(rec.name, rec.conversationName);
+}
+
+void MainWindow::onEdit()
+{
+    const BoxInfo *info = selectedBoxInfo();
+    if (!info)
+        return;
+
+    BoxRecord rec = BoxRecord::load(info->name);
+    if (!rec.isValid()) {
+        QMessageBox::warning(this, QStringLiteral("Edit Box"),
+                             QStringLiteral("No record found for ") + info->name
+                             + QStringLiteral(" -- a box started outside this app can't be edited here."));
+        return;
+    }
+
+    // Copied out before any modal dialog runs: `info` points into the
+    // model's live vector, and the 3s refresh timer can replace that
+    // vector out from under a modal event loop (same reason onRemove()
+    // copies `name` out before its confirmation box, below).
+    const bool wasRunning = info->status == BoxInfo::Status::Running;
+
+    NewBoxDialog dlg(this);
+    dlg.loadForEdit(rec);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    // Ports, mounts, model/effort and the permission flag are all baked
+    // into the container at launch -- docker has no way to change any of
+    // them on one that's already running, so a change to those needs a
+    // restart to actually take effect. SSH forwards don't: they're a
+    // separate host-side process synced from the record on every poll
+    // (see syncTunnels), independent of the container's own lifecycle.
+    const bool needsRestart = rec.ports != dlg.ports() || rec.dirs != dlg.dirs()
+        || rec.skipPermissions != dlg.skipPermissions() || rec.model != dlg.model()
+        || rec.effort != dlg.effort();
+
+    rec.conversationName = dlg.conversationName();
+    rec.skipPermissions = dlg.skipPermissions();
+    rec.model = dlg.model();
+    rec.effort = dlg.effort();
+    rec.ports = dlg.ports();
+    rec.dirs = dlg.dirs();
+    rec.sshHost = dlg.sshTunnelHost();
+    rec.sshIdentity = dlg.sshIdentityFile();
+    rec.sshForwards = dlg.sshForwards();
+
+    if (!rec.save()) {
+        QMessageBox::warning(this, QStringLiteral("Edit Box"),
+                             QStringLiteral("Failed to save changes for ") + rec.name);
+        return;
+    }
+
+    if (wasRunning && needsRestart) {
+        const QString msg = rec.name + QStringLiteral(
+            " is running, and docker can't change port mappings, mounts, model/effort, or "
+            "the permission flag on a live container -- they take effect the next time it "
+            "(re)starts.\n\nRestart it now to apply them?");
+        if (QMessageBox::question(this, QStringLiteral("Edit Box"), msg) == QMessageBox::Yes) {
+            QString error;
+            if (!m_docker.stop(rec.name, &error)) {
+                QMessageBox::warning(this, QStringLiteral("Edit Box"),
+                                     QStringLiteral("Failed to stop ") + rec.name + ":\n" + error);
+            } else {
+                closeTabForBox(rec.name);
+                if (!m_docker.reopen(rec, &error))
+                    QMessageBox::warning(this, QStringLiteral("Edit Box"),
+                                         QStringLiteral("Failed to reopen:\n") + error);
+            }
+        }
+    }
+
+    refreshBoxes();
+    syncTunnels(); // pick up an SSH-forward change immediately rather than waiting for the next poll
 }
 
 void MainWindow::openKnownBox(const QString &name)
@@ -721,6 +876,7 @@ void MainWindow::onClose()
     }
 
     closeTabForBox(name);
+    stopTunnel(name); // don't wait for the next poll to notice it's no longer Running
     refreshBoxes();
 }
 
@@ -866,6 +1022,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
         m_refreshWatcher->disconnect(this); // don't touch widgets while tearing down
         m_refreshWatcher->waitForFinished();
     }
+
+    // Explicit rather than left to ~QObject's child-deletion order: an ssh
+    // tunnel is an external process, and terminating it here (not just
+    // relying on the eventual destructor) is what keeps one from
+    // outliving the window it belongs to.
+    for (const QString &name : m_tunnels.keys())
+        stopTunnel(name);
 
     QMainWindow::closeEvent(event);
 }

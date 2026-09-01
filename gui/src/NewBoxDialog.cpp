@@ -1,5 +1,6 @@
 #include "NewBoxDialog.h"
 
+#include "BoxRecord.h"
 #include "ConversationCatalog.h"
 #include "ContainerPaths.h"
 #include "Theme.h"
@@ -169,6 +170,19 @@ QStringList listValues(const QListWidget *list)
     return result;
 }
 
+// Turns one "L:bindAddr:bindPort:destHost:destPort" (or "R:...") value
+// into the friendly label shown in the forward list -- both when a row is
+// freshly added and when loadForEdit() replays an existing record.
+QString forwardLabel(const QString &value)
+{
+    const QStringList parts = value.split(':');
+    if (parts.size() != 5)
+        return value; // shouldn't happen, but show *something* rather than crash
+    const QString dirLabel = parts.at(0) == QLatin1String("R") ? QStringLiteral("remote") : QStringLiteral("local");
+    const QString bindLabel = parts.at(1).isEmpty() ? parts.at(2) : (parts.at(1) + ":" + parts.at(2));
+    return QStringLiteral("%1  %2  →  %3:%4").arg(dirLabel, bindLabel, parts.at(3), parts.at(4));
+}
+
 } // namespace
 
 NewBoxDialog::NewBoxDialog(QWidget *parent)
@@ -183,11 +197,11 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
 
     auto *dirRow = new QHBoxLayout();
     m_dirEdit = new QLineEdit(this);
-    auto *browseButton = new QPushButton("Browse…", this);
+    m_dirBrowseButton = new QPushButton("Browse…", this);
     dirRow->addWidget(m_dirEdit);
-    dirRow->addWidget(browseButton);
+    dirRow->addWidget(m_dirBrowseButton);
     form->addRow("Target directory:", dirRow);
-    connect(browseButton, &QPushButton::clicked, this, &NewBoxDialog::browseForDir);
+    connect(m_dirBrowseButton, &QPushButton::clicked, this, &NewBoxDialog::browseForDir);
     // Typing a path by hand should populate the pickers too, not just Browse.
     connect(m_dirEdit, &QLineEdit::editingFinished, this, &NewBoxDialog::reloadForDirectory);
 
@@ -292,12 +306,138 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     connect(m_hostDirEdit, &QLineEdit::returnPressed, this, &NewBoxDialog::addDirMount);
     connect(m_containerDirEdit, &QLineEdit::returnPressed, this, &NewBoxDialog::addDirMount);
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    connect(buttons, &QDialogButtonBox::accepted, this, &NewBoxDialog::tryAccept);
-    connect(buttons, &QDialogButtonBox::rejected, this, &NewBoxDialog::reject);
-    mainLayout->addWidget(buttons);
+    // --- SSH tunnel: one `ssh -N` on the host implementing every -L/-R
+    // forward added here, over a single connection to sshHost. See
+    // SshTunnelSession for why this runs on the host rather than inside
+    // the box.
+    auto *sshGroup = new QGroupBox("SSH forwards", this);
+    auto *sshLayout = new QVBoxLayout(sshGroup);
+
+    auto *targetRow = new QGridLayout();
+    m_sshHostEdit = new QLineEdit(this);
+    m_sshHostEdit->setPlaceholderText("user@host[:port]");
+    targetRow->addWidget(new QLabel("SSH target:", this), 0, 0);
+    targetRow->addWidget(m_sshHostEdit, 0, 1, 1, 2);
+    m_sshIdentityEdit = new QLineEdit(this);
+    m_sshIdentityEdit->setPlaceholderText("default identity / ssh-agent");
+    auto *identityBrowse = new QPushButton("Browse…", this);
+    targetRow->addWidget(new QLabel("Identity file:", this), 1, 0);
+    targetRow->addWidget(m_sshIdentityEdit, 1, 1);
+    targetRow->addWidget(identityBrowse, 1, 2);
+    sshLayout->addLayout(targetRow);
+
+    auto *sshHint = new QLabel(
+        "Runs as a background ssh process on the host (not inside the box), so it can reach "
+        "docker-internal addresses -- the bridge gateway, a sibling container's own IP -- that "
+        "only mean something from here. Key-based auth only: there's no terminal for it to "
+        "prompt on, so an agent or an unlocked identity file is required.", this);
+    sshHint->setWordWrap(true);
+    sshHint->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+    sshLayout->addWidget(sshHint);
+
+    m_forwardList = new QListWidget(sshGroup);
+    m_forwardList->setMaximumHeight(80);
+    sshLayout->addWidget(m_forwardList);
+
+    auto *forwardRow = new QGridLayout();
+    m_forwardDirCombo = new QComboBox(this);
+    m_forwardDirCombo->addItem("Local (-L)", QStringLiteral("L"));
+    m_forwardDirCombo->addItem("Remote (-R)", QStringLiteral("R"));
+    m_forwardBindEdit = new QLineEdit(this);
+    m_forwardBindEdit->setPlaceholderText("bind addr (optional)");
+    m_forwardBindPortEdit = new QLineEdit(this);
+    m_forwardBindPortEdit->setValidator(new QIntValidator(1, 65535, this));
+    m_forwardBindPortEdit->setPlaceholderText("bind port");
+    m_forwardDestHostEdit = new QLineEdit(this);
+    m_forwardDestHostEdit->setPlaceholderText("dest host");
+    m_forwardDestPortEdit = new QLineEdit(this);
+    m_forwardDestPortEdit->setValidator(new QIntValidator(1, 65535, this));
+    m_forwardDestPortEdit->setPlaceholderText("dest port");
+    forwardRow->addWidget(m_forwardDirCombo, 0, 0);
+    forwardRow->addWidget(m_forwardBindEdit, 0, 1);
+    forwardRow->addWidget(m_forwardBindPortEdit, 0, 2);
+    forwardRow->addWidget(new QLabel("→", this), 0, 3);
+    forwardRow->addWidget(m_forwardDestHostEdit, 0, 4);
+    forwardRow->addWidget(m_forwardDestPortEdit, 0, 5);
+    sshLayout->addLayout(forwardRow);
+
+    auto *forwardButtons = new QHBoxLayout();
+    auto *addForwardButton = new QPushButton("Add", this);
+    auto *removeForwardButton = new QPushButton("Remove Selected", this);
+    forwardButtons->addStretch();
+    forwardButtons->addWidget(addForwardButton);
+    forwardButtons->addWidget(removeForwardButton);
+    sshLayout->addLayout(forwardButtons);
+
+    mainLayout->addWidget(sshGroup);
+
+    connect(identityBrowse, &QPushButton::clicked, this, &NewBoxDialog::browseForIdentity);
+    connect(addForwardButton, &QPushButton::clicked, this, &NewBoxDialog::addForward);
+    connect(removeForwardButton, &QPushButton::clicked, this, &NewBoxDialog::removeSelectedForward);
+    connect(m_forwardBindPortEdit, &QLineEdit::returnPressed, this, &NewBoxDialog::addForward);
+    connect(m_forwardDestPortEdit, &QLineEdit::returnPressed, this, &NewBoxDialog::addForward);
+
+    m_buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    connect(m_buttons, &QDialogButtonBox::accepted, this, &NewBoxDialog::tryAccept);
+    connect(m_buttons, &QDialogButtonBox::rejected, this, &NewBoxDialog::reject);
+    mainLayout->addWidget(m_buttons);
 
     reloadForDirectory();
+}
+
+void NewBoxDialog::loadForEdit(const BoxRecord &rec)
+{
+    m_editMode = true;
+    setWindowTitle("Edit Box: " + rec.name);
+    if (auto *ok = m_buttons->button(QDialogButtonBox::Ok))
+        ok->setText("Save Changes");
+
+    // Neither is safe to change after creation: the mount and the
+    // ~/.claude/projects encoding are keyed off the directory, and
+    // switching which conversation a box resumes is what adopting a
+    // conversation into a *new* box is for, not this.
+    m_dirEdit->setText(rec.targetDir);
+    m_dirEdit->setEnabled(false);
+    m_dirBrowseButton->setEnabled(false);
+
+    reloadForDirectory(); // populates model/effort defaults and the (disabled) conversation combo
+    m_sessionCombo->setEnabled(false);
+    m_sessionHint->setText(rec.sessionUuid.isEmpty() ? QStringLiteral("No session recorded for this box.")
+        : QStringLiteral("Resumes %1. Editing a box doesn't change which conversation it resumes.").arg(rec.sessionUuid));
+
+    m_nameEdit->setText(rec.conversationName);
+    m_autoFilledName = rec.conversationName;
+
+    selectValue(m_modelCombo, rec.model.isEmpty() ? kFallbackModel : rec.model);
+    m_modelTouched = true;
+    selectValue(m_effortCombo, rec.effort.isEmpty() ? kFallbackEffort : rec.effort);
+    m_effortTouched = true;
+
+    // The workspace folder (if any) was chosen at creation time and the
+    // agent may already be relying on it; shown for reference, not editable.
+    m_workspaceCheck->setChecked(!rec.workspaceDir.isEmpty());
+    m_workspaceCheck->setEnabled(false);
+    if (!rec.workspaceDir.isEmpty())
+        m_workspaceHint->setText(rec.workspaceDir + "/ -- set when this box was created; not editable here.");
+
+    m_skipPermsCheck->setChecked(rec.skipPermissions);
+
+    for (const QString &p : rec.ports) {
+        const int colon = p.indexOf(':');
+        const QString host = colon >= 0 ? p.left(colon) : p;
+        const QString container = colon >= 0 ? p.mid(colon + 1) : p;
+        addListValue(m_portList, QStringLiteral("host %1  →  box %2").arg(host, container), p);
+    }
+    for (const QString &d : rec.dirs) {
+        QString hostRaw, containerPath;
+        ContainerPaths::splitMountSpec(d, hostRaw, containerPath);
+        addListValue(m_dirList, QStringLiteral("%1  →  %2").arg(hostRaw, containerPath), d);
+    }
+
+    m_sshHostEdit->setText(rec.sshHost);
+    m_sshIdentityEdit->setText(rec.sshIdentity);
+    for (const QString &fwd : rec.sshForwards)
+        addListValue(m_forwardList, forwardLabel(fwd), fwd);
 }
 
 void NewBoxDialog::setInitialDir(const QString &dir)
@@ -523,6 +663,48 @@ void NewBoxDialog::removeSelectedDirMount()
         delete m_dirList->takeItem(row);
 }
 
+void NewBoxDialog::browseForIdentity()
+{
+    const QString start = m_sshIdentityEdit->text().trimmed().isEmpty()
+        ? QDir::homePath() + "/.ssh" : m_sshIdentityEdit->text().trimmed();
+    const QString file = QFileDialog::getOpenFileName(this, "Select SSH Identity File", start);
+    if (!file.isEmpty())
+        m_sshIdentityEdit->setText(file);
+}
+
+void NewBoxDialog::addForward()
+{
+    const QString bindPort = m_forwardBindPortEdit->text().trimmed();
+    const QString destHost = m_forwardDestHostEdit->text().trimmed();
+    const QString destPort = m_forwardDestPortEdit->text().trimmed();
+
+    if (bindPort.isEmpty() || destHost.isEmpty() || destPort.isEmpty()) {
+        QMessageBox::warning(this, "SSH forward",
+                             "Enter at least the bind port, destination host, and destination port.");
+        return;
+    }
+
+    const QString dir = m_forwardDirCombo->currentData().toString();
+    const QString bindAddr = m_forwardBindEdit->text().trimmed();
+    const QString value = dir + ":" + bindAddr + ":" + bindPort + ":" + destHost + ":" + destPort;
+
+    if (!listContainsValue(m_forwardList, value))
+        addListValue(m_forwardList, forwardLabel(value), value);
+
+    m_forwardBindEdit->clear();
+    m_forwardBindPortEdit->clear();
+    m_forwardDestHostEdit->clear();
+    m_forwardDestPortEdit->clear();
+    m_forwardBindPortEdit->setFocus();
+}
+
+void NewBoxDialog::removeSelectedForward()
+{
+    const int row = m_forwardList->currentRow();
+    if (row >= 0)
+        delete m_forwardList->takeItem(row);
+}
+
 void NewBoxDialog::tryAccept()
 {
     const QString dir = m_dirEdit->text().trimmed();
@@ -531,14 +713,25 @@ void NewBoxDialog::tryAccept()
         return;
     }
 
-    if (m_workspaceCheck->isChecked() && slugify(m_nameEdit->text().trimmed()).isEmpty()) {
+    // The workspace checkbox is locked (and already satisfied) in edit
+    // mode, so this only ever fires while actually choosing it.
+    if (m_workspaceCheck->isEnabled() && m_workspaceCheck->isChecked()
+        && slugify(m_nameEdit->text().trimmed()).isEmpty()) {
         QMessageBox::warning(this, "New Box",
                              "A workspace folder is named after the conversation, so give this "
                              "one a name (with at least one letter or digit) -- or untick the box "
                              "to work in the target directory itself.");
         return;
     }
-    rememberWorkspaceChoice();
+
+    if (!listValues(m_forwardList).isEmpty() && m_sshHostEdit->text().trimmed().isEmpty()) {
+        QMessageBox::warning(this, "SSH forward",
+                             "Add an SSH target (user@host) for the configured forward(s), or remove them.");
+        return;
+    }
+
+    if (!m_editMode)
+        rememberWorkspaceChoice();
     accept();
 }
 
@@ -605,4 +798,19 @@ QStringList NewBoxDialog::ports() const
 QStringList NewBoxDialog::dirs() const
 {
     return listValues(m_dirList);
+}
+
+QString NewBoxDialog::sshTunnelHost() const
+{
+    return m_sshHostEdit->text().trimmed();
+}
+
+QString NewBoxDialog::sshIdentityFile() const
+{
+    return m_sshIdentityEdit->text().trimmed();
+}
+
+QStringList NewBoxDialog::sshForwards() const
+{
+    return listValues(m_forwardList);
 }
