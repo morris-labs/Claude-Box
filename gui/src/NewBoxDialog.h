@@ -1,5 +1,7 @@
 #pragma once
 
+#include "BoxRecord.h" // for SshRemote -- held by value in m_sshRemotes below
+
 #include <QDialog>
 #include <QStringList>
 
@@ -10,12 +12,14 @@ class QCheckBox;
 class QListWidget;
 class QDialogButtonBox;
 class QPushButton;
-struct BoxRecord;
+class CollapsibleSection;
 
 // Form for creating a new box: target directory, which conversation to
-// run in it, name, model/effort, the permission-bypass toggle, repeatable
-// port-mapping / extra-dir-mount rows, and a button to configure SSH -L/-R
-// forwards in a separate dialog (SshForwardsDialog).
+// run in it, name, model/effort, the permission-bypass toggle, and three
+// collapsed-by-default sections -- Local Port Forwarding (docker -p),
+// Remote Port Forwarding (any number of SSH tunnels, each configured as a
+// whole in SshForwardsDialog), and Add folders to sandbox (extra -v
+// mounts) -- in that order.
 //
 // The conversation picker lists every transcript Claude already has for
 // the chosen directory (see ConversationCatalog), so a box can adopt a
@@ -68,10 +72,9 @@ public:
     QStringList ports() const; // "HOST:CONTAINER"
     QStringList dirs() const;  // "HOSTPATH:CONTAINERPATH"
 
-    // SSH tunnel (background `ssh -N` on the host -- see SshTunnelSession).
-    QString sshTunnelHost() const;     // "user@host[:port]"
-    QString sshIdentityFile() const;   // optional -i path
-    QStringList sshForwards() const;   // "L:bindAddr:bindPort:destHost:destPort" / "R:..."
+    // Any number of SSH tunnels (background `ssh -N` per remote on the
+    // host -- see SshTunnelSession), each configured via SshForwardsDialog.
+    QList<SshRemote> sshRemotes() const;
 
 private slots:
     void browseForDir();
@@ -83,12 +86,14 @@ private slots:
     void removeSelectedPort();
     void addDirMount();
     void removeSelectedDirMount();
-    void configureSshForwards();
+    void addRemote();
+    void editSelectedRemote();
+    void removeSelectedRemote();
     void tryAccept();
 
 private:
     void rememberWorkspaceChoice();
-    void updateSshSummary();
+    void refreshRemoteList();
 
     QLineEdit *m_dirEdit = nullptr;
     QPushButton *m_dirBrowseButton = nullptr;
@@ -102,23 +107,24 @@ private:
     QLabel *m_workspaceHint = nullptr;
     QDialogButtonBox *m_buttons = nullptr;
 
+    CollapsibleSection *m_portsSection = nullptr;
     QListWidget *m_portList = nullptr;
     QLineEdit *m_hostPortEdit = nullptr;
     QLineEdit *m_containerPortEdit = nullptr;
 
+    CollapsibleSection *m_dirsSection = nullptr;
     QListWidget *m_dirList = nullptr;
     QLineEdit *m_hostDirEdit = nullptr;
     QLineEdit *m_containerDirEdit = nullptr;
 
-    // SSH forwards live in their own dialog (SshForwardsDialog) now, not
-    // inline -- that section alone was enough content to push this
-    // dialog's minimum height past what fits on a real screen. Only the
-    // resulting config is kept here, plus a button + one-line summary.
-    QLabel *m_sshSummaryLabel = nullptr;
-    QPushButton *m_sshConfigButton = nullptr;
-    QString m_sshHost;
-    QString m_sshIdentity;
-    QStringList m_sshForwards;
+    // One entry per remote this box tunnels to (a Windows box and a Mac,
+    // say, each with its own host/identity/forward set) -- each edited as
+    // a whole via SshForwardsDialog rather than inline, which is what
+    // keeps this dialog's own footprint bounded regardless of how much
+    // any one remote's forward list grows to.
+    CollapsibleSection *m_remotesSection = nullptr;
+    QListWidget *m_remoteList = nullptr;
+    QList<SshRemote> m_sshRemotes;
 
     // Directory the conversation list was built from, so
     // re-entering the same path doesn't rescan (and doesn't reset a

@@ -6,6 +6,7 @@
 
 class QLabel;
 class QStackedWidget;
+class CollapsibleSection;
 
 // Read-only detail view for the selected dashboard row. Everything here
 // used to be either crammed into table columns or invisible entirely --
@@ -45,6 +46,12 @@ private:
     QLabel *m_mounts = nullptr;
     QLabel *m_ssh = nullptr;
     QLabel *m_detail = nullptr;
+
+    // Collapsed by default: cpu/mem, refreshed every poll for a Running
+    // box, isn't the reason most people open this panel -- see the "move
+    // cpu/etc status to the info sidebar" request this was built for.
+    CollapsibleSection *m_statsSection = nullptr;
+    QLabel *m_statsLabel = nullptr;
 
     QLabel *addField(class QVBoxLayout *layout, const QString &label);
 };

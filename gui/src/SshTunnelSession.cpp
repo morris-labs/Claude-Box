@@ -16,7 +16,7 @@ SshTunnelSession::~SshTunnelSession()
 
 namespace {
 
-// rec.sshHost is "user@host" or "user@host:port" -- ssh itself only takes
+// remote.host is "user@host" or "user@host:port" -- ssh itself only takes
 // the port via -p, so a trailing ":<digits>" after the last '@' is peeled
 // off here rather than handed to ssh as part of the destination.
 void splitHostPort(const QString &raw, QString &hostOut, int &portOut)
@@ -40,16 +40,16 @@ void splitHostPort(const QString &raw, QString &hostOut, int &portOut)
 
 } // namespace
 
-bool SshTunnelSession::start(const BoxRecord &rec)
+bool SshTunnelSession::start(const SshRemote &remote)
 {
     stop();
 
-    if (rec.sshForwards.isEmpty() || rec.sshHost.trimmed().isEmpty())
+    if (remote.forwards.isEmpty() || remote.host.trimmed().isEmpty())
         return true; // nothing configured -- not a failure
 
     QString host;
     int port = -1;
-    splitHostPort(rec.sshHost.trimmed(), host, port);
+    splitHostPort(remote.host.trimmed(), host, port);
 
     QStringList args;
     args << "-N"
@@ -59,12 +59,12 @@ bool SshTunnelSession::start(const BoxRecord &rec)
          << "-o" << "ServerAliveCountMax=3"
          << "-o" << "StrictHostKeyChecking=accept-new"; // TOFU: trusts a *new* host, still rejects a changed one
 
-    if (!rec.sshIdentity.isEmpty())
-        args << "-i" << rec.sshIdentity;
+    if (!remote.identity.isEmpty())
+        args << "-i" << remote.identity;
     if (port > 0)
         args << "-p" << QString::number(port);
 
-    for (const QString &fwd : rec.sshForwards) {
+    for (const QString &fwd : remote.forwards) {
         const QStringList parts = fwd.split(':');
         if (parts.size() != 5)
             continue; // malformed -- shouldn't happen via the editor, skip rather than crash the tunnel
