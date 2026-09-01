@@ -74,6 +74,8 @@ add_executable(claude-box-gui
     src/SetupWizard.h
     src/CommandTerminalDialog.cpp
     src/CommandTerminalDialog.h
+    src/CollapsibleSection.cpp
+    src/CollapsibleSection.h
     src/BoxDetailsPanel.cpp
     src/BoxDetailsPanel.h
     src/Theme.cpp
