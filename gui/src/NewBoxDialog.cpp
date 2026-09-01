@@ -1,6 +1,7 @@
 #include "NewBoxDialog.h"
 
 #include "BoxRecord.h"
+#include "CollapsibleSection.h"
 #include "ConversationCatalog.h"
 #include "ContainerPaths.h"
 #include "SshForwardsDialog.h"
@@ -119,23 +120,23 @@ QString slugify(const QString &name)
     return out;
 }
 
-// The "list of things you can add to and remove from" frame shared by
-// the port and mount groups. The caller fills `entryRow` with whatever
-// fields that particular group needs.
-QListWidget *makeListGroup(QVBoxLayout *parent, const QString &title, QLayout *entryRow,
+// The "list of things you can add to and remove from" content shared by
+// the port and mount sections, installed into `section`'s collapsible
+// body. The caller fills `entryRow` with whatever fields that particular
+// section needs.
+QListWidget *makeListGroup(CollapsibleSection *section, QLayout *entryRow,
                            QObject *receiver, const char *addSlot, const char *removeSlot)
 {
-    auto *group = new QGroupBox(title);
-    auto *layout = new QVBoxLayout(group);
+    auto *layout = new QVBoxLayout();
 
-    auto *list = new QListWidget(group);
+    auto *list = new QListWidget();
     list->setMaximumHeight(90);
     layout->addWidget(list);
     layout->addLayout(entryRow);
 
     auto *buttons = new QHBoxLayout();
-    auto *addButton = new QPushButton("Add", group);
-    auto *removeButton = new QPushButton("Remove Selected", group);
+    auto *addButton = new QPushButton("Add");
+    auto *removeButton = new QPushButton("Remove Selected");
     buttons->addStretch();
     buttons->addWidget(addButton);
     buttons->addWidget(removeButton);
@@ -144,7 +145,7 @@ QListWidget *makeListGroup(QVBoxLayout *parent, const QString &title, QLayout *e
     QObject::connect(addButton, SIGNAL(clicked()), receiver, addSlot);
     QObject::connect(removeButton, SIGNAL(clicked()), receiver, removeSlot);
 
-    parent->addWidget(group);
+    section->setContentLayout(layout);
     return list;
 }
 
@@ -171,6 +172,17 @@ QStringList listValues(const QListWidget *list)
     for (int i = 0; i < list->count(); ++i)
         result << list->item(i)->data(Qt::UserRole).toString();
     return result;
+}
+
+// m_remoteList shows one row per m_sshRemotes entry, in the same order --
+// unlike the port/dir lists, a remote isn't a single string, so rows are
+// addressed by position (currentRow() is the index into m_sshRemotes)
+// rather than by a UserRole value.
+QString remoteLabel(const SshRemote &r)
+{
+    return QStringLiteral("%1  (%2 forward%3)").arg(r.host.isEmpty() ? QStringLiteral("(no target set)") : r.host)
+        .arg(r.forwards.size())
+        .arg(r.forwards.size() == 1 ? QString() : QStringLiteral("s"));
 }
 
 } // namespace
@@ -281,7 +293,18 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
 
     mainLayout->addLayout(form);
 
-    // --- ports: host field + container field, joined into HOST:CONTAINER
+    // Three collapsed-by-default sections, in the order asked for: Local
+    // (docker -p), Remote (any number of SSH tunnels), then folders. All
+    // three used to be shown expanded, which is exactly what pushed this
+    // dialog's minimum height past what fits on a real screen (see the
+    // "Fix New/Edit Box dialog getting shoved onto another monitor"
+    // history) -- collapsed keeps the common case (none of this needed)
+    // compact, and loadForEdit() expands whichever ones a box already has
+    // configured so existing settings are never hidden away.
+
+    // --- Local Port Forwarding: host field + container field, joined
+    // into HOST:CONTAINER (docker -p).
+    m_portsSection = new CollapsibleSection("Local Port Forwarding", this);
     auto *portRow = new QGridLayout();
     m_hostPortEdit = new QLineEdit(this);
     m_hostPortEdit->setValidator(new QIntValidator(1, 65535, this));
@@ -293,12 +316,40 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     portRow->addWidget(m_hostPortEdit, 0, 1);
     portRow->addWidget(new QLabel("In the box:", this), 0, 2);
     portRow->addWidget(m_containerPortEdit, 0, 3);
-    m_portList = makeListGroup(mainLayout, "Port mappings", portRow,
-                               this, SLOT(addPort()), SLOT(removeSelectedPort()));
+    m_portList = makeListGroup(m_portsSection, portRow, this, SLOT(addPort()), SLOT(removeSelectedPort()));
     connect(m_hostPortEdit, &QLineEdit::returnPressed, this, &NewBoxDialog::addPort);
     connect(m_containerPortEdit, &QLineEdit::returnPressed, this, &NewBoxDialog::addPort);
+    mainLayout->addWidget(m_portsSection);
 
-    // --- mounts: host path (with its own Browse) + where it lands inside
+    // --- Remote Port Forwarding: any number of SSH tunnels, each a whole
+    // host/identity/forward-list configured via SshForwardsDialog. Rows
+    // are addressed by position (m_remoteList mirrors m_sshRemotes 1:1),
+    // not by a UserRole value the way the port/dir lists are.
+    m_remotesSection = new CollapsibleSection("Remote Port Forwarding", this);
+    auto *remoteLayout = new QVBoxLayout();
+    m_remoteList = new QListWidget();
+    m_remoteList->setMaximumHeight(90);
+    connect(m_remoteList, &QListWidget::itemDoubleClicked, this, &NewBoxDialog::editSelectedRemote);
+    remoteLayout->addWidget(m_remoteList);
+    auto *remoteButtons = new QHBoxLayout();
+    auto *addRemoteButton = new QPushButton("Add Remote…");
+    auto *editRemoteButton = new QPushButton("Edit Selected…");
+    auto *removeRemoteButton = new QPushButton("Remove Selected");
+    remoteButtons->addStretch();
+    remoteButtons->addWidget(addRemoteButton);
+    remoteButtons->addWidget(editRemoteButton);
+    remoteButtons->addWidget(removeRemoteButton);
+    remoteLayout->addLayout(remoteButtons);
+    connect(addRemoteButton, &QPushButton::clicked, this, &NewBoxDialog::addRemote);
+    connect(editRemoteButton, &QPushButton::clicked, this, &NewBoxDialog::editSelectedRemote);
+    connect(removeRemoteButton, &QPushButton::clicked, this, &NewBoxDialog::removeSelectedRemote);
+    m_remotesSection->setContentLayout(remoteLayout);
+    mainLayout->addWidget(m_remotesSection);
+
+    // --- Add folders to sandbox: host path (with its own Browse) + where
+    // it lands inside (extra -v mounts, beyond the target directory
+    // itself).
+    m_dirsSection = new CollapsibleSection("Add folders to sandbox", this);
     auto *dirMountRow = new QGridLayout();
     m_hostDirEdit = new QLineEdit(this);
     m_hostDirEdit->setPlaceholderText("/path/on/host");
@@ -310,26 +361,11 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     dirMountRow->addWidget(mountBrowse, 0, 2);
     dirMountRow->addWidget(new QLabel("In the box:", this), 1, 0);
     dirMountRow->addWidget(m_containerDirEdit, 1, 1, 1, 2);
-    m_dirList = makeListGroup(mainLayout, "Extra dir mounts", dirMountRow,
-                              this, SLOT(addDirMount()), SLOT(removeSelectedDirMount()));
+    m_dirList = makeListGroup(m_dirsSection, dirMountRow, this, SLOT(addDirMount()), SLOT(removeSelectedDirMount()));
     connect(mountBrowse, &QPushButton::clicked, this, &NewBoxDialog::browseForMountDir);
     connect(m_hostDirEdit, &QLineEdit::returnPressed, this, &NewBoxDialog::addDirMount);
     connect(m_containerDirEdit, &QLineEdit::returnPressed, this, &NewBoxDialog::addDirMount);
-
-    // --- SSH tunnel: configured in its own dialog (SshForwardsDialog),
-    // not inline -- see its header comment for why. Just a summary and a
-    // button here; m_sshHost/m_sshIdentity/m_sshForwards hold the result.
-    auto *sshGroup = new QGroupBox("SSH forwards", this);
-    auto *sshLayout = new QHBoxLayout(sshGroup);
-    m_sshSummaryLabel = new QLabel(this);
-    m_sshSummaryLabel->setWordWrap(true);
-    m_sshSummaryLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
-    m_sshConfigButton = new QPushButton("Configure…", this);
-    sshLayout->addWidget(m_sshSummaryLabel, 1);
-    sshLayout->addWidget(m_sshConfigButton);
-    mainLayout->addWidget(sshGroup);
-    connect(m_sshConfigButton, &QPushButton::clicked, this, &NewBoxDialog::configureSshForwards);
-    updateSshSummary();
+    mainLayout->addWidget(m_dirsSection);
 
     m_buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     connect(m_buttons, &QDialogButtonBox::accepted, this, &NewBoxDialog::tryAccept);
@@ -393,10 +429,14 @@ void NewBoxDialog::loadForEdit(const BoxRecord &rec)
         addListValue(m_dirList, QStringLiteral("%1  →  %2").arg(hostRaw, containerPath), d);
     }
 
-    m_sshHost = rec.sshHost;
-    m_sshIdentity = rec.sshIdentity;
-    m_sshForwards = rec.sshForwards;
-    updateSshSummary();
+    m_sshRemotes = rec.sshRemotes;
+    refreshRemoteList();
+
+    // A section with something already in it is expanded on load, so an
+    // existing box's configuration is never hidden a click away.
+    m_portsSection->setExpanded(!rec.ports.isEmpty());
+    m_remotesSection->setExpanded(!rec.sshRemotes.isEmpty());
+    m_dirsSection->setExpanded(!rec.dirs.isEmpty());
 }
 
 void NewBoxDialog::setInitialDir(const QString &dir)
@@ -622,32 +662,56 @@ void NewBoxDialog::removeSelectedDirMount()
         delete m_dirList->takeItem(row);
 }
 
-void NewBoxDialog::configureSshForwards()
+void NewBoxDialog::refreshRemoteList()
+{
+    m_remoteList->clear();
+    for (const SshRemote &r : m_sshRemotes)
+        new QListWidgetItem(remoteLabel(r), m_remoteList);
+}
+
+void NewBoxDialog::addRemote()
 {
     SshForwardsDialog dlg(this);
-    dlg.setConfig(m_sshHost, m_sshIdentity, m_sshForwards);
     if (dlg.exec() != QDialog::Accepted)
         return;
 
-    m_sshHost = dlg.sshHost();
-    m_sshIdentity = dlg.sshIdentity();
-    m_sshForwards = dlg.sshForwards();
-    updateSshSummary();
+    SshRemote remote;
+    remote.host = dlg.sshHost();
+    remote.identity = dlg.sshIdentity();
+    remote.forwards = dlg.sshForwards();
+    m_sshRemotes.append(remote);
+    refreshRemoteList();
+    m_remoteList->setCurrentRow(m_sshRemotes.size() - 1);
 }
 
-// SshForwardsDialog itself refuses to close with forwards but no target,
-// so there's nothing left to validate here -- m_sshForwards/m_sshHost can
-// only ever reflect a configuration that already passed that check.
-void NewBoxDialog::updateSshSummary()
+void NewBoxDialog::editSelectedRemote()
 {
-    if (m_sshForwards.isEmpty()) {
-        m_sshSummaryLabel->setText(QStringLiteral("Not configured."));
-    } else {
-        m_sshSummaryLabel->setText(QStringLiteral("%1 forward%2 via %3")
-            .arg(m_sshForwards.size())
-            .arg(m_sshForwards.size() == 1 ? QString() : QStringLiteral("s"))
-            .arg(m_sshHost));
-    }
+    const int row = m_remoteList->currentRow();
+    if (row < 0 || row >= m_sshRemotes.size())
+        return;
+
+    SshForwardsDialog dlg(this);
+    const SshRemote &existing = m_sshRemotes.at(row);
+    dlg.setConfig(existing.host, existing.identity, existing.forwards);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    SshRemote remote;
+    remote.host = dlg.sshHost();
+    remote.identity = dlg.sshIdentity();
+    remote.forwards = dlg.sshForwards();
+    m_sshRemotes[row] = remote;
+    refreshRemoteList();
+    m_remoteList->setCurrentRow(row);
+}
+
+void NewBoxDialog::removeSelectedRemote()
+{
+    const int row = m_remoteList->currentRow();
+    if (row < 0 || row >= m_sshRemotes.size())
+        return;
+    m_sshRemotes.removeAt(row);
+    refreshRemoteList();
 }
 
 void NewBoxDialog::tryAccept()
@@ -739,17 +803,7 @@ QStringList NewBoxDialog::dirs() const
     return listValues(m_dirList);
 }
 
-QString NewBoxDialog::sshTunnelHost() const
+QList<SshRemote> NewBoxDialog::sshRemotes() const
 {
-    return m_sshHost;
-}
-
-QString NewBoxDialog::sshIdentityFile() const
-{
-    return m_sshIdentity;
-}
-
-QStringList NewBoxDialog::sshForwards() const
-{
-    return m_sshForwards;
+    return m_sshRemotes;
 }

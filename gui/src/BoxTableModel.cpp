@@ -64,6 +64,8 @@ QString tooltipFor(const BoxInfo &b)
         lines << b.targetDir;
     if (!b.detail.isEmpty())
         lines << b.detail;
+    if (!b.stats.isEmpty())
+        lines << b.stats;
     return lines.join(QLatin1Char('\n'));
 }
 }

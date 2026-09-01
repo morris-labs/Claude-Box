@@ -22,11 +22,16 @@ struct BoxInfo {
     QString conversationName;
     QString targetDir;
     QString detail; // human-readable status text for the Details column
+    // "cpu N% · mem A / B" for a Running box, empty otherwise -- kept
+    // separate from `detail` so the table's Details column can stay pure
+    // docker status while BoxDetailsPanel shows this in its own
+    // (collapsible) Resource Usage section.
+    QString stats;
 
     bool operator==(const BoxInfo &o) const
     {
         return status == o.status && name == o.name && conversationName == o.conversationName
-            && targetDir == o.targetDir && detail == o.detail;
+            && targetDir == o.targetDir && detail == o.detail && stats == o.stats;
     }
     bool operator!=(const BoxInfo &o) const { return !(*this == o); }
 };
