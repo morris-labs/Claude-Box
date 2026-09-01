@@ -5,6 +5,7 @@
 #include "Icons.h"
 #include "ConversationCatalog.h"
 #include "NewBoxDialog.h"
+#include "SetupWizard.h"
 #include "SshTunnelSession.h"
 #include "TerminalWidget.h"
 #include "Theme.h"
@@ -76,6 +77,14 @@ MainWindow::MainWindow(QWidget *parent)
     refreshBoxes();
     updateActionStates();
     updateTabPlaceholder();
+
+    // Deferred rather than shown inline here: this way the main window
+    // paints first, so the wizard reads as "the app opened, then a
+    // dialog appeared over it" instead of blocking the window from ever
+    // being seen. Only unprompted on a genuine first run -- SetupWizard
+    // is reachable any time afterward via File > Setup....
+    if (!SetupWizard::hasCompletedSetup())
+        QTimer::singleShot(0, this, &MainWindow::onSetupWizard);
 }
 
 // --- construction -------------------------------------------------------
@@ -86,6 +95,10 @@ void MainWindow::buildActions()
     m_newAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+N")));
     m_newAction->setStatusTip(QStringLiteral("Create a new box and start a conversation in it"));
     connect(m_newAction, &QAction::triggered, this, &MainWindow::onNew);
+
+    m_setupAction = new QAction(QStringLiteral("&Setup…"), this);
+    m_setupAction->setStatusTip(QStringLiteral("Check Docker, the claude-code image, and SSH keypair setup"));
+    connect(m_setupAction, &QAction::triggered, this, &MainWindow::onSetupWizard);
 
     m_editAction = new QAction(Icons::editBox(), QStringLiteral("&Edit Box…"), this);
     m_editAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+E")));
@@ -263,6 +276,7 @@ void MainWindow::buildMenus()
 {
     QMenu *fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
     fileMenu->addAction(m_newAction);
+    fileMenu->addAction(m_setupAction);
     fileMenu->addSeparator();
     QAction *quit = fileMenu->addAction(QStringLiteral("&Quit"), this, &QWidget::close);
     quit->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Q")));
@@ -728,7 +742,7 @@ bool MainWindow::confirmConversationAdoption(const QString &sessionUuid)
 void MainWindow::onNew()
 {
     NewBoxDialog dlg(this);
-    dlg.setInitialDir(QDir::homePath());
+    dlg.setInitialDir(SetupWizard::defaultTargetDir());
     if (dlg.exec() != QDialog::Accepted)
         return;
 
@@ -965,6 +979,12 @@ void MainWindow::onPurge()
     }
 
     refreshBoxes();
+}
+
+void MainWindow::onSetupWizard()
+{
+    SetupWizard dlg(this);
+    dlg.exec();
 }
 
 void MainWindow::onAbout()
