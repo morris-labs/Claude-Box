@@ -37,6 +37,19 @@ QString statusText(BoxInfo::Status s)
 // visibly "nothing set" rather than looking like a rendering bug.
 const QString kNone = QStringLiteral("—");
 
+// Mirrors NewBoxDialog's own forwardLabel() -- kept as a separate copy
+// (like the slugify() duplication elsewhere in this app) since this side
+// only ever needs it for one read-only line, not worth a shared header for.
+QString forwardLabel(const QString &value)
+{
+    const QStringList parts = value.split(':');
+    if (parts.size() != 5)
+        return value;
+    const QString dirLabel = parts.at(0) == QLatin1String("R") ? QStringLiteral("remote") : QStringLiteral("local");
+    const QString bindLabel = parts.at(1).isEmpty() ? parts.at(2) : (parts.at(1) + ":" + parts.at(2));
+    return QStringLiteral("%1 %2 → %3:%4").arg(dirLabel, bindLabel, parts.at(3), parts.at(4));
+}
+
 } // namespace
 
 BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
@@ -88,6 +101,7 @@ BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
     m_flags        = addField(fieldsLayout, "Flags");
     m_ports        = addField(fieldsLayout, "Ports");
     m_mounts       = addField(fieldsLayout, "Mounts");
+    m_ssh          = addField(fieldsLayout, "SSH forwards");
     m_detail       = addField(fieldsLayout, "Docker");
 
     // The uuid is the field most likely to be copied out (to hand to
@@ -155,6 +169,7 @@ void BoxDetailsPanel::setBox(const BoxInfo *info)
         m_flags->setText(QStringLiteral("no tracked record"));
         m_ports->setText(kNone);
         m_mounts->setText(kNone);
+        m_ssh->setText(kNone);
         return;
     }
 
@@ -175,4 +190,14 @@ void BoxDetailsPanel::setBox(const BoxInfo *info)
 
     m_ports->setText(rec.ports.isEmpty() ? kNone : rec.ports.join("\n"));
     m_mounts->setText(rec.dirs.isEmpty() ? kNone : rec.dirs.join("\n"));
+
+    if (rec.sshForwards.isEmpty() || rec.sshHost.trimmed().isEmpty()) {
+        m_ssh->setText(kNone);
+    } else {
+        QStringList lines;
+        lines << QStringLiteral("via %1").arg(rec.sshHost);
+        for (const QString &fwd : rec.sshForwards)
+            lines << forwardLabel(fwd);
+        m_ssh->setText(lines.join("\n"));
+    }
 }

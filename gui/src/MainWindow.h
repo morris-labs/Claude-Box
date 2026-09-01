@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFutureWatcher>
+#include <QHash>
 #include <QMainWindow>
 #include <QModelIndex>
 #include <QPoint>
@@ -10,6 +11,7 @@
 #include "DockerBackend.h"
 
 class BoxDetailsPanel;
+class SshTunnelSession;
 class QAction;
 class QLabel;
 class QLineEdit;
@@ -47,6 +49,7 @@ private slots:
     void showTabContextMenu(const QPoint &pos);
 
     void onNew();
+    void onEdit();
     void onOpen();
     void onClose();
     void onRemove();
@@ -89,6 +92,7 @@ private:
     QLabel *m_statusRefreshed = nullptr;
 
     QAction *m_newAction = nullptr;
+    QAction *m_editAction = nullptr;
     QAction *m_openAction = nullptr;
     QAction *m_closeAction = nullptr;
     QAction *m_removeAction = nullptr;
@@ -96,6 +100,14 @@ private:
     QAction *m_refreshAction = nullptr;
     QAction *m_detailsAction = nullptr;
     QAction *m_closeTabAction = nullptr;
+
+    // SSH tunnels (see SshTunnelSession): one background `ssh -N` per box
+    // that has any forwards configured, kept alive for as long as that
+    // box is Running. m_tunnelSignatures tracks what each session was
+    // last started with, so an edit to a box's forwards is picked up by
+    // restarting its tunnel instead of leaving the old one running.
+    QHash<QString, SshTunnelSession *> m_tunnels;
+    QHash<QString, QString> m_tunnelSignatures;
 
     void buildUi();
     void buildActions();
@@ -118,6 +130,13 @@ private:
     void closeTabForBox(const QString &name);
     int tabIndexForBox(const QString &name) const;
     void updateTabPlaceholder();
+
+    // Starts/stops SshTunnelSessions to match which boxes are currently
+    // Running and what each one's record asks for. Cheap to call often --
+    // it's a no-op for any box whose tunnel is already up with an
+    // unchanged configuration.
+    void syncTunnels();
+    void stopTunnel(const QString &name);
 
     void saveSettings();
     void restoreSettings();

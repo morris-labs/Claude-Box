@@ -43,6 +43,7 @@ private:
     QLabel *m_flags = nullptr;
     QLabel *m_ports = nullptr;
     QLabel *m_mounts = nullptr;
+    QLabel *m_ssh = nullptr;
     QLabel *m_detail = nullptr;
 
     QLabel *addField(class QVBoxLayout *layout, const QString &label);
