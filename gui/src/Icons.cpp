@@ -58,6 +58,23 @@ QIcon Icons::newBox()
     }, iconColor());
 }
 
+QIcon Icons::editBox()
+{
+    // A pencil: changing settings on a box that already exists, as
+    // opposed to the plus (new) or play (open) glyphs.
+    return render([](QPainter &p, const QRectF &r, qreal stroke) {
+        const QPointF tip(r.left(), r.bottom());
+        p.drawLine(QPointF(r.right(), r.top()), tip + QPointF(stroke * 1.6, -stroke * 1.6));
+
+        QPainterPath tipPath;
+        tipPath.moveTo(tip);
+        tipPath.lineTo(tip + QPointF(stroke * 2.4, 0));
+        tipPath.lineTo(tip + QPointF(0, -stroke * 2.4));
+        tipPath.closeSubpath();
+        p.fillPath(tipPath, p.pen().color());
+    }, iconColor());
+}
+
 QIcon Icons::open()
 {
     // Play triangle: "start this box up and show it to me".

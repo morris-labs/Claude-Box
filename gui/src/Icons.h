@@ -16,6 +16,7 @@ class QColor;
 namespace Icons {
 
 QIcon newBox();
+QIcon editBox();
 QIcon open();
 QIcon closeBox();
 QIcon removeBox();

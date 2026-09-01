@@ -8,10 +8,13 @@ class QLabel;
 class QLineEdit;
 class QCheckBox;
 class QListWidget;
+class QDialogButtonBox;
+class QPushButton;
+struct BoxRecord;
 
 // Form for creating a new box: target directory, which conversation to
-// run in it, name, model/effort, the permission-bypass toggle, and
-// repeatable port-mapping / extra-dir-mount rows.
+// run in it, name, model/effort, the permission-bypass toggle, repeatable
+// port-mapping / extra-dir-mount rows, and repeatable SSH -L/-R forwards.
 //
 // The conversation picker lists every transcript Claude already has for
 // the chosen directory (see ConversationCatalog), so a box can adopt a
@@ -25,14 +28,28 @@ class QListWidget;
 // because --remote-control is always passed (see
 // DockerBackend::baseClaudeArgs).
 //
+// Also doubles as the *edit* form for an existing box (loadForEdit()):
+// same fields, minus the ones that aren't safe to change after creation
+// (target directory, which conversation is resumed). MainWindow::onEdit
+// is the one that decides what to do with the result -- update the record
+// only, or also restart the container if it's running and something that
+// needs a restart changed.
+//
 // Purely a form -- MainWindow is the one that turns the result into a
-// BoxRecord and calls DockerBackend::createNew.
+// BoxRecord and calls DockerBackend::createNew (or, in edit mode, saves
+// over an existing record).
 class NewBoxDialog : public QDialog {
     Q_OBJECT
 public:
     explicit NewBoxDialog(QWidget *parent = nullptr);
 
     void setInitialDir(const QString &dir);
+
+    // Switches the dialog into edit mode for an existing box: locks the
+    // directory and conversation picker (neither is safe to change after
+    // creation) and prefills everything else from `rec`.
+    void loadForEdit(const BoxRecord &rec);
+    bool isEditMode() const { return m_editMode; }
 
     QString targetDir() const;
     QString conversationName() const;
@@ -50,9 +67,15 @@ public:
     QStringList ports() const; // "HOST:CONTAINER"
     QStringList dirs() const;  // "HOSTPATH:CONTAINERPATH"
 
+    // SSH tunnel (background `ssh -N` on the host -- see SshTunnelSession).
+    QString sshTunnelHost() const;     // "user@host[:port]"
+    QString sshIdentityFile() const;   // optional -i path
+    QStringList sshForwards() const;   // "L:bindAddr:bindPort:destHost:destPort" / "R:..."
+
 private slots:
     void browseForDir();
     void browseForMountDir();
+    void browseForIdentity();
     void reloadForDirectory();
     void onConversationChanged(int index);
     void updateWorkspaceHint();
@@ -60,12 +83,15 @@ private slots:
     void removeSelectedPort();
     void addDirMount();
     void removeSelectedDirMount();
+    void addForward();
+    void removeSelectedForward();
     void tryAccept();
 
 private:
     void rememberWorkspaceChoice();
 
     QLineEdit *m_dirEdit = nullptr;
+    QPushButton *m_dirBrowseButton = nullptr;
     QComboBox *m_sessionCombo = nullptr;
     QLabel *m_sessionHint = nullptr;
     QLineEdit *m_nameEdit = nullptr;
@@ -74,6 +100,7 @@ private:
     QCheckBox *m_skipPermsCheck = nullptr;
     QCheckBox *m_workspaceCheck = nullptr;
     QLabel *m_workspaceHint = nullptr;
+    QDialogButtonBox *m_buttons = nullptr;
 
     QListWidget *m_portList = nullptr;
     QLineEdit *m_hostPortEdit = nullptr;
@@ -82,6 +109,15 @@ private:
     QListWidget *m_dirList = nullptr;
     QLineEdit *m_hostDirEdit = nullptr;
     QLineEdit *m_containerDirEdit = nullptr;
+
+    QLineEdit *m_sshHostEdit = nullptr;
+    QLineEdit *m_sshIdentityEdit = nullptr;
+    QListWidget *m_forwardList = nullptr;
+    QComboBox *m_forwardDirCombo = nullptr;
+    QLineEdit *m_forwardBindEdit = nullptr;
+    QLineEdit *m_forwardBindPortEdit = nullptr;
+    QLineEdit *m_forwardDestHostEdit = nullptr;
+    QLineEdit *m_forwardDestPortEdit = nullptr;
 
     // Directory the conversation list was built from, so
     // re-entering the same path doesn't rescan (and doesn't reset a
@@ -99,4 +135,6 @@ private:
     // replaced when the selection changes but a name the user typed
     // themselves is never overwritten.
     QString m_autoFilledName;
+    // True from loadForEdit() onward -- see isEditMode().
+    bool m_editMode = false;
 };
