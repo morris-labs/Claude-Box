@@ -130,6 +130,12 @@ bool TerminalWidget::attachToContainer(const QString &containerName)
                          containerName});
 }
 
+bool TerminalWidget::attachToCommand(const QString &program, const QStringList &args,
+                                     const QString &workingDir)
+{
+    return m_pty->start(program, args, workingDir);
+}
+
 bool TerminalWidget::isRunning() const
 {
     return m_pty && m_pty->isRunning();
