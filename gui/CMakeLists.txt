@@ -60,6 +60,8 @@ add_executable(claude-box-gui
     src/DockerApi.h
     src/DockerBackend.cpp
     src/DockerBackend.h
+    src/SshTunnelSession.cpp
+    src/SshTunnelSession.h
     ${PTY_SESSION_SOURCE}
     src/PtySession.h
     src/TerminalWidget.cpp
