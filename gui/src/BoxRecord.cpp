@@ -60,6 +60,12 @@ BoxRecord BoxRecord::load(const QString &name)
             rec.ports.append(value);
         else if (key == "dir")
             rec.dirs.append(value);
+        else if (key == "ssh_host")
+            rec.sshHost = value;
+        else if (key == "ssh_identity")
+            rec.sshIdentity = value;
+        else if (key == "ssh_forward")
+            rec.sshForwards.append(value);
     }
 
     rec.name = name; // only set once the file was actually readable
@@ -92,6 +98,12 @@ bool BoxRecord::save() const
         out << "port=" << p << '\n';
     for (const QString &d : dirs)
         out << "dir=" << d << '\n';
+    if (!sshHost.isEmpty())
+        out << "ssh_host=" << sshHost << '\n';
+    if (!sshIdentity.isEmpty())
+        out << "ssh_identity=" << sshIdentity << '\n';
+    for (const QString &f : sshForwards)
+        out << "ssh_forward=" << f << '\n';
 
     return true;
 }
