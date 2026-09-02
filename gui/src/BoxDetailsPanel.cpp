@@ -54,6 +54,29 @@ QString forwardLabel(const QString &value)
     return QStringLiteral("%1 %2 → %3:%4").arg(dirLabel, bindLabel, parts.at(3), parts.at(4));
 }
 
+// QLayout::takeAt() hands back ownership of exactly one item and nothing
+// underneath it: for a QWidgetItem that's the widget itself, but for an
+// item wrapping a *child* layout (added via addLayout(), as the per-remote
+// rows and the Reconnect row below are), the widgets inside that child
+// layout are parented to the container widget, not to the item -- deleting
+// only the item leaks them as orphaned-but-still-visible widgets that pile
+// up and overlap on every rebuild. Recursing into any child layout before
+// deleting it is what actually empties the section instead of just its
+// top level.
+void clearLayout(QLayout *layout)
+{
+    QLayoutItem *item;
+    while ((item = layout->takeAt(0)) != nullptr) {
+        if (QWidget *w = item->widget())
+            delete w;
+        else if (QLayout *child = item->layout()) {
+            clearLayout(child);
+            delete child; // takeAt() transferred ownership of the child layout too, not just this item
+        }
+        delete item;
+    }
+}
+
 } // namespace
 
 BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
@@ -249,11 +272,7 @@ void BoxDetailsPanel::rebuildSshSection(const QList<SshRemote> &remotes,
                                          const QList<SshTunnelStatus> &tunnelStatuses)
 {
     // Rebuilt from scratch each call -- see the member declaration for why.
-    QLayoutItem *item;
-    while ((item = m_sshLayout->takeAt(0)) != nullptr) {
-        delete item->widget();
-        delete item;
-    }
+    clearLayout(m_sshLayout);
 
     bool anyConfigured = false;
     for (int i = 0; i < remotes.size(); ++i) {
