@@ -9,6 +9,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSizePolicy>
 #include <QStackedWidget>
@@ -104,7 +105,25 @@ BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
     m_flags        = addField(fieldsLayout, "Flags");
     m_ports        = addField(fieldsLayout, "Ports");
     m_mounts       = addField(fieldsLayout, "Mounts");
-    m_ssh          = addField(fieldsLayout, "SSH forwards");
+
+    // "SSH forwards" used to be addField()'s plain QLabel like the fields
+    // above -- now a caption plus a rebuildable container, so each remote
+    // can carry its own connection-status dot instead of one flat block of
+    // text with no way to tell which remote (if any) is actually down.
+    auto *sshCaption = new QLabel("SSH forwards", m_fields);
+    QFont sshCaptionFont = sshCaption->font();
+    sshCaptionFont.setPointSizeF(sshCaptionFont.pointSizeF() - 0.5);
+    sshCaption->setFont(sshCaptionFont);
+    sshCaption->setStyleSheet(QString("color: %1;").arg(Theme::dimText().name()));
+    fieldsLayout->addSpacing(8);
+    fieldsLayout->addWidget(sshCaption);
+
+    m_sshContainer = new QWidget(m_fields);
+    m_sshLayout = new QVBoxLayout(m_sshContainer);
+    m_sshLayout->setContentsMargins(0, 2, 0, 0);
+    m_sshLayout->setSpacing(4);
+    fieldsLayout->addWidget(m_sshContainer);
+
     m_detail       = addField(fieldsLayout, "Docker");
 
     // The uuid is the field most likely to be copied out (to hand to
@@ -170,12 +189,14 @@ QLabel *BoxDetailsPanel::addField(QVBoxLayout *layout, const QString &label)
     return value;
 }
 
-void BoxDetailsPanel::setBox(const BoxInfo *info)
+void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshTunnelStatus> &tunnelStatuses)
 {
     const bool have = info != nullptr;
     m_stack->setCurrentIndex(have ? 1 : 0);
     if (!have)
         return;
+
+    m_currentBoxName = info->name;
 
     m_heading->setText(info->conversationName.isEmpty() ? info->name : info->conversationName);
 
@@ -199,7 +220,7 @@ void BoxDetailsPanel::setBox(const BoxInfo *info)
         m_flags->setText(QStringLiteral("no tracked record"));
         m_ports->setText(kNone);
         m_mounts->setText(kNone);
-        m_ssh->setText(kNone);
+        rebuildSshSection({}, {});
         return;
     }
 
@@ -221,13 +242,79 @@ void BoxDetailsPanel::setBox(const BoxInfo *info)
     m_ports->setText(rec.ports.isEmpty() ? kNone : rec.ports.join("\n"));
     m_mounts->setText(rec.dirs.isEmpty() ? kNone : rec.dirs.join("\n"));
 
-    QStringList sshLines;
-    for (const SshRemote &remote : rec.sshRemotes) {
+    rebuildSshSection(rec.sshRemotes, tunnelStatuses);
+}
+
+void BoxDetailsPanel::rebuildSshSection(const QList<SshRemote> &remotes,
+                                         const QList<SshTunnelStatus> &tunnelStatuses)
+{
+    // Rebuilt from scratch each call -- see the member declaration for why.
+    QLayoutItem *item;
+    while ((item = m_sshLayout->takeAt(0)) != nullptr) {
+        delete item->widget();
+        delete item;
+    }
+
+    bool anyConfigured = false;
+    for (int i = 0; i < remotes.size(); ++i) {
+        const SshRemote &remote = remotes.at(i);
         if (remote.forwards.isEmpty() || remote.host.trimmed().isEmpty())
             continue;
-        sshLines << QStringLiteral("via %1").arg(remote.host);
-        for (const QString &fwd : remote.forwards)
-            sshLines << QStringLiteral("  ") + forwardLabel(fwd);
+        anyConfigured = true;
+
+        const SshTunnelStatus status = tunnelStatuses.value(i); // default: not attempted
+
+        auto *row = new QHBoxLayout();
+        row->setSpacing(6);
+
+        auto *dot = new QLabel(m_sshContainer);
+        // Dim when we haven't tried this remote at all -- typically because
+        // the box isn't Running, so MainWindow isn't tunneling it. Once
+        // attempted, green means the ssh process is currently alive and
+        // red means it isn't (auth failure, unreachable host, exited and
+        // hasn't been retried yet -- see SshTunnelSession's ExitOnForward-
+        // Failure). This is a proxy for "tunnel up", not a guarantee: ssh
+        // -N prints nothing on success, so a live process is the closest
+        // signal available short of probing the forwarded port ourselves.
+        const QColor dotColor = !status.attempted ? Theme::dimText()
+            : (status.running ? Theme::running() : Theme::stopped());
+        dot->setPixmap(Icons::statusDot(dotColor).pixmap(10, 10));
+        if (status.attempted && !status.running && !status.lastError.isEmpty())
+            dot->setToolTip(status.lastError);
+        row->addWidget(dot);
+
+        auto *hostLabel = new QLabel(QStringLiteral("via %1").arg(remote.host), m_sshContainer);
+        hostLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        if (status.attempted && !status.running && !status.lastError.isEmpty())
+            hostLabel->setToolTip(status.lastError);
+        row->addWidget(hostLabel);
+        row->addStretch(1);
+        m_sshLayout->addLayout(row);
+
+        for (const QString &fwd : remote.forwards) {
+            auto *fwdLabel = new QLabel(QStringLiteral("  ") + forwardLabel(fwd), m_sshContainer);
+            fwdLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            fwdLabel->setWordWrap(true);
+            m_sshLayout->addWidget(fwdLabel);
+        }
     }
-    m_ssh->setText(sshLines.isEmpty() ? kNone : sshLines.join("\n"));
+
+    if (!anyConfigured) {
+        m_sshLayout->addWidget(new QLabel(kNone, m_sshContainer));
+        return;
+    }
+
+    // No point offering to reconnect tunnels the box wasn't given any
+    // status for -- MainWindow only reports statuses for a Running box.
+    if (!tunnelStatuses.isEmpty()) {
+        auto *reconnect = new QPushButton("Reconnect", m_sshContainer);
+        reconnect->setToolTip("Tear down and restart every SSH tunnel for this box");
+        connect(reconnect, &QPushButton::clicked, this, [this] {
+            emit reconnectRequested(m_currentBoxName);
+        });
+        auto *btnRow = new QHBoxLayout();
+        btnRow->addWidget(reconnect);
+        btnRow->addStretch(1);
+        m_sshLayout->addLayout(btnRow);
+    }
 }
