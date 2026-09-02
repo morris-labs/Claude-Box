@@ -1,12 +1,28 @@
 #pragma once
 
+#include <QList>
+#include <QString>
 #include <QWidget>
 
 #include "DockerBackend.h"
 
 class QLabel;
 class QStackedWidget;
+class QVBoxLayout;
 class CollapsibleSection;
+struct SshRemote;
+
+// Per-remote SSH tunnel state, as tracked by MainWindow's SshTunnelSession
+// bookkeeping -- this panel has no process handle of its own, it only
+// renders what MainWindow already knows. Indices line up positionally with
+// BoxRecord::sshRemotes (remote 0's status is tunnelStatuses[0], etc.); a
+// short list (or none at all) just means "not attempted yet", same as an
+// absent record field elsewhere in this panel.
+struct SshTunnelStatus {
+    bool attempted = false; // a session has been started for this remote at least once
+    bool running = false;   // its ssh process is alive right now
+    QString lastError;      // most recent stderr line captured, if any (shown on hover when down)
+};
 
 // Read-only detail view for the selected dashboard row. Everything here
 // used to be either crammed into table columns or invisible entirely --
@@ -23,8 +39,16 @@ class BoxDetailsPanel : public QWidget {
 public:
     explicit BoxDetailsPanel(QWidget *parent = nullptr);
 
-    // Pass nullptr to show the "nothing selected" placeholder.
-    void setBox(const BoxInfo *info);
+    // Pass nullptr to show the "nothing selected" placeholder. tunnelStatuses
+    // is positional against the box's BoxRecord::sshRemotes; leave it empty
+    // if the caller has none to report (nothing configured, or box not
+    // running -- MainWindow only tracks tunnels for Running boxes).
+    void setBox(const BoxInfo *info, const QList<SshTunnelStatus> &tunnelStatuses = {});
+
+signals:
+    // The panel has no way to touch a tunnel itself -- MainWindow owns the
+    // SshTunnelSessions -- so the "Reconnect" button just asks for one.
+    void reconnectRequested(const QString &boxName);
 
 private:
     // Two pages rather than show/hide on individual widgets: the
@@ -44,8 +68,17 @@ private:
     QLabel *m_flags = nullptr;
     QLabel *m_ports = nullptr;
     QLabel *m_mounts = nullptr;
-    QLabel *m_ssh = nullptr;
     QLabel *m_detail = nullptr;
+
+    // SSH forwards no longer render as a single multi-line QLabel: each
+    // remote gets its own status dot (green = tunnel process alive, red =
+    // attempted and not running, dim = not attempted -- box not Running,
+    // typically), plus a Reconnect button. Rebuilt from scratch on every
+    // setBox() call rather than diffed in place; this section only ever
+    // holds a handful of rows and rebuilding is simpler than reconciling.
+    QWidget *m_sshContainer = nullptr;
+    QVBoxLayout *m_sshLayout = nullptr;
+    QString m_currentBoxName;
 
     // Collapsed by default: cpu/mem, refreshed every poll for a Running
     // box, isn't the reason most people open this panel -- see the "move
@@ -54,4 +87,6 @@ private:
     QLabel *m_statsLabel = nullptr;
 
     QLabel *addField(class QVBoxLayout *layout, const QString &label);
+    void rebuildSshSection(const QList<SshRemote> &remotes,
+                            const QList<SshTunnelStatus> &tunnelStatuses);
 };

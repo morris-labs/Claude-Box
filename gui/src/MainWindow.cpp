@@ -216,6 +216,7 @@ void MainWindow::buildUi()
     // --- details panel --------------------------------------------------
     m_details = new BoxDetailsPanel(this);
     m_details->setMinimumWidth(280);
+    connect(m_details, &BoxDetailsPanel::reconnectRequested, this, &MainWindow::onReconnectTunnels);
 
     m_topSplitter = new QSplitter(Qt::Horizontal, this);
     m_topSplitter->addWidget(tableSide);
@@ -461,7 +462,7 @@ void MainWindow::updateActionStates()
     m_removeAction->setEnabled(info && info->status == BoxInfo::Status::Stopped);
     m_purgeAction->setEnabled(info && !info->targetDir.isEmpty());
     m_closeTabAction->setEnabled(m_tabs->count() > 0);
-    m_details->setBox(info);
+    m_details->setBox(info, info ? tunnelStatusesForBox(info->name) : QList<SshTunnelStatus>());
 }
 
 void MainWindow::onFilterChanged(const QString &text)
@@ -645,20 +646,39 @@ void MainWindow::syncTunnels()
 
             auto existing = m_tunnels.find(key);
             if (existing != m_tunnels.end() && existing.value()->isRunning()
-                && m_tunnelSignatures.value(key) == sig)
-                continue; // already up with this exact configuration
+                && m_tunnelSignatures.value(key) == sig) {
+                // Still up with this exact configuration. The finished-signal
+                // handler below already flips this false the moment a
+                // session dies, but keeping it current here too means a
+                // stale status can never survive more than one poll even if
+                // that handler were somehow missed.
+                m_tunnelStatus[key].running = true;
+                continue;
+            }
 
             stopTunnel(key); // torn down first if it exists (dead, or config changed)
 
             auto *session = new SshTunnelSession(this);
             const QString boxName = row->name;
-            connect(session, &SshTunnelSession::log, this, [this, boxName, r](const QString &line) {
+            connect(session, &SshTunnelSession::log, this, [this, key, boxName, r](const QString &line) {
+                m_tunnelStatus[key].lastError = line;
                 statusBar()->showMessage(
                     QStringLiteral("%1 [remote %2] (ssh tunnel): %3").arg(boxName).arg(r).arg(line), 8000);
             });
-            session->start(remote);
+            connect(session, &SshTunnelSession::finished, this, [this, key](int) {
+                if (m_tunnelStatus.contains(key))
+                    m_tunnelStatus[key].running = false;
+            });
+
+            const bool started = session->start(remote);
             m_tunnels.insert(key, session);
             m_tunnelSignatures.insert(key, sig);
+
+            SshTunnelStatus &status = m_tunnelStatus[key];
+            status.attempted = true;
+            status.running = started && session->isRunning();
+            if (started)
+                status.lastError.clear(); // drop a stale error from a previous attempt
         }
     }
 
@@ -679,6 +699,7 @@ void MainWindow::stopTunnel(const QString &key)
     it.value()->deleteLater();
     m_tunnels.erase(it);
     m_tunnelSignatures.remove(key);
+    m_tunnelStatus.remove(key);
 }
 
 // Stops every remote's tunnel for one box (there can be several -- see
@@ -692,6 +713,29 @@ void MainWindow::stopTunnelsForBox(const QString &boxName)
         if (key.startsWith(prefix))
             stopTunnel(key);
     }
+}
+
+QList<SshTunnelStatus> MainWindow::tunnelStatusesForBox(const QString &boxName) const
+{
+    const BoxRecord rec = BoxRecord::load(boxName);
+    if (!rec.isValid())
+        return {};
+
+    QList<SshTunnelStatus> statuses;
+    statuses.reserve(rec.sshRemotes.size());
+    for (int r = 0; r < rec.sshRemotes.size(); ++r)
+        statuses << m_tunnelStatus.value(tunnelKey(boxName, r));
+    return statuses;
+}
+
+void MainWindow::onReconnectTunnels(const QString &boxName)
+{
+    // Bypasses syncTunnels()'s usual "already up, unchanged config" skip on
+    // purpose -- the whole point of this button is to retry right now even
+    // though nothing about the configuration has changed.
+    stopTunnelsForBox(boxName);
+    syncTunnels();
+    updateActionStates(); // reflect the fresh (re-)attempt without waiting for the next poll
 }
 
 void MainWindow::onCloseCurrentTab()

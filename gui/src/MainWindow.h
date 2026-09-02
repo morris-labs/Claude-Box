@@ -7,6 +7,7 @@
 #include <QPoint>
 #include <QString>
 
+#include "BoxDetailsPanel.h" // for SshTunnelStatus, a value member below
 #include "BoxTableModel.h"
 #include "DockerBackend.h"
 
@@ -110,6 +111,12 @@ private:
     // restarting its tunnel instead of leaving the old one running.
     QHash<QString, SshTunnelSession *> m_tunnels;
     QHash<QString, QString> m_tunnelSignatures;
+    // Mirrors m_tunnels (same "<boxName>#<remoteIndex>" keys) but survives
+    // a session's death: SshTunnelStatus::running goes false and lastError
+    // is filled in when a tunnel exits, instead of the key just vanishing
+    // the way m_tunnels itself would -- BoxDetailsPanel needs to be able to
+    // show "this one is down" and *why*, not just "nothing to show".
+    QHash<QString, SshTunnelStatus> m_tunnelStatus;
 
     void buildUi();
     void buildActions();
@@ -140,6 +147,15 @@ private:
     void syncTunnels();
     void stopTunnel(const QString &key);
     void stopTunnelsForBox(const QString &boxName);
+    // Statuses for one box's remotes, in BoxRecord::sshRemotes order --
+    // what BoxDetailsPanel::setBox()'s tunnelStatuses argument is built
+    // from. Empty for a box with no record or no configured remotes.
+    QList<SshTunnelStatus> tunnelStatusesForBox(const QString &boxName) const;
+    // Tears a box's tunnels down and immediately calls syncTunnels() to
+    // bring them back up -- the "Reconnect" button's handler. Bypasses the
+    // usual signature check on purpose: the point is to retry right now
+    // even though nothing about the configuration has changed.
+    void onReconnectTunnels(const QString &boxName);
 
     void saveSettings();
     void restoreSettings();
