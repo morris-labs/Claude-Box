@@ -52,6 +52,7 @@ private slots:
     void onNew();
     void onEdit();
     void onSetupWizard();
+    void onManageSshRemotes();
     void onOpen();
     void onClose();
     void onRemove();
@@ -95,6 +96,7 @@ private:
 
     QAction *m_newAction = nullptr;
     QAction *m_setupAction = nullptr;
+    QAction *m_manageRemotesAction = nullptr;
     QAction *m_editAction = nullptr;
     QAction *m_openAction = nullptr;
     QAction *m_closeAction = nullptr;
@@ -104,19 +106,26 @@ private:
     QAction *m_detailsAction = nullptr;
     QAction *m_closeTabAction = nullptr;
 
-    // SSH tunnels (see SshTunnelSession): one background `ssh -N` per box
-    // that has any forwards configured, kept alive for as long as that
-    // box is Running. m_tunnelSignatures tracks what each session was
-    // last started with, so an edit to a box's forwards is picked up by
-    // restarting its tunnel instead of leaving the old one running.
+    // SSH tunnels (see SshTunnelSession): one background `ssh -N` per key
+    // (see syncTunnels()'s own comment for what a key looks like -- a
+    // shared catalog remote or a legacy per-box one), kept alive for as
+    // long as at least one Running box wants it. m_tunnelSignatures tracks
+    // what each session was last started with, so an edit to a remote's
+    // config is picked up by restarting its tunnel instead of leaving the
+    // old one running.
     QHash<QString, SshTunnelSession *> m_tunnels;
     QHash<QString, QString> m_tunnelSignatures;
-    // Mirrors m_tunnels (same "<boxName>#<remoteIndex>" keys) but survives
-    // a session's death: SshTunnelStatus::running goes false and lastError
-    // is filled in when a tunnel exits, instead of the key just vanishing
-    // the way m_tunnels itself would -- BoxDetailsPanel needs to be able to
-    // show "this one is down" and *why*, not just "nothing to show".
+    // Mirrors m_tunnels (same keys) but survives a session's death:
+    // SshTunnelStatus::running goes false and lastError is filled in when
+    // a tunnel exits, instead of the key just vanishing the way m_tunnels
+    // itself would -- BoxDetailsPanel needs to be able to show "this one
+    // is down" and *why*, not just "nothing to show".
     QHash<QString, SshTunnelStatus> m_tunnelStatus;
+    // Recomputed wholesale by every syncTunnels() call: which Running box
+    // names currently attach to each shared catalog remote (by name). The
+    // ref-count stopTunnelsForBox() and the "last user tears it down"
+    // logic are both built on this.
+    QHash<QString, QSet<QString>> m_remoteUsers;
 
     void buildUi();
     void buildActions();
@@ -142,14 +151,24 @@ private:
 
     // Starts/stops SshTunnelSessions to match which boxes are currently
     // Running and what each one's record asks for. Cheap to call often --
-    // it's a no-op for any box whose tunnel is already up with an
+    // it's a no-op for any remote whose tunnel is already up with an
     // unchanged configuration.
     void syncTunnels();
+    // Shared by both remote kinds syncTunnels() handles -- see its own
+    // comment. Starts or restarts the session for `key` only if it isn't
+    // already up with this exact configuration.
+    void ensureTunnel(const QString &key, const SshRemote &remote);
     void stopTunnel(const QString &key);
     void stopTunnelsForBox(const QString &boxName);
-    // Statuses for one box's remotes, in BoxRecord::sshRemotes order --
-    // what BoxDetailsPanel::setBox()'s tunnelStatuses argument is built
-    // from. Empty for a box with no record or no configured remotes.
+    // One box's remotes, fully resolved (a catalog attachment's host/
+    // identity/forwards looked up by name), in the same order
+    // tunnelStatusesForBox() below uses -- what BoxDetailsPanel::setBox()'s
+    // sshRemotes argument is built from.
+    QList<SshRemote> resolvedSshRemotesForBox(const BoxRecord &rec) const;
+    // Statuses positionally aligned with resolvedSshRemotesForBox()'s
+    // result for the same box -- what BoxDetailsPanel::setBox()'s
+    // tunnelStatuses argument is built from. Empty for a box with no
+    // record or no configured remotes.
     QList<SshTunnelStatus> tunnelStatusesForBox(const QString &boxName) const;
     // Tears a box's tunnels down and immediately calls syncTunnels() to
     // bring them back up -- the "Reconnect" button's handler. Bypasses the

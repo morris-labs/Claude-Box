@@ -4,8 +4,10 @@
 #include "BoxRecord.h"
 #include "Icons.h"
 #include "ConversationCatalog.h"
+#include "ManageSshRemotesDialog.h"
 #include "NewBoxDialog.h"
 #include "SetupWizard.h"
+#include "SshRemoteCatalog.h"
 #include "SshTunnelSession.h"
 #include "TerminalWidget.h"
 #include "Theme.h"
@@ -100,6 +102,11 @@ void MainWindow::buildActions()
     m_setupAction = new QAction(QStringLiteral("&Setup…"), this);
     m_setupAction->setStatusTip(QStringLiteral("Check Docker, the claude-code image, and SSH keypair setup"));
     connect(m_setupAction, &QAction::triggered, this, &MainWindow::onSetupWizard);
+
+    m_manageRemotesAction = new QAction(QStringLiteral("Manage SSH &Remotes…"), this);
+    m_manageRemotesAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+    m_manageRemotesAction->setStatusTip(QStringLiteral("Add, edit, or remove named SSH remotes boxes can attach to"));
+    connect(m_manageRemotesAction, &QAction::triggered, this, &MainWindow::onManageSshRemotes);
 
     m_editAction = new QAction(Icons::editBox(), QStringLiteral("&Edit Box…"), this);
     m_editAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+E")));
@@ -285,6 +292,7 @@ void MainWindow::buildMenus()
     QMenu *fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
     fileMenu->addAction(m_newAction);
     fileMenu->addAction(m_setupAction);
+    fileMenu->addAction(m_manageRemotesAction);
     fileMenu->addSeparator();
     QAction *quit = fileMenu->addAction(QStringLiteral("&Quit"), this, &QWidget::close);
     quit->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Q")));
@@ -462,7 +470,13 @@ void MainWindow::updateActionStates()
     m_removeAction->setEnabled(info && info->status == BoxInfo::Status::Stopped);
     m_purgeAction->setEnabled(info && !info->targetDir.isEmpty());
     m_closeTabAction->setEnabled(m_tabs->count() > 0);
-    m_details->setBox(info, info ? tunnelStatusesForBox(info->name) : QList<SshTunnelStatus>());
+
+    if (info) {
+        const BoxRecord rec = BoxRecord::load(info->name);
+        m_details->setBox(info, resolvedSshRemotesForBox(rec), tunnelStatusesForBox(info->name));
+    } else {
+        m_details->setBox(nullptr);
+    }
 }
 
 void MainWindow::onFilterChanged(const QString &text)
@@ -604,17 +618,32 @@ void MainWindow::closeTabForBox(const QString &name)
 
 // --- SSH tunnels ---------------------------------------------------------
 
-// A box can tunnel to any number of remotes now (a Windows machine and a
-// Mac, say, concurrently), each getting its own ssh -N process -- so
-// m_tunnels/m_tunnelSignatures are keyed by "<boxName>#<remoteIndex>",
-// not just box name. tunnelSignature() covers everything that would
-// change what `ssh` is actually asked to do, so a session already
-// running with an unchanged config is left alone rather than being torn
-// down and restarted every poll tick.
+// Two kinds of remote share m_tunnels/m_tunnelSignatures/m_tunnelStatus,
+// distinguished by key prefix:
+//
+//  - "remote:<name>" -- a named SshRemoteCatalog entry, shared by every
+//    Running box that attaches to it (BoxRecord::sshRemoteRefs). Two boxes
+//    reaching the same machine get exactly one ssh -N process between
+//    them, ref-counted via m_remoteUsers so it only tears down once the
+//    *last* box using it stops being Running -- this is what replaced the
+//    old per-box tunnel model, after a box turned out to have a duplicate
+//    remote from being configured independently in two different boxes.
+//  - "legacybox:<boxName>#<remoteIndex>" -- a legacy per-box inline remote
+//    (BoxRecord::sshRemotes), from before the catalog existed. Never
+//    shared; always fully owned by the one box that has it.
+//
+// tunnelSignature() covers everything that would change what `ssh` is
+// actually asked to do, so a session already running with an unchanged
+// configuration is left alone rather than being torn down and restarted
+// every poll tick.
 namespace {
-QString tunnelKey(const QString &boxName, int remoteIndex)
+QString tunnelKeyForRemote(const QString &remoteName)
 {
-    return boxName + QStringLiteral("#") + QString::number(remoteIndex);
+    return QStringLiteral("remote:") + remoteName;
+}
+QString tunnelKeyForLegacy(const QString &boxName, int remoteIndex)
+{
+    return QStringLiteral("legacybox:") + boxName + QStringLiteral("#") + QString::number(remoteIndex);
 }
 QString tunnelSignature(const SshRemote &remote)
 {
@@ -622,9 +651,54 @@ QString tunnelSignature(const SshRemote &remote)
 }
 }
 
+// Starts (or restarts, on a signature change) the session for `key` if it
+// isn't already up with this exact configuration; no-op otherwise. Shared
+// by every place that wants a tunnel up -- both remote kinds in
+// syncTunnels() go through this, so status bookkeeping can't drift between
+// them.
+void MainWindow::ensureTunnel(const QString &key, const SshRemote &remote)
+{
+    const QString sig = tunnelSignature(remote);
+
+    auto existing = m_tunnels.find(key);
+    if (existing != m_tunnels.end() && existing.value()->isRunning()
+        && m_tunnelSignatures.value(key) == sig) {
+        // Still up with this exact configuration. The finished-signal
+        // handler below already flips this false the moment a session
+        // dies, but keeping it current here too means a stale status can
+        // never survive more than one poll even if that handler were
+        // somehow missed.
+        m_tunnelStatus[key].running = true;
+        return;
+    }
+
+    stopTunnel(key); // torn down first if it exists (dead, or config changed)
+
+    auto *session = new SshTunnelSession(this);
+    connect(session, &SshTunnelSession::log, this, [this, key](const QString &line) {
+        m_tunnelStatus[key].lastError = line;
+        statusBar()->showMessage(QStringLiteral("ssh tunnel (%1): %2").arg(key, line), 8000);
+    });
+    connect(session, &SshTunnelSession::finished, this, [this, key](int) {
+        if (m_tunnelStatus.contains(key))
+            m_tunnelStatus[key].running = false;
+    });
+
+    const bool started = session->start(remote);
+    m_tunnels.insert(key, session);
+    m_tunnelSignatures.insert(key, sig);
+
+    SshTunnelStatus &status = m_tunnelStatus[key];
+    status.attempted = true;
+    status.running = started && session->isRunning();
+    if (started)
+        status.lastError.clear(); // drop a stale error from a previous attempt
+}
+
 void MainWindow::syncTunnels()
 {
     QSet<QString> stillWanted;
+    QHash<QString, QSet<QString>> wantedUsers; // catalog remote name -> Running box names wanting it
 
     for (int i = 0; i < m_model->rowCount(); ++i) {
         const BoxInfo *row = m_model->boxAt(i);
@@ -635,54 +709,40 @@ void MainWindow::syncTunnels()
         if (!rec.isValid())
             continue;
 
+        for (const QString &name : rec.sshRemoteRefs) {
+            if (!name.trimmed().isEmpty())
+                wantedUsers[name].insert(row->name);
+        }
+
+        // Legacy inline remotes: never shared, so no ref-counting needed --
+        // handled directly here rather than through the shared-remote loop
+        // below.
         for (int r = 0; r < rec.sshRemotes.size(); ++r) {
             const SshRemote &remote = rec.sshRemotes.at(r);
-            if (remote.forwards.isEmpty() || remote.host.trimmed().isEmpty())
+            if (!remote.isValid() || remote.forwards.isEmpty())
                 continue;
-
-            const QString key = tunnelKey(row->name, r);
+            const QString key = tunnelKeyForLegacy(row->name, r);
             stillWanted.insert(key);
-            const QString sig = tunnelSignature(remote);
-
-            auto existing = m_tunnels.find(key);
-            if (existing != m_tunnels.end() && existing.value()->isRunning()
-                && m_tunnelSignatures.value(key) == sig) {
-                // Still up with this exact configuration. The finished-signal
-                // handler below already flips this false the moment a
-                // session dies, but keeping it current here too means a
-                // stale status can never survive more than one poll even if
-                // that handler were somehow missed.
-                m_tunnelStatus[key].running = true;
-                continue;
-            }
-
-            stopTunnel(key); // torn down first if it exists (dead, or config changed)
-
-            auto *session = new SshTunnelSession(this);
-            const QString boxName = row->name;
-            connect(session, &SshTunnelSession::log, this, [this, key, boxName, r](const QString &line) {
-                m_tunnelStatus[key].lastError = line;
-                statusBar()->showMessage(
-                    QStringLiteral("%1 [remote %2] (ssh tunnel): %3").arg(boxName).arg(r).arg(line), 8000);
-            });
-            connect(session, &SshTunnelSession::finished, this, [this, key](int) {
-                if (m_tunnelStatus.contains(key))
-                    m_tunnelStatus[key].running = false;
-            });
-
-            const bool started = session->start(remote);
-            m_tunnels.insert(key, session);
-            m_tunnelSignatures.insert(key, sig);
-
-            SshTunnelStatus &status = m_tunnelStatus[key];
-            status.attempted = true;
-            status.running = started && session->isRunning();
-            if (started)
-                status.lastError.clear(); // drop a stale error from a previous attempt
+            ensureTunnel(key, remote);
         }
     }
 
-    // Anything no longer Running, or no longer configured for a tunnel.
+    m_remoteUsers = wantedUsers;
+
+    for (auto it = wantedUsers.constBegin(); it != wantedUsers.constEnd(); ++it) {
+        if (it.value().isEmpty())
+            continue;
+        const SshRemote remote = SshRemoteCatalog::load(it.key());
+        if (!remote.isValid())
+            continue; // a box attaches to a name the catalog no longer has -- nothing to tunnel
+        const QString key = tunnelKeyForRemote(it.key());
+        stillWanted.insert(key);
+        ensureTunnel(key, remote);
+    }
+
+    // Anything no longer wanted by any box: not Running any more, no
+    // longer attached/configured, or (for a shared remote) simply down to
+    // zero users.
     const QStringList toDrop = m_tunnels.keys();
     for (const QString &key : toDrop) {
         if (!stillWanted.contains(key))
@@ -702,17 +762,54 @@ void MainWindow::stopTunnel(const QString &key)
     m_tunnelStatus.remove(key);
 }
 
-// Stops every remote's tunnel for one box (there can be several -- see
-// syncTunnels()) -- used where a box itself is going away and there's no
-// reason to wait for the next poll to notice.
+// Called when one box stops being Running (or closes) and there's no
+// reason to wait for the next poll to notice. A legacy inline remote is
+// always fully owned by this box, so it's torn down outright; a shared
+// catalog remote only goes down if this was its *last* user -- otherwise
+// another Running box is still relying on it.
 void MainWindow::stopTunnelsForBox(const QString &boxName)
 {
-    const QString prefix = boxName + QStringLiteral("#");
+    const QString legacyPrefix = QStringLiteral("legacybox:") + boxName + '#';
     const QStringList keys = m_tunnels.keys();
     for (const QString &key : keys) {
-        if (key.startsWith(prefix))
+        if (key.startsWith(legacyPrefix))
             stopTunnel(key);
     }
+
+    const BoxRecord rec = BoxRecord::load(boxName);
+    for (const QString &name : rec.sshRemoteRefs) {
+        bool otherUserRunning = false;
+        for (int i = 0; i < m_model->rowCount(); ++i) {
+            const BoxInfo *row = m_model->boxAt(i);
+            if (!row || row->name == boxName || row->status != BoxInfo::Status::Running)
+                continue;
+            const BoxRecord other = BoxRecord::load(row->name);
+            if (other.isValid() && other.sshRemoteRefs.contains(name)) {
+                otherUserRunning = true;
+                break;
+            }
+        }
+        if (!otherUserRunning)
+            stopTunnel(tunnelKeyForRemote(name));
+    }
+}
+
+// Every remote one box currently references, in display order: catalog
+// attachments first (the current model), then any legacy per-box inline
+// remotes an old record still carries. tunnelStatusesForBox() below builds
+// its list in the same order, so the two stay positionally aligned for
+// BoxDetailsPanel.
+QList<SshRemote> MainWindow::resolvedSshRemotesForBox(const BoxRecord &rec) const
+{
+    QList<SshRemote> result;
+    for (const QString &name : rec.sshRemoteRefs) {
+        SshRemote remote = SshRemoteCatalog::load(name);
+        if (remote.name.isEmpty())
+            remote.name = name; // catalog entry missing/deleted -- still show *something* was expected
+        result << remote;
+    }
+    result << rec.sshRemotes;
+    return result;
 }
 
 QList<SshTunnelStatus> MainWindow::tunnelStatusesForBox(const QString &boxName) const
@@ -722,18 +819,29 @@ QList<SshTunnelStatus> MainWindow::tunnelStatusesForBox(const QString &boxName) 
         return {};
 
     QList<SshTunnelStatus> statuses;
-    statuses.reserve(rec.sshRemotes.size());
+    for (const QString &name : rec.sshRemoteRefs)
+        statuses << m_tunnelStatus.value(tunnelKeyForRemote(name));
     for (int r = 0; r < rec.sshRemotes.size(); ++r)
-        statuses << m_tunnelStatus.value(tunnelKey(boxName, r));
+        statuses << m_tunnelStatus.value(tunnelKeyForLegacy(boxName, r));
     return statuses;
 }
 
 void MainWindow::onReconnectTunnels(const QString &boxName)
 {
-    // Bypasses syncTunnels()'s usual "already up, unchanged config" skip on
-    // purpose -- the whole point of this button is to retry right now even
-    // though nothing about the configuration has changed.
-    stopTunnelsForBox(boxName);
+    const BoxRecord rec = BoxRecord::load(boxName);
+    if (!rec.isValid())
+        return;
+
+    // Legacy inline remotes: fully owned by this box, tear down outright.
+    for (int r = 0; r < rec.sshRemotes.size(); ++r)
+        stopTunnel(tunnelKeyForLegacy(boxName, r));
+
+    // Shared remotes: force a fresh reconnect for *everyone* attached to
+    // them, not just this box -- nobody using a remote wants it to stay
+    // dead, and killing+restarting it doesn't detach anyone.
+    for (const QString &name : rec.sshRemoteRefs)
+        stopTunnel(tunnelKeyForRemote(name));
+
     syncTunnels();
     updateActionStates(); // reflect the fresh (re-)attempt without waiting for the next poll
 }
@@ -836,7 +944,7 @@ void MainWindow::onNew()
     rec.effort = dlg.effort();
     rec.ports = dlg.ports();
     rec.dirs = dlg.dirs();
-    rec.sshRemotes = dlg.sshRemotes();
+    rec.sshRemoteRefs = dlg.sshRemoteRefs();
 
     if (!rec.sessionUuid.isEmpty() && !confirmConversationAdoption(rec.sessionUuid))
         return;
@@ -893,7 +1001,7 @@ void MainWindow::onEdit()
     rec.effort = dlg.effort();
     rec.ports = dlg.ports();
     rec.dirs = dlg.dirs();
-    rec.sshRemotes = dlg.sshRemotes();
+    rec.sshRemoteRefs = dlg.sshRemoteRefs();
 
     if (!rec.save()) {
         QMessageBox::warning(this, QStringLiteral("Edit Box"),
@@ -1062,6 +1170,17 @@ void MainWindow::onSetupWizard()
 {
     SetupWizard dlg(this);
     dlg.exec();
+}
+
+void MainWindow::onManageSshRemotes()
+{
+    ManageSshRemotesDialog dlg(this);
+    dlg.exec();
+    // A rename/removal/host change while boxes are already Running should
+    // take effect immediately, same as editing a box's own attachments
+    // does -- not wait for the next 3s poll.
+    syncTunnels();
+    updateActionStates();
 }
 
 void MainWindow::onAbout()

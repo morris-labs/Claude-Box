@@ -62,6 +62,8 @@ add_executable(claude-box-gui
     src/DockerBackend.h
     src/SshTunnelSession.cpp
     src/SshTunnelSession.h
+    src/SshRemoteCatalog.cpp
+    src/SshRemoteCatalog.h
     ${PTY_SESSION_SOURCE}
     src/PtySession.h
     src/TerminalWidget.cpp
@@ -70,6 +72,8 @@ add_executable(claude-box-gui
     src/NewBoxDialog.h
     src/SshForwardsDialog.cpp
     src/SshForwardsDialog.h
+    src/ManageSshRemotesDialog.cpp
+    src/ManageSshRemotesDialog.h
     src/SetupWizard.cpp
     src/SetupWizard.h
     src/CommandTerminalDialog.cpp
