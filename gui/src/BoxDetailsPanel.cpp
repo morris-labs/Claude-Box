@@ -54,25 +54,28 @@ QString forwardLabel(const QString &value)
     return QStringLiteral("%1 %2 → %3:%4").arg(dirLabel, bindLabel, parts.at(3), parts.at(4));
 }
 
-// QLayout::takeAt() hands back ownership of exactly one item and nothing
-// underneath it: for a QWidgetItem that's the widget itself, but for an
-// item wrapping a *child* layout (added via addLayout(), as the per-remote
-// rows and the Reconnect row below are), the widgets inside that child
-// layout are parented to the container widget, not to the item -- deleting
-// only the item leaks them as orphaned-but-still-visible widgets that pile
-// up and overlap on every rebuild. Recursing into any child layout before
-// deleting it is what actually empties the section instead of just its
-// top level.
+// QLayout::takeAt() hands back one QLayoutItem and does not touch anything
+// underneath it: a widget item's widget stays alive (parented to the
+// container, not the item) and a nested layout added via addLayout() -- as
+// the per-remote rows and the Reconnect row below are -- keeps its own
+// child widgets. So the widgets have to be deleted explicitly, and a
+// nested layout has to be recursed into first or its rows leak as
+// orphaned-but-still-visible widgets that pile up and overlap on every
+// rebuild.
+//
+// The nested layout itself is freed by `delete item` alone, NOT by a
+// separate `delete item->layout()`: for a sub-layout QBoxLayout wraps it
+// in an internal item whose destructor already deletes the layout, so
+// deleting both double-frees it and corrupts the heap (a later, unrelated
+// allocation then crashes). Recurse to clear it, then delete only the item.
 void clearLayout(QLayout *layout)
 {
     QLayoutItem *item;
     while ((item = layout->takeAt(0)) != nullptr) {
         if (QWidget *w = item->widget())
             delete w;
-        else if (QLayout *child = item->layout()) {
+        else if (QLayout *child = item->layout())
             clearLayout(child);
-            delete child; // takeAt() transferred ownership of the child layout too, not just this item
-        }
         delete item;
     }
 }
@@ -212,7 +215,8 @@ QLabel *BoxDetailsPanel::addField(QVBoxLayout *layout, const QString &label)
     return value;
 }
 
-void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshTunnelStatus> &tunnelStatuses)
+void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshRemote> &sshRemotes,
+                              const QList<SshTunnelStatus> &tunnelStatuses)
 {
     const bool have = info != nullptr;
     m_stack->setCurrentIndex(have ? 1 : 0);
@@ -265,7 +269,7 @@ void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshTunnelStatus> &
     m_ports->setText(rec.ports.isEmpty() ? kNone : rec.ports.join("\n"));
     m_mounts->setText(rec.dirs.isEmpty() ? kNone : rec.dirs.join("\n"));
 
-    rebuildSshSection(rec.sshRemotes, tunnelStatuses);
+    rebuildSshSection(sshRemotes, tunnelStatuses);
 }
 
 void BoxDetailsPanel::rebuildSshSection(const QList<SshRemote> &remotes,
@@ -302,7 +306,9 @@ void BoxDetailsPanel::rebuildSshSection(const QList<SshRemote> &remotes,
             dot->setToolTip(status.lastError);
         row->addWidget(dot);
 
-        auto *hostLabel = new QLabel(QStringLiteral("via %1").arg(remote.host), m_sshContainer);
+        const QString hostText = remote.name.isEmpty() ? remote.host
+            : QStringLiteral("%1 (%2)").arg(remote.name, remote.host);
+        auto *hostLabel = new QLabel(QStringLiteral("via %1").arg(hostText), m_sshContainer);
         hostLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         if (status.attempted && !status.running && !status.lastError.isEmpty())
             hostLabel->setToolTip(status.lastError);
