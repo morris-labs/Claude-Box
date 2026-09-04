@@ -9,7 +9,18 @@ Icon=@CLAUDE_BOX_ICON@
 Terminal=false
 Categories=Development;
 Keywords=claude;code;docker;container;sandbox;agent;terminal;
-StartupNotify=true
+# False, not true: SingleInstanceGuard (main.cpp) means a launch of this
+# entry does not necessarily map a new window at all -- a second launch
+# while claude-box-gui is already running hands off to it and exits
+# immediately instead. With StartupNotify=true the shell waits for a
+# freshly-launched app to map a window before it clears the busy cursor
+# it shows on click; that wait has nothing to end when this launch was
+# the secondary one, so the spinning cursor either sits until the shell's
+# own timeout or never clears. Off entirely avoids the shell ever
+# starting that wait, at the cost of no busy-cursor feedback on a launch
+# that *does* open a fresh window (a launch of this app is fast enough
+# that it isn't missed).
+StartupNotify=false
 # Matches QGuiApplication::setDesktopFileName() in main.cpp. Without the
 # two agreeing, GNOME/Wayland can't tie a window back to this entry and
 # falls back to a generic icon in the dash and alt-tab.
