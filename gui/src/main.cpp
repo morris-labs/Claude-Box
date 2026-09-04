@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "SingleInstanceGuard.h"
 #include "Theme.h"
 
 #include <QApplication>
@@ -12,6 +13,13 @@ int main(int argc, char *argv[])
     QApplication::setApplicationName("claude-box");
     QApplication::setOrganizationName("claude-box");
     QApplication::setApplicationVersion(CLAUDE_BOX_VERSION);
+
+    // Only one dashboard at a time: a second launch hands its wake-up to
+    // whichever instance is already running and exits immediately, before
+    // doing any of the icon/theme/window setup below.
+    SingleInstanceGuard instanceGuard;
+    if (!instanceGuard.isPrimary())
+        return 0;
     // Ties the window back to claude-box-gui.desktop. On Wayland there is
     // no WM_CLASS for the shell to match on, so without this GNOME shows a
     // generic icon in the dash and alt-tab even with the entry installed.
@@ -41,6 +49,13 @@ int main(int argc, char *argv[])
     Theme::apply(app);
 
     MainWindow window;
+    // A later launch reaching this instance should bring it to front, not
+    // just be silently swallowed.
+    QObject::connect(&instanceGuard, &SingleInstanceGuard::raiseRequested, &window, [&window] {
+        window.showNormal();
+        window.raise();
+        window.activateWindow();
+    });
     window.show();
 
     return app.exec();

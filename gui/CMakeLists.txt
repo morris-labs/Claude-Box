@@ -46,6 +46,8 @@ endif()
 
 add_executable(claude-box-gui
     src/main.cpp
+    src/SingleInstanceGuard.cpp
+    src/SingleInstanceGuard.h
     src/MainWindow.cpp
     src/MainWindow.h
     src/BoxTableModel.cpp
