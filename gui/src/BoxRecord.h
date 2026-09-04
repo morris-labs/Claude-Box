@@ -4,14 +4,21 @@
 #include <QStringList>
 #include <QList>
 
-// One SSH target a box tunnels through: a background `ssh -N` runs on
-// the *host* (not inside the box -- see SshTunnelSession) implementing
-// every forward below over one connection to `host`. A box can have any
-// number of these -- e.g. one tunnel to a Windows machine and a separate
-// one to a Mac, each with its own identity and forward set, running
-// concurrently. Empty `forwards` means this remote contributes no live
-// tunnel, regardless of what host/identity hold.
+// One SSH target: a background `ssh -N` runs on the *host* (not inside
+// any box -- see SshTunnelSession) implementing every forward below over
+// one connection to `host`. Empty `forwards` means this remote contributes
+// no live tunnel, regardless of what host/identity hold.
+//
+// Two distinct places construct one of these:
+//  - SshRemoteCatalog: named, host-wide, shared -- "Windows box" or "Mac
+//    box", defined once and attached to by any number of boxes that all
+//    want the same tunnel (see BoxRecord::sshRemoteRefs). `name` is set
+//    and is the catalog key.
+//  - A legacy per-box inline remote (BoxRecord::sshRemotes below) --
+//    `name` is always empty for these. Kept only so a record saved before
+//    the catalog existed keeps working; new boxes never create one.
 struct SshRemote {
+    QString name;           // catalog key; empty for a legacy per-box inline remote
     QString host;          // "user@host" or "user@host:port"
     QString identity;      // optional `-i` path; empty = agent/default key
     // "L:<bindAddr>:<bindPort>:<destHost>:<destPort>" or "R:...", repeatable.
@@ -19,6 +26,8 @@ struct SshRemote {
     // Mirrors ssh's own -L/-R argument, just with the direction letter
     // glued on front and always all five fields present.
     QStringList forwards;
+
+    bool isValid() const { return !host.trimmed().isEmpty(); }
 };
 
 // Persistent record for one claude-box container, stored as a simple
@@ -45,11 +54,21 @@ struct BoxRecord {
     QStringList ports;        // "HOST:CONTAINER", repeatable
     QStringList dirs;         // "HOSTPATH:CONTAINERPATH", repeatable
 
-    // Any number of SSH tunnels -- see SshRemote above. Persisted as
-    // indexed ssh_remote=/ssh_identity=/ssh_forward= lines (see save()/
-    // load()); a record written before multi-remote support existed had
-    // one flat ssh_host=/ssh_identity=/ssh_forward= (no index) instead,
-    // which load() reads as a single remote at index 0.
+    // Names of SshRemoteCatalog entries this box tunnels through -- the
+    // current model: a remote is defined once (host/identity/forwards) and
+    // any number of boxes can attach to it, sharing one ssh -N process
+    // instead of each redundantly opening its own connection to the same
+    // host (see MainWindow::syncTunnels(), which ref-counts by name across
+    // every Running box). Persisted as repeatable ssh_remote_ref= lines.
+    QStringList sshRemoteRefs;
+
+    // Legacy per-box inline remotes -- see SshRemote's own comment. Never
+    // written by current UI (NewBoxDialog only ever touches sshRemoteRefs
+    // now); read-only backward compatibility for a record saved before the
+    // catalog existed. Persisted as indexed ssh_remote=/ssh_identity=/
+    // ssh_forward= lines (see save()/load()); a record written before
+    // *multi*-remote support existed had one flat ssh_host=/ssh_identity=/
+    // ssh_forward= (no index) instead, which load() reads as index 0.
     QList<SshRemote> sshRemotes;
 
     // There is deliberately no remote-control field: --remote-control is
