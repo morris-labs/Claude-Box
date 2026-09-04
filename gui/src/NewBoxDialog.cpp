@@ -4,7 +4,8 @@
 #include "CollapsibleSection.h"
 #include "ConversationCatalog.h"
 #include "ContainerPaths.h"
-#include "SshForwardsDialog.h"
+#include "ManageSshRemotesDialog.h"
+#include "SshRemoteCatalog.h"
 #include "Theme.h"
 
 #include <QCheckBox>
@@ -28,6 +29,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSet>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -174,13 +176,12 @@ QStringList listValues(const QListWidget *list)
     return result;
 }
 
-// m_remoteList shows one row per m_sshRemotes entry, in the same order --
-// unlike the port/dir lists, a remote isn't a single string, so rows are
-// addressed by position (currentRow() is the index into m_sshRemotes)
-// rather than by a UserRole value.
+// Label for one SshRemoteCatalog entry's checkbox in the Remote Port
+// Forwarding section.
 QString remoteLabel(const SshRemote &r)
 {
-    return QStringLiteral("%1  (%2 forward%3)").arg(r.host.isEmpty() ? QStringLiteral("(no target set)") : r.host)
+    return QStringLiteral("%1  —  %2  (%3 forward%4)")
+        .arg(r.name, r.host.isEmpty() ? QStringLiteral("(no target set)") : r.host)
         .arg(r.forwards.size())
         .arg(r.forwards.size() == 1 ? QString() : QStringLiteral("s"));
 }
@@ -330,28 +331,33 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     connect(m_containerPortEdit, &QLineEdit::returnPressed, this, &NewBoxDialog::addPort);
     mainLayout->addWidget(m_portsSection);
 
-    // --- Remote Port Forwarding: any number of SSH tunnels, each a whole
-    // host/identity/forward-list configured via SshForwardsDialog. Rows
-    // are addressed by position (m_remoteList mirrors m_sshRemotes 1:1),
-    // not by a UserRole value the way the port/dir lists are.
+    // --- Remote Port Forwarding: which of the host-wide SshRemoteCatalog
+    // entries this box attaches to (one checkbox each -- what a remote
+    // actually connects to is defined once in the catalog and shared by
+    // every box that attaches to it). "Manage Remotes…" opens the catalog
+    // editor without leaving this dialog.
     m_remotesSection = new CollapsibleSection("Remote Port Forwarding", this);
     auto *remoteLayout = new QVBoxLayout();
-    m_remoteList = new QListWidget();
-    m_remoteList->setMaximumHeight(90);
-    connect(m_remoteList, &QListWidget::itemDoubleClicked, this, &NewBoxDialog::editSelectedRemote);
-    remoteLayout->addWidget(m_remoteList);
+    m_remoteChecks = new QWidget();
+    m_remoteChecksLayout = new QVBoxLayout(m_remoteChecks);
+    m_remoteChecksLayout->setContentsMargins(0, 0, 0, 0);
+    m_remoteChecksLayout->setSpacing(3);
+    remoteLayout->addWidget(m_remoteChecks);
+    // Only ever shown by loadForEdit() -- a legacy per-box remote (see
+    // BoxRecord::sshRemotes) has no name and nothing here to attach or
+    // detach it from; it round-trips untouched as long as this dialog
+    // never overwrites the field, which it doesn't.
+    m_legacyRemotesHint = new QLabel(this);
+    m_legacyRemotesHint->setWordWrap(true);
+    m_legacyRemotesHint->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+    m_legacyRemotesHint->setVisible(false);
+    remoteLayout->addWidget(m_legacyRemotesHint);
     auto *remoteButtons = new QHBoxLayout();
-    auto *addRemoteButton = new QPushButton("Add Remote…");
-    auto *editRemoteButton = new QPushButton("Edit Selected…");
-    auto *removeRemoteButton = new QPushButton("Remove Selected");
+    auto *manageRemotesButton = new QPushButton("Manage Remotes…");
     remoteButtons->addStretch();
-    remoteButtons->addWidget(addRemoteButton);
-    remoteButtons->addWidget(editRemoteButton);
-    remoteButtons->addWidget(removeRemoteButton);
+    remoteButtons->addWidget(manageRemotesButton);
     remoteLayout->addLayout(remoteButtons);
-    connect(addRemoteButton, &QPushButton::clicked, this, &NewBoxDialog::addRemote);
-    connect(editRemoteButton, &QPushButton::clicked, this, &NewBoxDialog::editSelectedRemote);
-    connect(removeRemoteButton, &QPushButton::clicked, this, &NewBoxDialog::removeSelectedRemote);
+    connect(manageRemotesButton, &QPushButton::clicked, this, &NewBoxDialog::openManageRemotes);
     m_remotesSection->setContentLayout(remoteLayout);
     mainLayout->addWidget(m_remotesSection);
 
@@ -387,6 +393,7 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     outerLayout->addLayout(buttonRow);
 
     reloadForDirectory();
+    refreshRemoteList(); // populate the checklist from the catalog even for a brand-new box
 }
 
 void NewBoxDialog::loadForEdit(const BoxRecord &rec)
@@ -438,13 +445,21 @@ void NewBoxDialog::loadForEdit(const BoxRecord &rec)
         addListValue(m_dirList, QStringLiteral("%1  →  %2").arg(hostRaw, containerPath), d);
     }
 
-    m_sshRemotes = rec.sshRemotes;
+    m_checkedRemoteNames = rec.sshRemoteRefs;
     refreshRemoteList();
+    if (!rec.sshRemotes.isEmpty()) {
+        m_legacyRemotesHint->setText(QStringLiteral(
+            "%1 legacy remote%2 configured directly on this box (from before shared remotes existed): "
+            "kept as-is, not shown or editable here.")
+                .arg(rec.sshRemotes.size())
+                .arg(rec.sshRemotes.size() == 1 ? QString() : QStringLiteral("s")));
+        m_legacyRemotesHint->setVisible(true);
+    }
 
     // A section with something already in it is expanded on load, so an
     // existing box's configuration is never hidden a click away.
     m_portsSection->setExpanded(!rec.ports.isEmpty());
-    m_remotesSection->setExpanded(!rec.sshRemotes.isEmpty());
+    m_remotesSection->setExpanded(!rec.sshRemoteRefs.isEmpty() || !rec.sshRemotes.isEmpty());
     m_dirsSection->setExpanded(!rec.dirs.isEmpty());
 }
 
@@ -671,56 +686,56 @@ void NewBoxDialog::removeSelectedDirMount()
         delete m_dirList->takeItem(row);
 }
 
+// Folds whatever the user has currently ticked back into
+// m_checkedRemoteNames. Called only before the checkbox list is about to be
+// rebuilt from a possibly-changed catalog (see openManageRemotes()) -- NOT
+// from the seeding path in loadForEdit(), where the boxes still hold the
+// ctor's all-unchecked state and folding them in would wipe the seed.
+void NewBoxDialog::syncCheckedRemoteNames()
+{
+    for (QCheckBox *box : m_remoteChecks->findChildren<QCheckBox *>()) {
+        const QString name = box->property("remoteName").toString();
+        if (name.isEmpty())
+            continue;
+        if (box->isChecked()) {
+            if (!m_checkedRemoteNames.contains(name))
+                m_checkedRemoteNames << name;
+        } else {
+            m_checkedRemoteNames.removeAll(name);
+        }
+    }
+}
+
 void NewBoxDialog::refreshRemoteList()
 {
-    m_remoteList->clear();
-    for (const SshRemote &r : m_sshRemotes)
-        new QListWidgetItem(remoteLabel(r), m_remoteList);
+    while (QLayoutItem *item = m_remoteChecksLayout->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+
+    const QList<SshRemote> remotes = SshRemoteCatalog::loadAll();
+    if (remotes.isEmpty()) {
+        auto *empty = new QLabel(QStringLiteral("No remotes defined yet — use “Manage Remotes…”."),
+                                 m_remoteChecks);
+        empty->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+        m_remoteChecksLayout->addWidget(empty);
+        return;
+    }
+
+    for (const SshRemote &r : remotes) {
+        auto *box = new QCheckBox(remoteLabel(r), m_remoteChecks);
+        box->setProperty("remoteName", r.name);
+        box->setChecked(m_checkedRemoteNames.contains(r.name));
+        m_remoteChecksLayout->addWidget(box);
+    }
 }
 
-void NewBoxDialog::addRemote()
+void NewBoxDialog::openManageRemotes()
 {
-    SshForwardsDialog dlg(this);
-    if (dlg.exec() != QDialog::Accepted)
-        return;
-
-    SshRemote remote;
-    remote.host = dlg.sshHost();
-    remote.identity = dlg.sshIdentity();
-    remote.forwards = dlg.sshForwards();
-    m_sshRemotes.append(remote);
-    refreshRemoteList();
-    m_remoteList->setCurrentRow(m_sshRemotes.size() - 1);
-}
-
-void NewBoxDialog::editSelectedRemote()
-{
-    const int row = m_remoteList->currentRow();
-    if (row < 0 || row >= m_sshRemotes.size())
-        return;
-
-    SshForwardsDialog dlg(this);
-    const SshRemote &existing = m_sshRemotes.at(row);
-    dlg.setConfig(existing.host, existing.identity, existing.forwards);
-    if (dlg.exec() != QDialog::Accepted)
-        return;
-
-    SshRemote remote;
-    remote.host = dlg.sshHost();
-    remote.identity = dlg.sshIdentity();
-    remote.forwards = dlg.sshForwards();
-    m_sshRemotes[row] = remote;
-    refreshRemoteList();
-    m_remoteList->setCurrentRow(row);
-}
-
-void NewBoxDialog::removeSelectedRemote()
-{
-    const int row = m_remoteList->currentRow();
-    if (row < 0 || row >= m_sshRemotes.size())
-        return;
-    m_sshRemotes.removeAt(row);
-    refreshRemoteList();
+    syncCheckedRemoteNames(); // capture the user's ticks before the list is rebuilt
+    ManageSshRemotesDialog dlg(this);
+    dlg.exec();
+    refreshRemoteList(); // pick up anything added/edited/removed, preserving this box's own checks
 }
 
 void NewBoxDialog::tryAccept()
@@ -812,7 +827,24 @@ QStringList NewBoxDialog::dirs() const
     return listValues(m_dirList);
 }
 
-QList<SshRemote> NewBoxDialog::sshRemotes() const
+QStringList NewBoxDialog::sshRemoteRefs() const
 {
-    return m_sshRemotes;
+    QStringList result;
+    QSet<QString> shown;
+    for (QCheckBox *box : m_remoteChecks->findChildren<QCheckBox *>()) {
+        const QString name = box->property("remoteName").toString();
+        if (name.isEmpty())
+            continue;
+        shown.insert(name);
+        if (box->isChecked())
+            result << name;
+    }
+    // A ref to a catalog entry that isn't shown right now (it was removed,
+    // say) has no checkbox -- keep it as-is rather than letting an unrelated
+    // edit to this box silently drop the attachment.
+    for (const QString &name : m_checkedRemoteNames) {
+        if (!shown.contains(name) && !result.contains(name))
+            result << name;
+    }
+    return result;
 }

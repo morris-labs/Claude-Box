@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BoxRecord.h" // for SshRemote -- held by value in m_sshRemotes below
+#include "BoxRecord.h" // for BoxRecord, taken by loadForEdit()
 
 #include <QDialog>
 #include <QStringList>
@@ -12,6 +12,7 @@ class QCheckBox;
 class QListWidget;
 class QDialogButtonBox;
 class QPushButton;
+class QVBoxLayout;
 class CollapsibleSection;
 
 // Form for creating a new box: target directory, which conversation to
@@ -72,9 +73,11 @@ public:
     QStringList ports() const; // "HOST:CONTAINER"
     QStringList dirs() const;  // "HOSTPATH:CONTAINERPATH"
 
-    // Any number of SSH tunnels (background `ssh -N` per remote on the
-    // host -- see SshTunnelSession), each configured via SshForwardsDialog.
-    QList<SshRemote> sshRemotes() const;
+    // Names of SshRemoteCatalog entries this box attaches to -- see
+    // BoxRecord::sshRemoteRefs. Managing what a remote actually connects to
+    // (host/identity/forwards) happens in ManageSshRemotesDialog, not here;
+    // this dialog only picks which of the catalog's remotes this box wants.
+    QStringList sshRemoteRefs() const;
 
 private slots:
     void browseForDir();
@@ -86,14 +89,19 @@ private slots:
     void removeSelectedPort();
     void addDirMount();
     void removeSelectedDirMount();
-    void addRemote();
-    void editSelectedRemote();
-    void removeSelectedRemote();
+    void openManageRemotes();
     void tryAccept();
 
 private:
     void rememberWorkspaceChoice();
+    // Repopulates m_remoteList from SshRemoteCatalog::loadAll(), ticking
+    // the rows named in m_checkedRemoteNames.
     void refreshRemoteList();
+    // Folds the widget's current tick state back into m_checkedRemoteNames
+    // (so a Manage Remotes round trip doesn't drop this box's attachments
+    // when the list is rebuilt). Not called from the loadForEdit() seeding
+    // path -- see its definition.
+    void syncCheckedRemoteNames();
 
     QLineEdit *m_dirEdit = nullptr;
     QPushButton *m_dirBrowseButton = nullptr;
@@ -117,14 +125,28 @@ private:
     QLineEdit *m_hostDirEdit = nullptr;
     QLineEdit *m_containerDirEdit = nullptr;
 
-    // One entry per remote this box tunnels to (a Windows box and a Mac,
-    // say, each with its own host/identity/forward set) -- each edited as
-    // a whole via SshForwardsDialog rather than inline, which is what
-    // keeps this dialog's own footprint bounded regardless of how much
-    // any one remote's forward list grows to.
+    // Which SshRemoteCatalog entries this box attaches to (a Windows box
+    // and a Mac, say) -- unlike ports/mounts, what a remote actually
+    // connects to is defined once, host-wide, in the catalog and only
+    // *picked* here, so two boxes reaching the same machine share one
+    // tunnel instead of each opening a redundant connection to it.
+    //
+    // One real QCheckBox per catalog entry, rebuilt into m_remoteChecksLayout
+    // by refreshRemoteList(). Deliberately *not* checkable QListWidget rows:
+    // a stylesheet ::item padding offsets the check-indicator's hit rect
+    // from where it's drawn, so the top row's box could highlight-but-not-
+    // toggle. A QCheckBox has none of that.
     CollapsibleSection *m_remotesSection = nullptr;
-    QListWidget *m_remoteList = nullptr;
-    QList<SshRemote> m_sshRemotes;
+    QWidget *m_remoteChecks = nullptr;
+    QVBoxLayout *m_remoteChecksLayout = nullptr;
+    QLabel *m_legacyRemotesHint = nullptr;
+    // Which catalog names should show checked next time refreshRemoteList()
+    // rebuilds the list -- synced from the live checkbox state at the top
+    // of every refresh, and seeded from BoxRecord::sshRemoteRefs by
+    // loadForEdit(). Needed because the list itself is rebuilt from
+    // scratch (see refreshRemoteList()) whenever the catalog might have
+    // changed, e.g. after "Manage Remotes…" returns.
+    QStringList m_checkedRemoteNames;
 
     // Directory the conversation list was built from, so
     // re-entering the same path doesn't rescan (and doesn't reset a

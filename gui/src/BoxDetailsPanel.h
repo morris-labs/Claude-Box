@@ -39,11 +39,16 @@ class BoxDetailsPanel : public QWidget {
 public:
     explicit BoxDetailsPanel(QWidget *parent = nullptr);
 
-    // Pass nullptr to show the "nothing selected" placeholder. tunnelStatuses
-    // is positional against the box's BoxRecord::sshRemotes; leave it empty
-    // if the caller has none to report (nothing configured, or box not
-    // running -- MainWindow only tracks tunnels for Running boxes).
-    void setBox(const BoxInfo *info, const QList<SshTunnelStatus> &tunnelStatuses = {});
+    // Pass nullptr to show the "nothing selected" placeholder. sshRemotes
+    // is the box's remotes already resolved (a catalog attachment's host/
+    // identity/forwards looked up by name -- see
+    // MainWindow::resolvedSshRemotesForBox()), since this panel has no
+    // catalog access of its own. tunnelStatuses is positional against it;
+    // leave both empty if the caller has nothing to report (no remotes
+    // configured, or the box isn't Running -- MainWindow only tracks
+    // tunnels for Running boxes).
+    void setBox(const BoxInfo *info, const QList<SshRemote> &sshRemotes = {},
+                const QList<SshTunnelStatus> &tunnelStatuses = {});
 
 signals:
     // The panel has no way to touch a tunnel itself -- MainWindow owns the

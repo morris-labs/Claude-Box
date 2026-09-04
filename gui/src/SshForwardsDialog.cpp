@@ -88,22 +88,26 @@ void splitHostPort(const QString &raw, QString &hostOut, int &portOut)
 SshForwardsDialog::SshForwardsDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle("SSH Forwards");
-    resize(500, 460);
+    setWindowTitle("SSH Remote");
+    resize(500, 480);
 
     auto *mainLayout = new QVBoxLayout(this);
 
     auto *targetRow = new QGridLayout();
+    m_nameEdit = new QLineEdit(this);
+    m_nameEdit->setPlaceholderText("e.g. \"Windows box\" -- how other boxes will pick this to attach to");
+    targetRow->addWidget(new QLabel("Name:", this), 0, 0);
+    targetRow->addWidget(m_nameEdit, 0, 1, 1, 2);
     m_hostEdit = new QLineEdit(this);
     m_hostEdit->setPlaceholderText("user@host[:port]");
-    targetRow->addWidget(new QLabel("SSH target:", this), 0, 0);
-    targetRow->addWidget(m_hostEdit, 0, 1, 1, 2);
+    targetRow->addWidget(new QLabel("SSH target:", this), 1, 0);
+    targetRow->addWidget(m_hostEdit, 1, 1, 1, 2);
     m_identityEdit = new QLineEdit(this);
     m_identityEdit->setPlaceholderText("default identity / ssh-agent");
     auto *identityBrowse = new QPushButton("Browse…", this);
-    targetRow->addWidget(new QLabel("Identity file:", this), 1, 0);
-    targetRow->addWidget(m_identityEdit, 1, 1);
-    targetRow->addWidget(identityBrowse, 1, 2);
+    targetRow->addWidget(new QLabel("Identity file:", this), 2, 0);
+    targetRow->addWidget(m_identityEdit, 2, 1);
+    targetRow->addWidget(identityBrowse, 2, 2);
     mainLayout->addLayout(targetRow);
 
     auto *testRow = new QHBoxLayout();
@@ -134,6 +138,10 @@ SshForwardsDialog::SshForwardsDialog(QWidget *parent)
     mainLayout->addWidget(hint);
 
     m_forwardList = new QListWidget(this);
+    // Double-click pulls a forward back into the fields below for editing,
+    // same as the "Edit Selected" button -- so a changed IP or port doesn't
+    // mean deleting the row and retyping all five fields.
+    connect(m_forwardList, &QListWidget::itemDoubleClicked, this, &SshForwardsDialog::editSelectedForward);
     mainLayout->addWidget(m_forwardList, 1);
 
     auto *forwardRow = new QGridLayout();
@@ -164,9 +172,11 @@ SshForwardsDialog::SshForwardsDialog(QWidget *parent)
 
     auto *forwardButtons = new QHBoxLayout();
     auto *addButton = new QPushButton("Add", this);
+    auto *editButton = new QPushButton("Edit Selected", this);
     auto *removeButton = new QPushButton("Remove Selected", this);
     forwardButtons->addStretch();
     forwardButtons->addWidget(addButton);
+    forwardButtons->addWidget(editButton);
     forwardButtons->addWidget(removeButton);
     mainLayout->addLayout(forwardButtons);
 
@@ -186,6 +196,7 @@ SshForwardsDialog::SshForwardsDialog(QWidget *parent)
 
     connect(identityBrowse, &QPushButton::clicked, this, &SshForwardsDialog::browseForIdentity);
     connect(addButton, &QPushButton::clicked, this, &SshForwardsDialog::addForward);
+    connect(editButton, &QPushButton::clicked, this, &SshForwardsDialog::editSelectedForward);
     connect(removeButton, &QPushButton::clicked, this, &SshForwardsDialog::removeSelectedForward);
     connect(m_bindPortEdit, &QLineEdit::returnPressed, this, &SshForwardsDialog::addForward);
     connect(m_destPortEdit, &QLineEdit::returnPressed, this, &SshForwardsDialog::addForward);
@@ -196,13 +207,20 @@ SshForwardsDialog::SshForwardsDialog(QWidget *parent)
     mainLayout->addWidget(buttons);
 }
 
-void SshForwardsDialog::setConfig(const QString &host, const QString &identity, const QStringList &forwards)
+void SshForwardsDialog::setConfig(const QString &name, const QString &host, const QString &identity,
+                                   const QStringList &forwards)
 {
+    m_nameEdit->setText(name);
     m_hostEdit->setText(host);
     m_identityEdit->setText(identity);
     m_forwardList->clear();
     for (const QString &fwd : forwards)
         addListValue(m_forwardList, forwardLabel(fwd), fwd);
+}
+
+void SshForwardsDialog::setReservedNames(const QStringList &names)
+{
+    m_reservedNames = names;
 }
 
 void SshForwardsDialog::browseForIdentity()
@@ -261,6 +279,32 @@ void SshForwardsDialog::removeSelectedForward()
     const int row = m_forwardList->currentRow();
     if (row >= 0)
         delete m_forwardList->takeItem(row);
+}
+
+// Pulls the selected forward back into the entry fields and drops it from
+// the list -- the user tweaks whatever changed and clicks Add to put it
+// back. Same take-it-out / put-it-back pattern the rest of this app's
+// list editors use, so a single edited field doesn't force a full retype.
+void SshForwardsDialog::editSelectedForward()
+{
+    const int row = m_forwardList->currentRow();
+    if (row < 0)
+        return;
+
+    const QStringList parts = m_forwardList->item(row)->data(Qt::UserRole).toString().split(':');
+    if (parts.size() != 5)
+        return; // malformed -- leave it alone rather than half-load it
+
+    const int dirIdx = m_dirCombo->findData(parts.at(0) == QLatin1String("R")
+                                            ? QStringLiteral("R") : QStringLiteral("L"));
+    m_dirCombo->setCurrentIndex(dirIdx < 0 ? 0 : dirIdx);
+    m_bindEdit->setText(parts.at(1));
+    m_bindPortEdit->setText(parts.at(2));
+    m_destHostEdit->setText(parts.at(3));
+    m_destPortEdit->setText(parts.at(4));
+
+    delete m_forwardList->takeItem(row);
+    m_bindPortEdit->setFocus();
 }
 
 // Non-interactive: BatchMode=yes means this can never block on a prompt,
@@ -399,12 +443,29 @@ void SshForwardsDialog::offerInteractiveLogin()
 
 void SshForwardsDialog::tryAccept()
 {
+    const QString name = m_nameEdit->text().trimmed();
+    if (name.isEmpty()) {
+        QMessageBox::warning(this, "SSH remote", "Give this remote a name -- it's how a box picks it to attach to.");
+        return;
+    }
+    for (const QString &reserved : m_reservedNames) {
+        if (reserved.compare(name, Qt::CaseInsensitive) == 0) {
+            QMessageBox::warning(this, "SSH remote",
+                                 QStringLiteral("\"%1\" is already used by another remote -- pick a different name.").arg(name));
+            return;
+        }
+    }
     if (!listValues(m_forwardList).isEmpty() && m_hostEdit->text().trimmed().isEmpty()) {
         QMessageBox::warning(this, "SSH forward",
                              "Add an SSH target (user@host) for the configured forward(s), or remove them.");
         return;
     }
     accept();
+}
+
+QString SshForwardsDialog::remoteName() const
+{
+    return m_nameEdit->text().trimmed();
 }
 
 QString SshForwardsDialog::sshHost() const

@@ -9,29 +9,42 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 
-// Standalone editor for one box's SSH tunnel configuration: the ssh
-// target/identity plus a repeatable list of -L/-R forwards (see
+// Editor for one named SSH remote in SshRemoteCatalog: a display name plus
+// the ssh target/identity plus a repeatable list of -L/-R forwards (see
 // SshTunnelSession for what these actually run as).
 //
 // Split out of NewBoxDialog, which used to hold this inline -- that
 // section alone had grown enough content to push NewBoxDialog's minimum
 // height past what fits on a real screen (see the "Fix New/Edit Box
-// dialog getting shoved onto another monitor" commit). NewBoxDialog now
-// just shows a one-line summary and a button that opens this.
+// dialog getting shoved onto another monitor" commit). Originally a box
+// owned its remotes directly; now a remote is defined once here and any
+// number of boxes attach to it by name (see ManageSshRemotesDialog and
+// BoxRecord::sshRemoteRefs), so two boxes reaching the same machine share
+// one tunnel instead of each opening a redundant connection to it.
 class SshForwardsDialog : public QDialog {
     Q_OBJECT
 public:
     explicit SshForwardsDialog(QWidget *parent = nullptr);
 
-    void setConfig(const QString &host, const QString &identity, const QStringList &forwards);
+    void setConfig(const QString &name, const QString &host, const QString &identity,
+                    const QStringList &forwards);
 
+    QString remoteName() const;
     QString sshHost() const;
     QString sshIdentity() const;
     QStringList sshForwards() const; // "L:bindAddr:bindPort:destHost:destPort" / "R:..."
 
+    // Names already taken by *other* catalog entries -- tryAccept() refuses
+    // to save a name in this list (case-insensitively), since two entries
+    // sharing a name would collide on the same catalog file and make
+    // BoxRecord::sshRemoteRefs ambiguous about which one it means. The
+    // entry being edited (if any) should not be included here.
+    void setReservedNames(const QStringList &names);
+
 private slots:
     void browseForIdentity();
     void addForward();
+    void editSelectedForward();
     void removeSelectedForward();
     void testConnection();
     void tryAccept();
@@ -49,6 +62,8 @@ private:
     ConnectResult probeConnection() const;
     void offerInteractiveLogin();
 
+    QLineEdit *m_nameEdit = nullptr;
+    QStringList m_reservedNames;
     QLineEdit *m_hostEdit = nullptr;
     QLineEdit *m_identityEdit = nullptr;
     QListWidget *m_forwardList = nullptr;
