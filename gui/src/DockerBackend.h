@@ -66,13 +66,21 @@ public:
     // record, and starts the container detached
     // (`docker run -d -i -t --rm ...`).
     //
-    // Two modes, chosen by whether rec.sessionUuid is already set:
-    //   empty  -- brand-new conversation: a uuid is minted and passed as
-    //             --session-id.
-    //   set    -- adopt the existing transcript with that uuid (one the
-    //             user picked out of ConversationCatalog, possibly
-    //             started outside this app) and pass --resume instead.
-    //             Workspace provisioning is skipped in this mode.
+    // Three modes:
+    //   rec.sessionUuid empty, forkFromUuid empty -- brand-new
+    //     conversation: a uuid is minted and passed as --session-id.
+    //   rec.sessionUuid set -- adopt the existing transcript with that
+    //     uuid (one the user picked out of ConversationCatalog, possibly
+    //     started outside this app) and pass --resume instead. Workspace
+    //     provisioning is skipped in this mode.
+    //   forkFromUuid set -- fork: like the brand-new case (a uuid is
+    //     minted for rec.sessionUuid and workspace provisioning runs
+    //     normally), except the container is started with `--resume
+    //     forkFromUuid --fork-session --session-id <the minted uuid>`, so
+    //     the new session starts as a copy of forkFromUuid's transcript
+    //     instead of empty. The two conversations are independent from
+    //     that point on -- later turns in either don't touch the other.
+    //     Mutually exclusive with rec.sessionUuid being set.
     //
     // workspaceSubdir asks for a folder named after the conversation
     // inside targetDir, which the agent is told to work in (the container
@@ -81,7 +89,8 @@ public:
     // one is created. Existing folders are left untouched -- that means
     // "resuming", not "starting fresh". On success rec.workspaceDir holds
     // the folder's name.
-    bool createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut) const;
+    bool createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut,
+                    const QString &forkFromUuid = QString()) const;
 
     // Restarts a known conversation's container with `claude --resume
     // <rec.sessionUuid>`. rec must already be fully populated (from
