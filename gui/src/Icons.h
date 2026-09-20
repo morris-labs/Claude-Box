@@ -21,6 +21,7 @@ QIcon open();
 QIcon closeBox();
 QIcon removeBox();
 QIcon purge();
+QIcon fork();
 QIcon refresh();
 QIcon terminal();
 

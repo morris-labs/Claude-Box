@@ -41,6 +41,14 @@ class CollapsibleSection;
 // only, or also restart the container if it's running and something that
 // needs a restart changed.
 //
+// And as the *fork* form (loadForFork(), MainWindow::onFork): creates a
+// new, independent box whose conversation starts as a copy of an existing
+// box's history (see DockerBackend::createNew's forkFromUuid). Closer to
+// the plain New Box form than to editing -- the directory is locked to
+// the source box's, but everything else (name, model/effort, ports,
+// mounts, remotes) is copied over as a starting point and stays editable,
+// because the result is a brand-new box, not a change to the source one.
+//
 // Purely a form -- MainWindow is the one that turns the result into a
 // BoxRecord and calls DockerBackend::createNew (or, in edit mode, saves
 // over an existing record).
@@ -57,10 +65,26 @@ public:
     void loadForEdit(const BoxRecord &rec);
     bool isEditMode() const { return m_editMode; }
 
+    // Switches the dialog into fork mode: seeded from `source` (whose
+    // directory and conversation the new box's history comes from) much
+    // like loadForEdit(), but this always produces a new box with its own
+    // fresh session id -- see forkSourceUuid(). The directory is locked
+    // (a fork needs source's own transcript, which is rooted there); the
+    // conversation name, model/effort, permission flag, ports, mounts,
+    // and SSH remotes all start out copied from `source` but stay
+    // editable, since the result is a genuinely new, independent box.
+    void loadForFork(const BoxRecord &source);
+    bool isForkMode() const { return m_forkMode; }
+    // Valid only in fork mode: the uuid of the conversation the new box's
+    // history is copied from. sessionUuid() stays empty in this mode --
+    // the new box always mints its own id, it just doesn't start empty.
+    QString forkSourceUuid() const { return m_forkSourceUuid; }
+
     QString targetDir() const;
     QString conversationName() const;
-    // Empty means "start a fresh conversation"; otherwise the uuid of an
-    // existing transcript the new box should resume.
+    // Empty means "start a fresh conversation" (including a fork -- see
+    // forkSourceUuid() above); otherwise the uuid of an existing
+    // transcript the new box should resume.
     QString sessionUuid() const;
     bool skipPermissions() const;
     // True when the agent should get a subfolder of the target directory
@@ -93,6 +117,10 @@ private slots:
     void tryAccept();
 
 private:
+    // Ports, mounts, and SSH remote attachments -- the part of loadForEdit()
+    // and loadForFork() that's identical between them (seeding from an
+    // existing record's fields and expanding any section that isn't empty).
+    void seedExtras(const BoxRecord &rec);
     void rememberWorkspaceChoice();
     // Repopulates m_remoteList from SshRemoteCatalog::loadAll(), ticking
     // the rows named in m_checkedRemoteNames.
@@ -166,4 +194,8 @@ private:
     QString m_autoFilledName;
     // True from loadForEdit() onward -- see isEditMode().
     bool m_editMode = false;
+    // True from loadForFork() onward -- see isForkMode().
+    bool m_forkMode = false;
+    // Set by loadForFork(); see forkSourceUuid().
+    QString m_forkSourceUuid;
 };

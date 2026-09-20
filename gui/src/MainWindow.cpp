@@ -113,6 +113,12 @@ void MainWindow::buildActions()
     m_editAction->setStatusTip(QStringLiteral("Change ports, mounts, model/effort, or SSH forwards"));
     connect(m_editAction, &QAction::triggered, this, &MainWindow::onEdit);
 
+    m_forkAction = new QAction(Icons::fork(), QStringLiteral("F&ork Conversation…"), this);
+    m_forkAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+K")));
+    m_forkAction->setStatusTip(QStringLiteral(
+        "Start a new, independent box preloaded with this one's conversation history"));
+    connect(m_forkAction, &QAction::triggered, this, &MainWindow::onFork);
+
     m_openAction = new QAction(Icons::open(), QStringLiteral("&Open"), this);
     m_openAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")));
     m_openAction->setStatusTip(QStringLiteral("Restart this box and resume its conversation"));
@@ -300,6 +306,7 @@ void MainWindow::buildMenus()
     QMenu *boxMenu = menuBar()->addMenu(QStringLiteral("&Box"));
     boxMenu->addAction(m_openAction);
     boxMenu->addAction(m_editAction);
+    boxMenu->addAction(m_forkAction);
     boxMenu->addAction(m_closeAction);
     boxMenu->addSeparator();
     boxMenu->addAction(m_removeAction);
@@ -339,6 +346,7 @@ void MainWindow::buildToolBar()
     toolbar->addSeparator();
     toolbar->addAction(m_openAction);
     toolbar->addAction(m_editAction);
+    toolbar->addAction(m_forkAction);
     toolbar->addAction(m_closeAction);
     toolbar->addSeparator();
     toolbar->addAction(m_removeAction);
@@ -461,11 +469,14 @@ void MainWindow::onBoxesLoaded()
 void MainWindow::updateActionStates()
 {
     const BoxInfo *info = selectedBoxInfo();
+    const BoxRecord rec = info ? BoxRecord::load(info->name) : BoxRecord();
     m_openAction->setEnabled(info && info->status == BoxInfo::Status::Known);
     // A box started outside this app has no record to edit -- there's
     // nothing here to change it with, so the action stays disabled rather
     // than opening a dialog just to say so.
-    m_editAction->setEnabled(info && BoxRecord::load(info->name).isValid());
+    m_editAction->setEnabled(info && rec.isValid());
+    // Same reasoning, plus there has to actually be a conversation to fork.
+    m_forkAction->setEnabled(info && rec.isValid() && !rec.sessionUuid.isEmpty());
     m_closeAction->setEnabled(info && info->status == BoxInfo::Status::Running);
     m_removeAction->setEnabled(info && info->status == BoxInfo::Status::Stopped);
     m_purgeAction->setEnabled(info && !info->targetDir.isEmpty());
@@ -494,6 +505,7 @@ void MainWindow::showTableContextMenu(const QPoint &pos)
     QMenu menu(this);
     menu.addAction(m_openAction);
     menu.addAction(m_editAction);
+    menu.addAction(m_forkAction);
     menu.addAction(m_closeAction);
     menu.addSeparator();
     menu.addAction(m_removeAction);
@@ -1030,6 +1042,53 @@ void MainWindow::onEdit()
 
     refreshBoxes();
     syncTunnels(); // pick up an SSH-forward change immediately rather than waiting for the next poll
+}
+
+// Creates a brand-new box whose conversation starts as a copy of the
+// selected box's history (DockerBackend::createNew's forkFromUuid). No
+// confirmConversationAdoption() check here: unlike adopting an existing
+// uuid, forking always mints a fresh one, so there's no shared transcript
+// for two boxes to collide on.
+void MainWindow::onFork()
+{
+    const BoxInfo *info = selectedBoxInfo();
+    if (!info)
+        return;
+
+    const BoxRecord source = BoxRecord::load(info->name);
+    if (!source.isValid() || source.sessionUuid.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Fork Conversation"),
+                             QStringLiteral("No session recorded for ") + info->name
+                             + QStringLiteral(" -- a box started outside this app can't be forked here."));
+        return;
+    }
+
+    NewBoxDialog dlg(this);
+    dlg.loadForFork(source);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    BoxRecord rec;
+    rec.targetDir = dlg.targetDir();
+    rec.conversationName = dlg.conversationName();
+    // sessionUuid left empty -- createNew mints a fresh one and seeds it
+    // from dlg.forkSourceUuid() below.
+    rec.skipPermissions = dlg.skipPermissions();
+    rec.model = dlg.model();
+    rec.effort = dlg.effort();
+    rec.ports = dlg.ports();
+    rec.dirs = dlg.dirs();
+    rec.sshRemoteRefs = dlg.sshRemoteRefs();
+
+    QString error;
+    if (!m_docker.createNew(rec, dlg.workspaceSubdir(), &error, dlg.forkSourceUuid())) {
+        QMessageBox::warning(this, QStringLiteral("Fork Conversation"),
+                             QStringLiteral("Failed to start box:\n") + error);
+        return;
+    }
+
+    refreshBoxes();
+    openTerminalTab(rec.name, rec.conversationName);
 }
 
 void MainWindow::openKnownBox(const QString &name)

@@ -51,6 +51,7 @@ private slots:
 
     void onNew();
     void onEdit();
+    void onFork();
     void onSetupWizard();
     void onManageSshRemotes();
     void onOpen();
@@ -98,6 +99,7 @@ private:
     QAction *m_setupAction = nullptr;
     QAction *m_manageRemotesAction = nullptr;
     QAction *m_editAction = nullptr;
+    QAction *m_forkAction = nullptr;
     QAction *m_openAction = nullptr;
     QAction *m_closeAction = nullptr;
     QAction *m_removeAction = nullptr;

@@ -433,6 +433,56 @@ void NewBoxDialog::loadForEdit(const BoxRecord &rec)
 
     m_skipPermsCheck->setChecked(rec.skipPermissions);
 
+    seedExtras(rec);
+}
+
+// Forks `source`'s conversation into a brand-new, independent box: same
+// directory (locked -- the fork needs source's own transcript, which is
+// rooted there), everything else copied over as an editable starting
+// point. The new box always mints its own session id (see
+// DockerBackend::createNew's forkFromUuid) rather than resuming
+// `source`'s, so unlike loadForEdit() the conversation combo isn't tied
+// to `source` at all -- it's left on "Start a new conversation" and just
+// disabled, to make clear that choice isn't live in this mode.
+void NewBoxDialog::loadForFork(const BoxRecord &source)
+{
+    m_forkMode = true;
+    m_forkSourceUuid = source.sessionUuid;
+    setWindowTitle("Fork Conversation: " + source.conversationName);
+    if (auto *ok = m_buttons->button(QDialogButtonBox::Ok))
+        ok->setText("Create Fork");
+
+    m_dirEdit->setText(source.targetDir);
+    m_dirEdit->setEnabled(false);
+    m_dirBrowseButton->setEnabled(false);
+
+    reloadForDirectory(); // populates model/effort defaults and the conversation combo
+    m_sessionCombo->setEnabled(false);
+    m_sessionHint->setText(QStringLiteral(
+        "Starts a new, independent conversation preloaded with %1's history up to now. "
+        "Later turns in either conversation don't affect the other.").arg(source.conversationName));
+
+    m_nameEdit->setText(source.conversationName + QStringLiteral(" (fork)"));
+    m_autoFilledName = m_nameEdit->text();
+
+    selectValue(m_modelCombo, source.model.isEmpty() ? kFallbackModel : source.model);
+    m_modelTouched = true;
+    selectValue(m_effortCombo, source.effort.isEmpty() ? kFallbackEffort : source.effort);
+    m_effortTouched = true;
+
+    // Carried over from source as a starting point, not locked -- see the
+    // class comment on why a fork stays closer to New Box than to Edit.
+    m_workspaceCheck->setChecked(!source.workspaceDir.isEmpty());
+    m_skipPermsCheck->setChecked(source.skipPermissions);
+
+    seedExtras(source);
+}
+
+// Ports, mounts, and SSH remote attachments -- shared by loadForEdit() and
+// loadForFork(), both of which seed the form from an existing record's
+// fields.
+void NewBoxDialog::seedExtras(const BoxRecord &rec)
+{
     for (const QString &p : rec.ports) {
         const int colon = p.indexOf(':');
         const QString host = colon >= 0 ? p.left(colon) : p;
