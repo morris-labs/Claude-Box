@@ -45,6 +45,11 @@ QString projectDirFor(const QString &targetDir);
 // empty session, which is just a worse "new conversation".
 QList<ConversationInfo> forDirectory(const QString &targetDir);
 
+// The title (custom-title > ai-title > opening prompt) for one uuid in
+// targetDir, or an empty string when the transcript is missing or has no
+// user turns. Cheaper than forDirectory() when you only need one title.
+QString titleForUuid(const QString &targetDir, const QString &uuid);
+
 // Human-readable "3h ago" / "2d ago" / absolute date for older ones.
 QString relativeTime(const QDateTime &when);
 

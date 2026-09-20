@@ -54,6 +54,11 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
+    void focusOutEvent(QFocusEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
 
 private slots:
     void onPtyData(const QByteArray &data);
@@ -77,9 +82,23 @@ private:
     int m_cursorCol = 0;
     bool m_cursorVisible = true;
 
+    // Text selection. Anchor is where the drag started; end tracks the
+    // current position. Both are -1 when no selection exists.
+    int m_selAnchorRow = -1, m_selAnchorCol = -1;
+    int m_selEndRow = -1, m_selEndCol = -1;
+    bool m_selecting = false;
+
     void setupVterm();
     void updateGridSize();
     QRect cellRectToPixels(int startRow, int endRow, int startCol, int endCol) const;
+
+    // Converts a widget pixel coordinate to a (col, row) cell position.
+    QPoint pixelToCell(const QPoint &px) const;
+    // Fills startRow/Col/endRow/Col with the normalized (row-major) selection
+    // bounds. Returns false when no selection is active.
+    bool selectionBounds(int &startRow, int &startCol, int &endRow, int &endCol) const;
+    QString selectedText() const;
+    void clearSelection();
 
     // Called by the libvterm C callback trampolines (see TerminalWidget.cpp).
     void handleDamage(int startRow, int endRow, int startCol, int endCol);
