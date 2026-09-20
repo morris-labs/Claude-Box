@@ -138,6 +138,36 @@ QIcon Icons::purge()
     }, iconColor());
 }
 
+QIcon Icons::fork()
+{
+    // Git's own glyph for the operation: one node splitting into two --
+    // the box being forked keeps going as-is, and the new box gets an
+    // independent copy of its history to continue on its own.
+    return render([](QPainter &p, const QRectF &r, qreal stroke) {
+        const qreal nodeR = stroke * 1.3;
+        const QPointF bottom(r.center().x(), r.bottom() - nodeR);
+        const QPointF topLeft(r.left() + nodeR, r.top() + nodeR);
+        const QPointF topRight(r.right() - nodeR, r.top() + nodeR);
+
+        QPainterPath left;
+        left.moveTo(topLeft);
+        left.lineTo(topLeft.x(), r.center().y());
+        left.cubicTo(topLeft.x(), bottom.y(), bottom.x(), bottom.y(), bottom.x(), bottom.y());
+        p.drawPath(left);
+
+        QPainterPath right;
+        right.moveTo(topRight);
+        right.lineTo(topRight.x(), r.center().y());
+        right.cubicTo(topRight.x(), bottom.y(), bottom.x(), bottom.y(), bottom.x(), bottom.y());
+        p.drawPath(right);
+
+        p.setBrush(p.pen().color());
+        p.drawEllipse(bottom, nodeR, nodeR);
+        p.drawEllipse(topLeft, nodeR, nodeR);
+        p.drawEllipse(topRight, nodeR, nodeR);
+    }, iconColor());
+}
+
 QIcon Icons::refresh()
 {
     return render([](QPainter &p, const QRectF &r, qreal stroke) {
