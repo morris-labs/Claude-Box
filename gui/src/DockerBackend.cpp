@@ -585,7 +585,8 @@ bool DockerBackend::runContainerViaApi(const BoxRecord &rec, const QStringList &
     return false;
 }
 
-bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut) const
+bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut,
+                              const QString &forkFromUuid) const
 {
     // A caller may hand us the uuid of a conversation that already exists
     // on disk (see ConversationCatalog / NewBoxDialog) -- typically one
@@ -594,6 +595,15 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
     // is skipped: that workflow exists to *open* a new conversation with
     // a scaffolded folder and an opening prompt, which is meaningless
     // when the conversation is already underway.
+    //
+    // forkFromUuid (mutually exclusive with rec.sessionUuid) is the other
+    // caller of --resume: MainWindow::onFork asks to start a *new* session
+    // that's preloaded with an existing one's history. That's the "brand
+    // new conversation" case as far as provisioning and naming are
+    // concerned -- a uuid still gets minted below, and a workspace folder
+    // and opening prompt still make sense -- so it doesn't count as
+    // resumeExisting here; only the claudeArgs built near the bottom
+    // differ.
     const bool resumeExisting = !rec.sessionUuid.isEmpty();
 
     QString slug;
@@ -662,7 +672,10 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
         claudeArgs << "--name" << rec.conversationName;
     if (!openingPrompt.isEmpty())
         claudeArgs << openingPrompt;
-    claudeArgs << (resumeExisting ? "--resume" : "--session-id") << rec.sessionUuid;
+    if (!forkFromUuid.isEmpty())
+        claudeArgs << "--resume" << forkFromUuid << "--fork-session" << "--session-id" << rec.sessionUuid;
+    else
+        claudeArgs << (resumeExisting ? "--resume" : "--session-id") << rec.sessionUuid;
 
     if (!runContainer(rec, claudeArgs, errorOut))
         return false;
