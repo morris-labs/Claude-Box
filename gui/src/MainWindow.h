@@ -56,6 +56,8 @@ private slots:
     void onManageSshRemotes();
     void onOpen();
     void onClose();
+    void onStopAll();
+    void onOpenExternal();
     void onRemove();
     void onPurge();
     void onAbout();
@@ -102,6 +104,8 @@ private:
     QAction *m_forkAction = nullptr;
     QAction *m_openAction = nullptr;
     QAction *m_closeAction = nullptr;
+    QAction *m_stopAllAction = nullptr;
+    QAction *m_openExternalAction = nullptr;
     QAction *m_removeAction = nullptr;
     QAction *m_purgeAction = nullptr;
     QAction *m_refreshAction = nullptr;
@@ -137,7 +141,8 @@ private:
 
     // The table is behind a filter proxy, so every row index that arrives
     // from the view has to be mapped back before it means anything.
-    const BoxInfo *selectedBoxInfo() const;
+    const BoxInfo *selectedBoxInfo() const;      // first selected row, or null
+    QList<const BoxInfo *> selectedBoxInfos() const; // all selected rows
     QString currentSelectedName() const;
     void reselectByName(const QString &name);
 

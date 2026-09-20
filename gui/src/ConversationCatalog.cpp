@@ -208,6 +208,57 @@ QList<ConversationInfo> ConversationCatalog::forDirectory(const QString &targetD
     return result;
 }
 
+QString ConversationCatalog::titleForUuid(const QString &targetDir, const QString &uuid)
+{
+    if (targetDir.isEmpty() || uuid.isEmpty())
+        return QString();
+
+    const QString path = projectDirFor(targetDir) + '/' + uuid + ".jsonl";
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return QString();
+
+    QString customTitle, aiTitle, openingPrompt;
+    int openingAttempts = 0;
+    bool hasUserTurns = false;
+
+    while (!f.atEnd()) {
+        const QByteArray line = f.readLine();
+        if (mentions(line, "\"custom-title\"")) {
+            const QJsonObject obj = QJsonDocument::fromJson(line).object();
+            if (obj.value("type").toString() == "custom-title")
+                customTitle = obj.value("customTitle").toString();
+            continue;
+        }
+        if (mentions(line, "\"ai-title\"")) {
+            const QJsonObject obj = QJsonDocument::fromJson(line).object();
+            if (obj.value("type").toString() == "ai-title")
+                aiTitle = obj.value("aiTitle").toString();
+            continue;
+        }
+        if (!mentions(line, "\"type\":\"user\"") || !mentions(line, "\"message\":{\"role\":\"user\""))
+            continue;
+        if (mentions(line, "\"isSidechain\":true") || mentions(line, "\"isMeta\":true")
+            || mentions(line, "\"tool_result\""))
+            continue;
+        hasUserTurns = true;
+        if (openingPrompt.isEmpty() && openingAttempts < 20) {
+            ++openingAttempts;
+            const QString text = textOfUserMessage(QJsonDocument::fromJson(line).object());
+            if (isUsableAsTitle(text))
+                openingPrompt = text;
+        }
+    }
+
+    if (!hasUserTurns)
+        return QString();
+    if (!customTitle.isEmpty()) return customTitle;
+    if (!aiTitle.isEmpty())     return aiTitle;
+    if (!openingPrompt.isEmpty())
+        return condense(openingPromptTitle(openingPrompt), 70);
+    return QString();
+}
+
 QString ConversationCatalog::relativeTime(const QDateTime &when)
 {
     if (!when.isValid())
