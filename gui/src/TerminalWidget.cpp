@@ -3,13 +3,20 @@
 #include "Theme.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QColor>
+#include <QContextMenuEvent>
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QGuiApplication>
 #include <QKeyEvent>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QPen>
 #include <QResizeEvent>
 
+#include <algorithm>
 #include <utility>
 
 // --- libvterm C callback trampolines -----------------------------------
@@ -56,6 +63,7 @@ TerminalWidget::TerminalWidget(QWidget *parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent);
+    setMouseTracking(true);
 
     m_font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
     m_font.setPointSize(10);
@@ -143,8 +151,11 @@ bool TerminalWidget::isRunning() const
 
 void TerminalWidget::onPtyData(const QByteArray &data)
 {
-    if (m_vterm)
+    if (m_vterm) {
+        if (m_selAnchorRow >= 0)
+            clearSelection();
         vterm_input_write(m_vterm, data.constData(), static_cast<size_t>(data.size()));
+    }
 }
 
 void TerminalWidget::onPtyFinished(int exitCode)
@@ -255,6 +266,150 @@ void TerminalWidget::resizeEvent(QResizeEvent *event)
 void TerminalWidget::focusInEvent(QFocusEvent *event)
 {
     QWidget::focusInEvent(event);
+    // Repaint the cursor cell: focused terminal shows a solid block, unfocused shows an outline.
+    update(cellRectToPixels(m_cursorRow, m_cursorRow + 1, m_cursorCol, m_cursorCol + 1));
+}
+
+void TerminalWidget::focusOutEvent(QFocusEvent *event)
+{
+    QWidget::focusOutEvent(event);
+    update(cellRectToPixels(m_cursorRow, m_cursorRow + 1, m_cursorCol, m_cursorCol + 1));
+}
+
+// -------------------------------------------------------------------------
+// Selection helpers
+
+QPoint TerminalWidget::pixelToCell(const QPoint &px) const
+{
+    return QPoint(qBound(0, px.x() / m_cellWidth, m_cols - 1),
+                  qBound(0, px.y() / m_cellHeight, m_rows - 1));
+}
+
+bool TerminalWidget::selectionBounds(int &startRow, int &startCol,
+                                     int &endRow,   int &endCol) const
+{
+    if (m_selAnchorRow < 0 || m_selEndRow < 0)
+        return false;
+    const bool anchorFirst = m_selAnchorRow < m_selEndRow
+                          || (m_selAnchorRow == m_selEndRow && m_selAnchorCol <= m_selEndCol);
+    if (anchorFirst) {
+        startRow = m_selAnchorRow; startCol = m_selAnchorCol;
+        endRow   = m_selEndRow;   endCol   = m_selEndCol;
+    } else {
+        startRow = m_selEndRow;   startCol = m_selEndCol;
+        endRow   = m_selAnchorRow; endCol   = m_selAnchorCol;
+    }
+    return startRow != endRow || startCol != endCol;
+}
+
+QString TerminalWidget::selectedText() const
+{
+    int r0, c0, r1, c1;
+    if (!m_screen || !selectionBounds(r0, c0, r1, c1))
+        return QString();
+
+    QString result;
+    for (int row = r0; row <= r1; ++row) {
+        const int colStart = (row == r0) ? c0 : 0;
+        const int colEnd   = (row == r1) ? c1 : (m_cols - 1);
+        QString rowText;
+        for (int col = colStart; col <= colEnd; ++col) {
+            VTermScreenCell cell;
+            VTermPos pos{row, col};
+            if (!vterm_screen_get_cell(m_screen, pos, &cell))
+                continue;
+            if (cell.chars[0] != 0) {
+                const char32_t ch = cell.chars[0];
+                rowText += QString::fromUcs4(&ch, 1);
+            } else {
+                rowText += ' ';
+            }
+        }
+        // Strip trailing spaces from all but the last row of the selection.
+        if (row < r1) {
+            const QString trimmed = rowText.trimmed();
+            result += (trimmed.isEmpty() ? QString() : trimmed) + '\n';
+        } else {
+            result += rowText;
+        }
+    }
+    return result;
+}
+
+void TerminalWidget::clearSelection()
+{
+    if (m_selAnchorRow < 0)
+        return;
+    const int r0 = qMin(m_selAnchorRow, m_selEndRow);
+    const int r1 = qMax(m_selAnchorRow, m_selEndRow);
+    m_selAnchorRow = m_selAnchorCol = m_selEndRow = m_selEndCol = -1;
+    update(cellRectToPixels(r0, r1 + 1, 0, m_cols));
+}
+
+void TerminalWidget::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        clearSelection();
+        const QPoint cell = pixelToCell(event->pos());
+        m_selAnchorRow = m_selEndRow = cell.y();
+        m_selAnchorCol = m_selEndCol = cell.x();
+        m_selecting = true;
+        setFocus();
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void TerminalWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_selecting && (event->buttons() & Qt::LeftButton)) {
+        const QPoint cell = pixelToCell(event->pos());
+        if (cell.y() != m_selEndRow || cell.x() != m_selEndCol) {
+            const int r0 = std::min({m_selAnchorRow, m_selEndRow, cell.y()});
+            const int r1 = std::max({m_selAnchorRow, m_selEndRow, cell.y()});
+            m_selEndRow = cell.y();
+            m_selEndCol = cell.x();
+            update(cellRectToPixels(r0, r1 + 1, 0, m_cols));
+        }
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void TerminalWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton)
+        m_selecting = false;
+    QWidget::mouseReleaseEvent(event);
+}
+
+void TerminalWidget::contextMenuEvent(QContextMenuEvent *event)
+{
+    QMenu menu(this);
+    const QString sel = selectedText();
+
+    QAction *copy = menu.addAction(QStringLiteral("Copy"), [this, sel] {
+        QGuiApplication::clipboard()->setText(sel);
+    });
+    copy->setEnabled(!sel.isEmpty());
+
+    const QString clip = QGuiApplication::clipboard()->text();
+    QAction *paste = menu.addAction(QStringLiteral("Paste"), [this, clip] {
+        if (!m_disconnected && !clip.isEmpty())
+            sendToPty(clip.toUtf8());
+    });
+    paste->setEnabled(!m_disconnected && !clip.isEmpty());
+
+    menu.addSeparator();
+
+    menu.addAction(QStringLiteral("Select All"), [this] {
+        m_selAnchorRow = 0; m_selAnchorCol = 0;
+        m_selEndRow = m_rows - 1; m_selEndCol = m_cols - 1;
+        update();
+    });
+    QAction *clearSel = menu.addAction(QStringLiteral("Clear Selection"),
+                                       [this] { clearSelection(); });
+    clearSel->setEnabled(m_selAnchorRow >= 0);
+
+    menu.exec(event->globalPos());
 }
 
 void TerminalWidget::paintEvent(QPaintEvent *event)
@@ -313,6 +468,33 @@ void TerminalWidget::paintEvent(QPaintEvent *event)
         }
     }
 
+    // Selection overlay -- painted after cells so the highlight sits on top of
+    // the text rather than behind it.
+    int selR0, selC0, selR1, selC1;
+    if (selectionBounds(selR0, selC0, selR1, selC1)) {
+        const QColor selColor(80, 140, 255, 90);
+        for (int row = selR0; row <= selR1; ++row) {
+            const int c0 = (row == selR0) ? selC0 : 0;
+            const int c1 = (row == selR1) ? selC1 + 1 : m_cols;
+            painter.fillRect(cellRectToPixels(row, row + 1, c0, c1), selColor);
+        }
+    }
+
+    // Cursor -- drawn last so it's always visible. The cell loop already
+    // swaps fg/bg for the cursor cell, but that can be invisible on
+    // default-color (near-black) cells. An explicit block guarantees it.
+    if (!m_disconnected && m_cursorVisible
+        && m_cursorRow < m_rows && m_cursorCol < m_cols) {
+        const QRect cr(m_cursorCol * m_cellWidth, m_cursorRow * m_cellHeight,
+                       m_cellWidth, m_cellHeight);
+        if (hasFocus()) {
+            painter.fillRect(cr, QColor(255, 255, 255, 110));
+        } else {
+            painter.setPen(QPen(QColor(255, 255, 255, 90)));
+            painter.drawRect(cr.adjusted(0, 0, -1, -1));
+        }
+    }
+
     if (m_disconnected) {
         painter.fillRect(rect(), QColor(0, 0, 0, 140));
         QFont banner = m_font;
@@ -344,6 +526,26 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event)
         // Nothing to type into any more; let the key bubble up so window
         // shortcuts still work while a dead tab happens to hold focus.
         event->ignore();
+        return;
+    }
+
+    // Ctrl+Shift+C/V are application chords (not sent to the PTY), handled
+    // here for copy/paste. Other Ctrl+Shift chords fall through to menu
+    // shortcuts (New Box, Close, etc.) via QWidget::keyPressEvent.
+    if ((event->modifiers() & Qt::ControlModifier) && (event->modifiers() & Qt::ShiftModifier)) {
+        if (event->key() == Qt::Key_C) {
+            const QString text = selectedText();
+            if (!text.isEmpty())
+                QGuiApplication::clipboard()->setText(text);
+            return;
+        }
+        if (event->key() == Qt::Key_V) {
+            const QString text = QGuiApplication::clipboard()->text();
+            if (!text.isEmpty())
+                sendToPty(text.toUtf8());
+            return;
+        }
+        QWidget::keyPressEvent(event);
         return;
     }
 

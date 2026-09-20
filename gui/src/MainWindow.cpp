@@ -38,6 +38,7 @@
 #include <QTabBar>
 #include <QTableView>
 #include <QTabWidget>
+#include <QProcess>
 #include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -125,8 +126,18 @@ void MainWindow::buildActions()
     connect(m_openAction, &QAction::triggered, this, &MainWindow::onOpen);
 
     m_closeAction = new QAction(Icons::closeBox(), QStringLiteral("&Close"), this);
-    m_closeAction->setStatusTip(QStringLiteral("Stop the container (the conversation stays resumable)"));
+    m_closeAction->setStatusTip(QStringLiteral("Stop the selected running container(s)"));
     connect(m_closeAction, &QAction::triggered, this, &MainWindow::onClose);
+
+    m_stopAllAction = new QAction(QStringLiteral("Stop &All Running"), this);
+    m_stopAllAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")));
+    m_stopAllAction->setStatusTip(QStringLiteral("Stop every running container"));
+    connect(m_stopAllAction, &QAction::triggered, this, &MainWindow::onStopAll);
+
+    m_openExternalAction = new QAction(QStringLiteral("Open in &Terminal (tmux)"), this);
+    m_openExternalAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+T")));
+    m_openExternalAction->setStatusTip(QStringLiteral("Open this container in an external terminal with tmux"));
+    connect(m_openExternalAction, &QAction::triggered, this, &MainWindow::onOpenExternal);
 
     m_removeAction = new QAction(Icons::removeBox(), QStringLiteral("&Remove"), this);
     m_removeAction->setStatusTip(QStringLiteral("docker rm this stopped container"));
@@ -172,7 +183,7 @@ void MainWindow::buildUi()
     m_table = new QTableView(this);
     m_table->setModel(m_proxy);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_table->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setAlternatingRowColors(true);
     m_table->setShowGrid(false);
@@ -307,7 +318,10 @@ void MainWindow::buildMenus()
     boxMenu->addAction(m_openAction);
     boxMenu->addAction(m_editAction);
     boxMenu->addAction(m_forkAction);
+    boxMenu->addSeparator();
     boxMenu->addAction(m_closeAction);
+    boxMenu->addAction(m_stopAllAction);
+    boxMenu->addAction(m_openExternalAction);
     boxMenu->addSeparator();
     boxMenu->addAction(m_removeAction);
     boxMenu->addAction(m_purgeAction);
@@ -348,6 +362,7 @@ void MainWindow::buildToolBar()
     toolbar->addAction(m_editAction);
     toolbar->addAction(m_forkAction);
     toolbar->addAction(m_closeAction);
+    toolbar->addAction(m_openExternalAction);
     toolbar->addSeparator();
     toolbar->addAction(m_removeAction);
     toolbar->addAction(m_purgeAction);
@@ -377,6 +392,18 @@ const BoxInfo *MainWindow::selectedBoxInfo() const
     if (sel.isEmpty())
         return nullptr;
     return m_model->boxAt(m_proxy->mapToSource(sel.first()).row());
+}
+
+QList<const BoxInfo *> MainWindow::selectedBoxInfos() const
+{
+    QList<const BoxInfo *> result;
+    if (!m_table->selectionModel())
+        return result;
+    for (const QModelIndex &idx : m_table->selectionModel()->selectedRows()) {
+        if (const BoxInfo *info = m_model->boxAt(m_proxy->mapToSource(idx).row()))
+            result << info;
+    }
+    return result;
 }
 
 QString MainWindow::currentSelectedName() const
@@ -468,23 +495,45 @@ void MainWindow::onBoxesLoaded()
 
 void MainWindow::updateActionStates()
 {
-    const BoxInfo *info = selectedBoxInfo();
-    const BoxRecord rec = info ? BoxRecord::load(info->name) : BoxRecord();
-    m_openAction->setEnabled(info && info->status == BoxInfo::Status::Known);
-    // A box started outside this app has no record to edit -- there's
-    // nothing here to change it with, so the action stays disabled rather
-    // than opening a dialog just to say so.
-    m_editAction->setEnabled(info && rec.isValid());
-    // Same reasoning, plus there has to actually be a conversation to fork.
-    m_forkAction->setEnabled(info && rec.isValid() && !rec.sessionUuid.isEmpty());
-    m_closeAction->setEnabled(info && info->status == BoxInfo::Status::Running);
-    m_removeAction->setEnabled(info && info->status == BoxInfo::Status::Stopped);
-    m_purgeAction->setEnabled(info && !info->targetDir.isEmpty());
+    const QList<const BoxInfo *> sel = selectedBoxInfos();
+    const BoxInfo *single = sel.size() == 1 ? sel.first() : nullptr;
+    const BoxRecord rec = single ? BoxRecord::load(single->name) : BoxRecord();
+
+    bool anyRunning = false, anyKnown = false, anyStopped = false;
+    for (const BoxInfo *info : sel) {
+        if (info->status == BoxInfo::Status::Running) anyRunning = true;
+        if (info->status == BoxInfo::Status::Known)   anyKnown   = true;
+        if (info->status == BoxInfo::Status::Stopped) anyStopped = true;
+    }
+
+    // Single-item actions: require exactly one selection.
+    m_editAction->setEnabled(single && rec.isValid());
+    m_forkAction->setEnabled(single && rec.isValid() && !rec.sessionUuid.isEmpty());
+    m_purgeAction->setEnabled(single && !single->targetDir.isEmpty());
+    m_openExternalAction->setEnabled(single && single->status == BoxInfo::Status::Running);
+
+    // Multi-item actions: any matching selection is enough.
+    m_openAction->setEnabled(anyKnown);
+    m_closeAction->setEnabled(anyRunning);
+    // Remove is only safe when nothing in the selection is still running or
+    // just known (no container to rm): enable only for pure stopped sets.
+    m_removeAction->setEnabled(anyStopped && !anyRunning && !anyKnown);
+
+    // Stop All: model-wide, not selection-gated.
+    bool anyModelRunning = false;
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        if (const BoxInfo *row = m_model->boxAt(i);
+            row && row->status == BoxInfo::Status::Running) {
+            anyModelRunning = true;
+            break;
+        }
+    }
+    m_stopAllAction->setEnabled(anyModelRunning);
+
     m_closeTabAction->setEnabled(m_tabs->count() > 0);
 
-    if (info) {
-        const BoxRecord rec = BoxRecord::load(info->name);
-        m_details->setBox(info, resolvedSshRemotesForBox(rec), tunnelStatusesForBox(info->name));
+    if (single) {
+        m_details->setBox(single, resolvedSshRemotesForBox(rec), tunnelStatusesForBox(single->name));
     } else {
         m_details->setBox(nullptr);
     }
@@ -506,7 +555,9 @@ void MainWindow::showTableContextMenu(const QPoint &pos)
     menu.addAction(m_openAction);
     menu.addAction(m_editAction);
     menu.addAction(m_forkAction);
+    menu.addSeparator();
     menu.addAction(m_closeAction);
+    menu.addAction(m_openExternalAction);
     menu.addSeparator();
     menu.addAction(m_removeAction);
     menu.addAction(m_purgeAction);
@@ -1093,11 +1144,25 @@ void MainWindow::onFork()
 
 void MainWindow::openKnownBox(const QString &name)
 {
-    const BoxRecord rec = BoxRecord::load(name);
+    BoxRecord rec = BoxRecord::load(name);
     if (!rec.isValid()) {
         QMessageBox::warning(this, QStringLiteral("Open"),
                              QStringLiteral("No record found for ") + name);
         return;
+    }
+
+    // Sync the conversation name from the transcript before reopening.
+    // Claude may have auto-generated a title since the record was created
+    // (or a different account may have renamed it). This keeps --name in
+    // sync with what the transcript actually says, which is what the user
+    // expects to see inside the Claude TUI.
+    if (!rec.sessionUuid.isEmpty() && !rec.targetDir.isEmpty()) {
+        const QString transcriptTitle =
+            ConversationCatalog::titleForUuid(rec.targetDir, rec.sessionUuid);
+        if (!transcriptTitle.isEmpty() && transcriptTitle != rec.conversationName) {
+            rec.conversationName = transcriptTitle;
+            rec.save();
+        }
     }
 
     QString error;
@@ -1113,48 +1178,134 @@ void MainWindow::openKnownBox(const QString &name)
 
 void MainWindow::onOpen()
 {
-    const BoxInfo *info = selectedBoxInfo();
-    if (!info || info->status != BoxInfo::Status::Known)
-        return;
-    openKnownBox(info->name);
+    const QStringList names = [this] {
+        QStringList r;
+        for (const BoxInfo *info : selectedBoxInfos())
+            if (info->status == BoxInfo::Status::Known)
+                r << info->name;
+        return r;
+    }();
+    for (const QString &name : names)
+        openKnownBox(name);
 }
 
 void MainWindow::onClose()
+{
+    const QStringList names = [this] {
+        QStringList r;
+        for (const BoxInfo *info : selectedBoxInfos())
+            if (info->status == BoxInfo::Status::Running)
+                r << info->name;
+        return r;
+    }();
+    for (const QString &name : names) {
+        QString error;
+        if (!m_docker.stop(name, &error))
+            QMessageBox::warning(this, QStringLiteral("Close"),
+                                 name + QStringLiteral(": ") + error);
+        else {
+            closeTabForBox(name);
+            stopTunnelsForBox(name);
+        }
+    }
+    if (!names.isEmpty())
+        refreshBoxes();
+}
+
+void MainWindow::onStopAll()
+{
+    QStringList names;
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        if (const BoxInfo *row = m_model->boxAt(i);
+            row && row->status == BoxInfo::Status::Running)
+            names << row->name;
+    }
+    if (names.isEmpty())
+        return;
+
+    if (QMessageBox::question(
+            this, QStringLiteral("Stop All"),
+            QStringLiteral("Stop %1 running box(es)?").arg(names.size()))
+        != QMessageBox::Yes)
+        return;
+
+    for (const QString &name : names) {
+        QString error;
+        if (!m_docker.stop(name, &error))
+            QMessageBox::warning(this, QStringLiteral("Stop All"),
+                                 name + QStringLiteral(": ") + error);
+        else {
+            closeTabForBox(name);
+            stopTunnelsForBox(name);
+        }
+    }
+    refreshBoxes();
+}
+
+void MainWindow::onOpenExternal()
 {
     const BoxInfo *info = selectedBoxInfo();
     if (!info || info->status != BoxInfo::Status::Running)
         return;
 
-    const QString name = info->name;
-    QString error;
-    if (!m_docker.stop(name, &error)) {
-        QMessageBox::warning(this, QStringLiteral("Close"),
-                             QStringLiteral("Failed to stop:\n") + error);
-        return;
+    // Attach to the container and attach or start a tmux session.
+    const QStringList innerCmd = {
+        "bash", "-c",
+        QStringLiteral("docker exec -it %1 bash -c 'tmux attach 2>/dev/null || tmux'")
+            .arg(info->name)
+    };
+
+    // Try terminals in preference order: $TERMINAL env var, then common ones.
+    // gnome-terminal wants `--` before the command; the rest accept `-e`.
+    struct Spec { QString term; bool gnomeStyle; };
+    const QList<Spec> candidates = {
+        {qEnvironmentVariable("TERMINAL"), false},
+        {QStringLiteral("x-terminal-emulator"), false},
+        {QStringLiteral("gnome-terminal"),      true},
+        {QStringLiteral("xterm"),               false},
+        {QStringLiteral("kitty"),               false},
+        {QStringLiteral("alacritty"),           false},
+    };
+
+    for (const Spec &s : candidates) {
+        if (s.term.trimmed().isEmpty())
+            continue;
+        const QStringList args = s.gnomeStyle
+            ? QStringList{"--"} + innerCmd
+            : QStringList{"-e"} + innerCmd;
+        if (QProcess::startDetached(s.term, args))
+            return;
     }
 
-    closeTabForBox(name);
-    stopTunnelsForBox(name); // don't wait for the next poll to notice it's no longer Running
-    refreshBoxes();
+    QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
+                         QStringLiteral("No terminal emulator found.\n"
+                         "Set $TERMINAL, or install xterm or gnome-terminal."));
 }
 
 void MainWindow::onRemove()
 {
-    const BoxInfo *info = selectedBoxInfo();
-    if (!info || info->status != BoxInfo::Status::Stopped)
+    const QStringList names = [this] {
+        QStringList r;
+        for (const BoxInfo *info : selectedBoxInfos())
+            if (info->status == BoxInfo::Status::Stopped)
+                r << info->name;
+        return r;
+    }();
+    if (names.isEmpty())
         return;
 
-    const QString name = info->name;
-    if (QMessageBox::question(this, QStringLiteral("Remove"),
-                              QStringLiteral("Remove stopped container ") + name + QStringLiteral("?"))
-        != QMessageBox::Yes)
+    const QString msg = names.size() == 1
+        ? QStringLiteral("Remove stopped container ") + names.first() + QStringLiteral("?")
+        : QStringLiteral("Remove %1 stopped containers?").arg(names.size());
+    if (QMessageBox::question(this, QStringLiteral("Remove"), msg) != QMessageBox::Yes)
         return;
 
-    QString error;
-    if (!m_docker.remove(name, &error))
-        QMessageBox::warning(this, QStringLiteral("Remove"),
-                             QStringLiteral("Failed to remove:\n") + error);
-
+    for (const QString &name : names) {
+        QString error;
+        if (!m_docker.remove(name, &error))
+            QMessageBox::warning(this, QStringLiteral("Remove"),
+                                 name + QStringLiteral(": ") + error);
+    }
     refreshBoxes();
 }
 
