@@ -468,8 +468,13 @@ void TerminalWidget::paintEvent(QPaintEvent *event)
         }
     }
 
-    // Selection overlay -- painted after cells so the highlight sits on top of
-    // the text rather than behind it.
+    // The cursor and selection overlays must draw regardless of which cell
+    // region triggered this repaint. Qt clips the painter to the dirty rect
+    // by default, so a damage event far from the cursor would silently
+    // suppress it. Disable clipping for these overlays only.
+    painter.setClipping(false);
+
+    // Selection overlay
     int selR0, selC0, selR1, selC1;
     if (selectionBounds(selR0, selC0, selR1, selC1)) {
         const QColor selColor(80, 140, 255, 90);
@@ -480,17 +485,18 @@ void TerminalWidget::paintEvent(QPaintEvent *event)
         }
     }
 
-    // Cursor -- drawn last so it's always visible. The cell loop already
-    // swaps fg/bg for the cursor cell, but that can be invisible on
-    // default-color (near-black) cells. An explicit block guarantees it.
+    // Cursor -- drawn last so it's always on top. The cell loop's color
+    // inversion can be invisible on default-color cells; this explicit block
+    // is the reliable guarantee.
     if (!m_disconnected && m_cursorVisible
         && m_cursorRow < m_rows && m_cursorCol < m_cols) {
         const QRect cr(m_cursorCol * m_cellWidth, m_cursorRow * m_cellHeight,
                        m_cellWidth, m_cellHeight);
         if (hasFocus()) {
-            painter.fillRect(cr, QColor(255, 255, 255, 110));
+            painter.fillRect(cr, QColor(255, 255, 255, 160));
         } else {
-            painter.setPen(QPen(QColor(255, 255, 255, 90)));
+            painter.setPen(QPen(QColor(255, 255, 255, 120), 1));
+            painter.setBrush(Qt::NoBrush);
             painter.drawRect(cr.adjusted(0, 0, -1, -1));
         }
     }
