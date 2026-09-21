@@ -72,6 +72,8 @@ add_executable(claude-box-gui
     src/TerminalWidget.h
     src/NewBoxDialog.cpp
     src/NewBoxDialog.h
+    src/PortAllocator.cpp
+    src/PortAllocator.h
     src/SshForwardsDialog.cpp
     src/SshForwardsDialog.h
     src/ManageSshRemotesDialog.cpp

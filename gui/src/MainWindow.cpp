@@ -6,6 +6,7 @@
 #include "ConversationCatalog.h"
 #include "ManageSshRemotesDialog.h"
 #include "NewBoxDialog.h"
+#include "PortAllocator.h"
 #include "SetupWizard.h"
 #include "SshRemoteCatalog.h"
 #include "SshTunnelSession.h"
@@ -995,6 +996,7 @@ void MainWindow::onNew()
 {
     NewBoxDialog dlg(this);
     dlg.setInitialDir(SetupWizard::defaultTargetDir());
+    dlg.preallocatePorts(PortAllocator::allocate(5, BoxRecord::loadAll()));
     if (dlg.exec() != QDialog::Accepted)
         return;
 
@@ -1116,6 +1118,10 @@ void MainWindow::onFork()
 
     NewBoxDialog dlg(this);
     dlg.loadForFork(source);
+    // Replace the source's ports (copied by loadForFork) with a fresh
+    // allocation -- the source's ports are already in use if it's running,
+    // and two boxes sharing the same docker -p bindings won't start.
+    dlg.preallocatePorts(PortAllocator::allocate(5, BoxRecord::loadAll()));
     if (dlg.exec() != QDialog::Accepted)
         return;
 
