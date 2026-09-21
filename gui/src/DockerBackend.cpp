@@ -83,6 +83,32 @@ QString humanBytes(quint64 bytes)
     return QString::number(value, 'g', 4) + units[unit];
 }
 
+// Builds the sentence added to the opening prompt when a new box has mapped
+// ports, so the agent knows which ports it can use for services that need to
+// be reached on the host via localhost. Container-side port numbers are used
+// (what the agent binds to); because auto-allocated ports are the same on
+// both sides, those numbers are also the localhost port the host dials.
+QString portHint(const QStringList &ports)
+{
+    QStringList nums;
+    for (const QString &p : ports) {
+        const int colon = p.indexOf(':');
+        const QString containerPort = colon >= 0 ? p.mid(colon + 1) : p;
+        if (!containerPort.isEmpty())
+            nums << containerPort;
+    }
+    if (nums.isEmpty())
+        return QString();
+
+    return QStringLiteral(
+        "The following container ports are mapped to the same port numbers on the "
+        "host: %1. A service you start on one of these ports inside this container "
+        "is reachable at localhost:PORT from the host. Use one of these ports for "
+        "any web server, API, or other network service that the host needs to reach "
+        "via localhost or 127.0.0.1.")
+        .arg(nums.join(QStringLiteral(", ")));
+}
+
 } // namespace
 
 bool DockerBackend::runDocker(const QStringList &args, QString *stdoutOut, QString *errorOut, int timeoutMs) const
@@ -654,6 +680,19 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
         // dashboard, a container in `docker ps` and a directory listing
         // all say the same word.
         rec.conversationName = slug;
+    }
+
+    // Tell the agent which ports it can use for services the host needs to
+    // reach. Skipped when resuming an existing session: the agent was already
+    // told at creation time and the ports haven't changed.
+    if (!resumeExisting) {
+        const QString hint = portHint(rec.ports);
+        if (!hint.isEmpty()) {
+            if (openingPrompt.isEmpty())
+                openingPrompt = hint;
+            else
+                openingPrompt += "\n\n" + hint;
+        }
     }
 
     const QString base = slug.isEmpty() ? QFileInfo(rec.targetDir).fileName() : slug;

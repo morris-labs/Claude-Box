@@ -3,6 +3,7 @@
 #include "BoxRecord.h" // for BoxRecord, taken by loadForEdit()
 
 #include <QDialog>
+#include <QList>
 #include <QStringList>
 
 class QComboBox;
@@ -79,6 +80,12 @@ public:
     // history is copied from. sessionUuid() stays empty in this mode --
     // the new box always mints its own id, it just doesn't start empty.
     QString forkSourceUuid() const { return m_forkSourceUuid; }
+
+    // Pre-fills the port list with `ports` (each mapped HOST:HOST, same port
+    // on both sides) and expands the port section. Call before exec() on a new
+    // or forked box to surface the auto-allocated ports so the user can review
+    // or remove them before confirming. Replaces any existing port entries.
+    void preallocatePorts(const QList<int> &ports);
 
     QString targetDir() const;
     QString conversationName() const;
