@@ -1,0 +1,32 @@
+#pragma once
+
+#include "BoxRecord.h"
+#include <QList>
+#include <QSet>
+
+// Allocates port blocks from a reserved range so every new box gets a set of
+// pre-mapped host ports without manual bookkeeping. The next-free pointer
+// advances after each allocation and wraps when it reaches the top of the
+// range; ports already held by a known BoxRecord are skipped during the scan,
+// so a wrap never hands out a port another box still holds.
+//
+// Allocated ports are persisted as "HOST:CONTAINER" pairs (same port on both
+// sides) in BoxRecord::ports and survive until the box is purged.
+class PortAllocator {
+public:
+    // 20000-20999: 1000 ports, enough for 200 boxes at 5 ports each, well
+    // clear of common dev-server ports (3000, 4000, 5000, 8000, 8080, 9000).
+    static constexpr int kRangeStart = 20000;
+    static constexpr int kRangeEnd   = 20999;
+
+    // Allocate `count` sequential ports not already held by any box in
+    // `existing`. The next-base pointer advances past the returned block and
+    // wraps back to kRangeStart if needed. Returns an empty list only if the
+    // entire range is occupied.
+    static QList<int> allocate(int count, const QList<BoxRecord> &existing);
+
+private:
+    static QSet<int> reservedPorts(const QList<BoxRecord> &existing);
+    static int  nextBase();
+    static void setNextBase(int port);
+};
