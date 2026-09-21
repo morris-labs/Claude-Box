@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     sudo \
+    tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # Ubuntu 24.04+ base images ship a pre-existing uid/gid-1000 "ubuntu" user
