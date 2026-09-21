@@ -513,6 +513,16 @@ void NewBoxDialog::seedExtras(const BoxRecord &rec)
     m_dirsSection->setExpanded(!rec.dirs.isEmpty());
 }
 
+void NewBoxDialog::preallocatePorts(const QList<int> &ports)
+{
+    m_portList->clear();
+    for (int port : ports) {
+        const QString p = QStringLiteral("%1:%1").arg(port);
+        addListValue(m_portList, QStringLiteral("host %1  →  box %1").arg(port), p);
+    }
+    m_portsSection->setExpanded(!ports.isEmpty());
+}
+
 void NewBoxDialog::setInitialDir(const QString &dir)
 {
     m_dirEdit->setText(dir);
