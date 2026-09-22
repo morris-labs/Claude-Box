@@ -21,8 +21,8 @@ QColor statusColor(BoxInfo::Status s)
 {
     switch (s) {
     case BoxInfo::Status::Running: return Theme::running();
-    case BoxInfo::Status::Stopped: return Theme::stopped();
-    case BoxInfo::Status::Known:   return Theme::known();
+    case BoxInfo::Status::Stopped: return Theme::known();
+    case BoxInfo::Status::Exited:  return Theme::stopped();
     }
     return Theme::known();
 }
@@ -31,8 +31,8 @@ QString statusText(BoxInfo::Status s)
 {
     switch (s) {
     case BoxInfo::Status::Running: return QStringLiteral("Running");
-    case BoxInfo::Status::Stopped: return QStringLiteral("Stopped");
-    case BoxInfo::Status::Known:   return QStringLiteral("Not running");
+    case BoxInfo::Status::Stopped: return QStringLiteral("Not running");
+    case BoxInfo::Status::Exited:  return QStringLiteral("Exited");
     }
     return QString();
 }

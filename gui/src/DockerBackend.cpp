@@ -203,14 +203,14 @@ QList<BoxInfo> DockerBackend::listBoxes(bool sampleStats) const
     if (!listViaApi(result, seen, sampleStats))
         listViaCli(result, seen, sampleStats);
 
-    // Known (reopenable): every tracked record not already accounted for.
+    // Stopped: every tracked record not already accounted for (no container).
     const QList<BoxRecord> known = BoxRecord::loadAll();
     for (const BoxRecord &rec : known) {
         if (seen.contains(rec.name))
             continue;
 
         BoxInfo info;
-        info.status = BoxInfo::Status::Known;
+        info.status = BoxInfo::Status::Stopped;
         info.name = rec.name;
         info.conversationName = rec.conversationName;
         info.targetDir = rec.targetDir;
@@ -273,7 +273,7 @@ bool DockerBackend::listViaApi(QList<BoxInfo> &result, QSet<QString> &seen, bool
             continue;
 
         BoxInfo info;
-        info.status = BoxInfo::Status::Stopped;
+        info.status = BoxInfo::Status::Exited;
         info.name = name;
         info.detail = container.value("Status").toString() + " · "
             + humanBytes(quint64(container.value("SizeRw").toDouble()))
@@ -382,7 +382,7 @@ void DockerBackend::listViaCli(QList<BoxInfo> &result, QSet<QString> &seen, bool
                 continue;
 
             BoxInfo info;
-            info.status = BoxInfo::Status::Stopped;
+            info.status = BoxInfo::Status::Exited;
             info.name = parts.at(0);
             info.detail = parts.at(1) + " · " + parts.at(2);
             result.append(info);
@@ -738,6 +738,7 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
     if (!runContainer(rec, claudeArgs, errorOut))
         return false;
 
+    rec.wasRunning = true;
     rec.save();
     return true;
 }
@@ -770,22 +771,41 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
     QStringList claudeArgs = baseClaudeArgs(rec);
     claudeArgs << "--resume" << rec.sessionUuid;
 
-    return runContainer(rec, claudeArgs, errorOut);
+    if (!runContainer(rec, claudeArgs, errorOut))
+        return false;
+
+    BoxRecord updated = rec;
+    updated.wasRunning = true;
+    updated.save();
+    return true;
 }
 
 bool DockerBackend::stop(const QString &name, QString *errorOut) const
 {
+    bool ok = false;
     if (DockerApi::isAvailable()) {
         QString error;
         DockerApi::post(QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + name + "/stop",
                         {}, &error, 20000);
         if (error.isEmpty())
-            return true;
-        if (errorOut)
-            *errorOut = error;
-        return false;
+            ok = true;
+        else {
+            if (errorOut)
+                *errorOut = error;
+            return false;
+        }
+    } else {
+        ok = runDocker({"stop", name}, nullptr, errorOut, 15000);
     }
-    return runDocker({"stop", name}, nullptr, errorOut, 15000);
+
+    if (ok) {
+        BoxRecord rec = BoxRecord::load(name);
+        if (rec.isValid()) {
+            rec.wasRunning = false;
+            rec.save();
+        }
+    }
+    return ok;
 }
 
 bool DockerBackend::remove(const QString &name, QString *errorOut) const

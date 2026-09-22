@@ -121,12 +121,12 @@ void MainWindow::buildActions()
         "Start a new, independent box preloaded with this one's conversation history"));
     connect(m_forkAction, &QAction::triggered, this, &MainWindow::onFork);
 
-    m_openAction = new QAction(Icons::open(), QStringLiteral("&Open"), this);
+    m_openAction = new QAction(Icons::open(), QStringLiteral("&Start"), this);
     m_openAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")));
-    m_openAction->setStatusTip(QStringLiteral("Restart this box and resume its conversation"));
+    m_openAction->setStatusTip(QStringLiteral("Start this box and resume its conversation"));
     connect(m_openAction, &QAction::triggered, this, &MainWindow::onOpen);
 
-    m_closeAction = new QAction(Icons::closeBox(), QStringLiteral("&Close"), this);
+    m_closeAction = new QAction(Icons::closeBox(), QStringLiteral("S&top"), this);
     m_closeAction->setStatusTip(QStringLiteral("Stop the selected running container(s)"));
     connect(m_closeAction, &QAction::triggered, this, &MainWindow::onClose);
 
@@ -134,6 +134,11 @@ void MainWindow::buildActions()
     m_stopAllAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")));
     m_stopAllAction->setStatusTip(QStringLiteral("Stop every running container"));
     connect(m_stopAllAction, &QAction::triggered, this, &MainWindow::onStopAll);
+
+    m_openAllAction = new QAction(QStringLiteral("Start All &Stopped"), this);
+    m_openAllAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+U")));
+    m_openAllAction->setStatusTip(QStringLiteral("Start every stopped box that was running before the last reboot or crash"));
+    connect(m_openAllAction, &QAction::triggered, this, &MainWindow::onOpenAll);
 
     m_openExternalAction = new QAction(QStringLiteral("Open in &Terminal (tmux)"), this);
     m_openExternalAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+T")));
@@ -322,6 +327,7 @@ void MainWindow::buildMenus()
     boxMenu->addSeparator();
     boxMenu->addAction(m_closeAction);
     boxMenu->addAction(m_stopAllAction);
+    boxMenu->addAction(m_openAllAction);
     boxMenu->addAction(m_openExternalAction);
     boxMenu->addSeparator();
     boxMenu->addAction(m_removeAction);
@@ -456,10 +462,12 @@ void MainWindow::onBoxesLoaded()
     reselectByName(selected);
     syncTunnels();
 
-    if (wasFirstLoad)
+    if (wasFirstLoad) {
         QTimer::singleShot(0, this, &MainWindow::refreshBoxes);
+        QTimer::singleShot(0, this, &MainWindow::offerResumeAfterReboot);
+    }
 
-    int running = 0, stopped = 0, known = 0;
+    int running = 0, stopped = 0, exited = 0;
     for (int i = 0; i < m_model->rowCount(); ++i) {
         const BoxInfo *info = m_model->boxAt(i);
         if (!info)
@@ -467,15 +475,15 @@ void MainWindow::onBoxesLoaded()
         switch (info->status) {
         case BoxInfo::Status::Running: ++running; break;
         case BoxInfo::Status::Stopped: ++stopped; break;
-        case BoxInfo::Status::Known:   ++known;   break;
+        case BoxInfo::Status::Exited:  ++exited;  break;
         }
     }
 
     QStringList parts;
     parts << QStringLiteral("%1 running").arg(running);
-    if (stopped > 0)
-        parts << QStringLiteral("%1 stopped").arg(stopped);
-    parts << QStringLiteral("%1 not running").arg(known);
+    parts << QStringLiteral("%1 not running").arg(stopped);
+    if (exited > 0)
+        parts << QStringLiteral("%1 exited").arg(exited);
     const int hidden = m_model->rowCount() - m_proxy->rowCount();
     if (hidden > 0)
         parts << QStringLiteral("%1 hidden by filter").arg(hidden);
@@ -500,11 +508,11 @@ void MainWindow::updateActionStates()
     const BoxInfo *single = sel.size() == 1 ? sel.first() : nullptr;
     const BoxRecord rec = single ? BoxRecord::load(single->name) : BoxRecord();
 
-    bool anyRunning = false, anyKnown = false, anyStopped = false;
+    bool anyRunning = false, anyStopped = false, anyExited = false;
     for (const BoxInfo *info : sel) {
         if (info->status == BoxInfo::Status::Running) anyRunning = true;
-        if (info->status == BoxInfo::Status::Known)   anyKnown   = true;
         if (info->status == BoxInfo::Status::Stopped) anyStopped = true;
+        if (info->status == BoxInfo::Status::Exited)  anyExited  = true;
     }
 
     // Single-item actions: require exactly one selection.
@@ -514,11 +522,11 @@ void MainWindow::updateActionStates()
     m_openExternalAction->setEnabled(single && single->status == BoxInfo::Status::Running);
 
     // Multi-item actions: any matching selection is enough.
-    m_openAction->setEnabled(anyKnown);
+    m_openAction->setEnabled(anyStopped);
     m_closeAction->setEnabled(anyRunning);
-    // Remove is only safe when nothing in the selection is still running or
-    // just known (no container to rm): enable only for pure stopped sets.
-    m_removeAction->setEnabled(anyStopped && !anyRunning && !anyKnown);
+    // Remove is only safe for exited containers (stopped but not removed --
+    // rare with --rm): disable when anything is running or just stopped.
+    m_removeAction->setEnabled(anyExited && !anyRunning && !anyStopped);
 
     // Stop All: model-wide, not selection-gated.
     bool anyModelRunning = false;
@@ -530,6 +538,19 @@ void MainWindow::updateActionStates()
         }
     }
     m_stopAllAction->setEnabled(anyModelRunning);
+
+    bool anyResumable = false;
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        const BoxInfo *row = m_model->boxAt(i);
+        if (!row || row->status != BoxInfo::Status::Stopped)
+            continue;
+        const BoxRecord rec = BoxRecord::load(row->name);
+        if (rec.isValid() && rec.wasRunning) {
+            anyResumable = true;
+            break;
+        }
+    }
+    m_openAllAction->setEnabled(anyResumable);
 
     m_closeTabAction->setEnabled(m_tabs->count() > 0);
 
@@ -626,8 +647,8 @@ void MainWindow::onRowDoubleClicked(const QModelIndex &index)
     if (!info)
         return;
 
-    if (info->status == BoxInfo::Status::Known)
-        openKnownBox(info->name);
+    if (info->status == BoxInfo::Status::Stopped)
+        startBox(info->name);
     else if (info->status == BoxInfo::Status::Running)
         openTerminalTab(info->name, info->conversationName.isEmpty() ? info->name : info->conversationName);
 }
@@ -655,7 +676,7 @@ void MainWindow::openTerminalTab(const QString &name, const QString &title)
     connect(term, &TerminalWidget::sessionFinished, this, &MainWindow::onTerminalSessionFinished);
 
     if (!term->attachToContainer(name)) {
-        QMessageBox::warning(this, QStringLiteral("Open"), QStringLiteral("Failed to attach to ") + name);
+        QMessageBox::warning(this, QStringLiteral("Start"), QStringLiteral("Failed to attach to ") + name);
         term->deleteLater();
         return;
     }
@@ -992,6 +1013,49 @@ bool MainWindow::confirmConversationAdoption(const QString &sessionUuid)
     return true;
 }
 
+void MainWindow::offerResumeAfterReboot()
+{
+    // Collect boxes that were running before the last shutdown and aren't
+    // running now. Skip the prompt entirely when any box is already running
+    // (the machine wasn't rebooted -- the user just restarted the GUI).
+    bool anyRunning = false;
+    QStringList resumable;
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        const BoxInfo *row = m_model->boxAt(i);
+        if (!row)
+            continue;
+        if (row->status == BoxInfo::Status::Running) {
+            anyRunning = true;
+            break;
+        }
+        if (row->status == BoxInfo::Status::Stopped) {
+            const BoxRecord rec = BoxRecord::load(row->name);
+            if (rec.isValid() && rec.wasRunning)
+                resumable << row->name;
+        }
+    }
+    if (anyRunning || resumable.isEmpty())
+        return;
+
+    const QString detail = resumable.size() == 1
+        ? QStringLiteral("1 box was running before the last shutdown:\n\n  %1").arg(resumable.first())
+        : QStringLiteral("%1 boxes were running before the last shutdown:\n\n  %2")
+              .arg(resumable.size())
+              .arg(resumable.join(QStringLiteral("\n  ")));
+
+    QMessageBox msg(this);
+    msg.setWindowTitle(QStringLiteral("Resume boxes?"));
+    msg.setText(QStringLiteral("Start them now?"));
+    msg.setInformativeText(detail);
+    msg.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    msg.setDefaultButton(QMessageBox::Yes);
+    if (msg.exec() != QMessageBox::Yes)
+        return;
+
+    for (const QString &name : resumable)
+        startBox(name);
+}
+
 void MainWindow::onNew()
 {
     NewBoxDialog dlg(this);
@@ -1148,11 +1212,11 @@ void MainWindow::onFork()
     openTerminalTab(rec.name, rec.conversationName);
 }
 
-void MainWindow::openKnownBox(const QString &name)
+void MainWindow::startBox(const QString &name)
 {
     BoxRecord rec = BoxRecord::load(name);
     if (!rec.isValid()) {
-        QMessageBox::warning(this, QStringLiteral("Open"),
+        QMessageBox::warning(this, QStringLiteral("Start"),
                              QStringLiteral("No record found for ") + name);
         return;
     }
@@ -1173,7 +1237,7 @@ void MainWindow::openKnownBox(const QString &name)
 
     QString error;
     if (!m_docker.reopen(rec, &error)) {
-        QMessageBox::warning(this, QStringLiteral("Open"),
+        QMessageBox::warning(this, QStringLiteral("Start"),
                              QStringLiteral("Failed to reopen:\n") + error);
         return;
     }
@@ -1187,12 +1251,12 @@ void MainWindow::onOpen()
     const QStringList names = [this] {
         QStringList r;
         for (const BoxInfo *info : selectedBoxInfos())
-            if (info->status == BoxInfo::Status::Known)
+            if (info->status == BoxInfo::Status::Stopped)
                 r << info->name;
         return r;
     }();
     for (const QString &name : names)
-        openKnownBox(name);
+        startBox(name);
 }
 
 void MainWindow::onClose()
@@ -1207,7 +1271,7 @@ void MainWindow::onClose()
     for (const QString &name : names) {
         QString error;
         if (!m_docker.stop(name, &error))
-            QMessageBox::warning(this, QStringLiteral("Close"),
+            QMessageBox::warning(this, QStringLiteral("Stop"),
                                  name + QStringLiteral(": ") + error);
         else {
             closeTabForBox(name);
@@ -1246,6 +1310,24 @@ void MainWindow::onStopAll()
         }
     }
     refreshBoxes();
+}
+
+void MainWindow::onOpenAll()
+{
+    QStringList names;
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        const BoxInfo *row = m_model->boxAt(i);
+        if (!row || row->status != BoxInfo::Status::Stopped)
+            continue;
+        const BoxRecord rec = BoxRecord::load(row->name);
+        if (rec.isValid() && rec.wasRunning)
+            names << row->name;
+    }
+    if (names.isEmpty())
+        return;
+
+    for (const QString &name : names)
+        startBox(name);
 }
 
 void MainWindow::onOpenExternal()
@@ -1293,7 +1375,7 @@ void MainWindow::onRemove()
     const QStringList names = [this] {
         QStringList r;
         for (const BoxInfo *info : selectedBoxInfos())
-            if (info->status == BoxInfo::Status::Stopped)
+            if (info->status == BoxInfo::Status::Exited)
                 r << info->name;
         return r;
     }();

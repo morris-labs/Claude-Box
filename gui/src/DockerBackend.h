@@ -10,14 +10,16 @@
 #include "BoxRecord.h"
 
 // One row of dashboard state, merged from `docker ps`/`docker ps -a` and
-// the on-disk BoxRecord for that name. Status::Known covers both "you
-// closed it" and "it crashed/host rebooted" -- docker ps is the sole
+// the on-disk BoxRecord for that name. Status::Stopped covers both "you
+// stopped it" and "it crashed/host rebooted" -- docker ps is the sole
 // ground truth for "is it running", so there's nothing else to
-// distinguish; either way, reopening starts a fresh container with
-// `claude --resume <uuid>`.
+// distinguish; either way, starting it again runs a fresh container with
+// `claude --resume <uuid>`. Status::Exited is for containers that exist
+// in `docker ps -a` but are not running (rare with --rm, only from
+// containers started outside the app or on failure).
 struct BoxInfo {
-    enum class Status { Running, Stopped, Known };
-    Status status = Status::Known;
+    enum class Status { Running, Stopped, Exited };
+    Status status = Status::Stopped;
     QString name;
     QString conversationName;
     QString targetDir;

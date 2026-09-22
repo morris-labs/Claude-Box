@@ -91,6 +91,8 @@ BoxRecord BoxRecord::load(const QString &name)
             remotesByIndex[0].host = value; // legacy: flat ssh_host=, always remote 0
         } else if (key == "ssh_remote_ref") {
             rec.sshRemoteRefs.append(value);
+        } else if (key == "was_running") {
+            rec.wasRunning = (value == "1");
         }
     }
 
@@ -127,6 +129,7 @@ bool BoxRecord::save() const
         out << "dir=" << d << '\n';
     for (const QString &refName : sshRemoteRefs)
         out << "ssh_remote_ref=" << refName << '\n';
+    out << "was_running=" << (wasRunning ? "1" : "0") << '\n';
     for (int i = 0; i < sshRemotes.size(); ++i) {
         const SshRemote &r = sshRemotes.at(i);
         out << "ssh_remote=" << i << "|" << r.host << '\n';
