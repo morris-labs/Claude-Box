@@ -135,6 +135,12 @@ private:
     QString statsDetail(const QString &id) const;
 
     bool runDocker(const QStringList &args, QString *stdoutOut, QString *errorOut, int timeoutMs) const;
+    // Polls until the container is fully removed from docker (i.e. no longer
+    // visible in `docker ps -a`). With --rm, the removal is async after the
+    // stop response, so callers that immediately reopen the same name must
+    // wait here or they'll get "name already in use". Returns true when gone,
+    // false on timeout (5 s).
+    bool waitForRemoval(const QString &name) const;
     bool runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const;
     // The API half of runContainer(): POST /containers/create + /start.
     // Returns false (without having created anything) when the API isn't
