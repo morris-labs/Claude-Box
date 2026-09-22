@@ -405,6 +405,20 @@ bool DockerBackend::isRunning(const QString &name) const
     return out.split('\n', Qt::SkipEmptyParts).contains(name);
 }
 
+// Username inside the container, derived from the host at runtime so the
+// image can be built with any USER_NAME and still match what the host expects.
+// Falls back to "user" if neither $USER (Linux/macOS) nor $USERNAME (Windows)
+// is set -- in practice one of them is always present.
+static QString containerUsername()
+{
+    QString u = qEnvironmentVariable("USER");
+    if (u.isEmpty())
+        u = qEnvironmentVariable("USERNAME");
+    if (u.isEmpty())
+        u = QStringLiteral("user");
+    return u;
+}
+
 // Everything a box is launched with, expressed once. runContainer()
 // turns it into `docker run` flags and runContainerViaApi() into a
 // create-container JSON body -- keeping the two derived from one
@@ -413,6 +427,8 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
                                                     const QStringList &claudeArgs)
 {
     LaunchSpec spec;
+    spec.containerUser = containerUsername();
+    const QString containerHome = QStringLiteral("/home/") + spec.containerUser;
     // The container-side path: identical to rec.targetDir on Linux/macOS,
     // something real (e.g. /mnt/host/c/Users/...) on Windows, where a host
     // path can't be a container path at all. See ContainerPaths.h.
@@ -420,8 +436,8 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
     spec.workingDir = containerDir;
     spec.env << "IS_SANDBOX=1";
     spec.binds << (rec.targetDir + ":" + containerDir)
-               << (QDir::homePath() + "/.claude:/home/user/.claude")
-               << (QDir::homePath() + "/.claude.json:/home/user/.claude.json");
+               << (QDir::homePath() + "/.claude:" + containerHome + "/.claude")
+               << (QDir::homePath() + "/.claude.json:" + containerHome + "/.claude.json");
 
     QString gitSetup = "git config --global --add safe.directory \"$1\"";
     // The file is checked for on the host, but the value handed to the
@@ -467,6 +483,9 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
     QString gitSetup = "git config --global --add safe.directory \"$1\"";
     const QString containerDir = ContainerPaths::hostToContainer(rec.targetDir);
 
+    const QString cliUser = containerUsername();
+    const QString cliContainerHome = QStringLiteral("/home/") + cliUser;
+
     QStringList args;
     // -i is as load-bearing as -t: without OpenStdin the container's stdin is
     // never wired to a stream, so `docker attach` can render output but has
@@ -474,12 +493,12 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
     // swallows everything you type (no trust prompt answer, no messages).
     args << "run" << "-d" << "-i" << "-t" << "--rm"
          << "--name" << rec.name
-         << "--user" << "user"
+         << "--user" << cliUser
          << "-e" << "IS_SANDBOX=1"
          << "-w" << containerDir
          << "-v" << (rec.targetDir + ":" + containerDir)
-         << "-v" << (QDir::homePath() + "/.claude:/home/user/.claude")
-         << "-v" << (QDir::homePath() + "/.claude.json:/home/user/.claude.json");
+         << "-v" << (QDir::homePath() + "/.claude:" + cliContainerHome + "/.claude")
+         << "-v" << (QDir::homePath() + "/.claude.json:" + cliContainerHome + "/.claude.json");
 
     // Container-side path, not the host one -- see launchSpec() for why.
     if (QFileInfo::exists(rec.targetDir + "/gitconfig")) {
@@ -577,7 +596,7 @@ bool DockerBackend::runContainerViaApi(const BoxRecord &rec, const QStringList &
     body.insert("Image", QStringLiteral("claude-code"));
     body.insert("Cmd", cmd);
     body.insert("Env", env);
-    body.insert("User", QStringLiteral("user"));
+    body.insert("User", spec.containerUser);
     body.insert("WorkingDir", spec.workingDir);
     // -t and -i: a tty for claude's TUI to render into, and an open stdin
     // so `docker attach` has somewhere to deliver keystrokes.

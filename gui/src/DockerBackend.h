@@ -149,6 +149,7 @@ private:
         QStringList ports;    // "HOST:CONTAINER"
         QString envFile;      // agent.env, when the target dir has one
         QString workingDir;
+        QString containerUser; // username inside the container (matches host USER)
     };
     static LaunchSpec launchSpec(const BoxRecord &rec, const QStringList &claudeArgs);
 
