@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QProcess>
+#include <QThread>
 #include <QUrl>
 #include <QSet>
 #include <QUuid>
@@ -804,8 +805,37 @@ bool DockerBackend::stop(const QString &name, QString *errorOut) const
             rec.wasRunning = false;
             rec.save();
         }
+        // With --rm, the daemon removes the container asynchronously after it
+        // exits. waitForRemoval() blocks until the name is gone from docker ps
+        // -a so that an immediate reopen() doesn't collide with the old name.
+        waitForRemoval(name);
     }
     return ok;
+}
+
+bool DockerBackend::waitForRemoval(const QString &name) const
+{
+    constexpr int kPollMs = 100;
+    constexpr int kTimeoutMs = 5000;
+    for (int elapsed = 0; elapsed < kTimeoutMs; elapsed += kPollMs) {
+        bool exists = false;
+        if (DockerApi::isAvailable()) {
+            // 404 means the container is gone; any other response means it's still there.
+            QString error;
+            DockerApi::get(QStringLiteral("/") + DockerApi::kApiVersion
+                           + "/containers/" + name + "/json", &error);
+            exists = error.isEmpty(); // no error = 200 = still exists
+        } else {
+            QString out, err;
+            if (runDocker({"ps", "-a", "--filter", "name=^" + name + "$",
+                           "--format", "{{.Names}}"}, &out, &err, 2000))
+                exists = out.trimmed() == name;
+        }
+        if (!exists)
+            return true;
+        QThread::msleep(kPollMs);
+    }
+    return false;
 }
 
 bool DockerBackend::remove(const QString &name, QString *errorOut) const
