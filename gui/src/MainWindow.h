@@ -51,12 +51,14 @@ private slots:
 
     void onNew();
     void onEdit();
+    void offerResumeAfterReboot();
     void onFork();
     void onSetupWizard();
     void onManageSshRemotes();
     void onOpen();
     void onClose();
     void onStopAll();
+    void onOpenAll();
     void onOpenExternal();
     void onRemove();
     void onPurge();
@@ -105,6 +107,7 @@ private:
     QAction *m_openAction = nullptr;
     QAction *m_closeAction = nullptr;
     QAction *m_stopAllAction = nullptr;
+    QAction *m_openAllAction = nullptr;
     QAction *m_openExternalAction = nullptr;
     QAction *m_removeAction = nullptr;
     QAction *m_purgeAction = nullptr;
@@ -150,7 +153,7 @@ private:
     // can't (or shouldn't) be adopted -- see the definition.
     bool confirmConversationAdoption(const QString &sessionUuid);
 
-    void openKnownBox(const QString &name);
+    void startBox(const QString &name);
     void openTerminalTab(const QString &name, const QString &title);
     void closeTabForBox(const QString &name);
     int tabIndexForBox(const QString &name) const;

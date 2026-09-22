@@ -10,8 +10,8 @@ class BoxTableModel : public QAbstractTableModel {
     Q_OBJECT
 public:
     // Sorting reads this rather than DisplayRole so the Status column
-    // orders by urgency (Running, then Stopped, then Known) instead of
-    // alphabetically, which would bury running boxes under "Known".
+    // orders by urgency (Running, then Stopped, then Exited) instead of
+    // alphabetically, which would bury running boxes under "Stopped".
     static constexpr int SortRole = Qt::UserRole + 1;
 
     explicit BoxTableModel(QObject *parent = nullptr);

@@ -20,9 +20,9 @@ QString statusText(BoxInfo::Status s)
     case BoxInfo::Status::Running:
         return QStringLiteral("Running");
     case BoxInfo::Status::Stopped:
-        return QStringLiteral("Stopped");
-    case BoxInfo::Status::Known:
-        return QStringLiteral("Known");
+        return QStringLiteral("Not running");
+    case BoxInfo::Status::Exited:
+        return QStringLiteral("Exited");
     }
     return QString();
 }
@@ -33,9 +33,9 @@ QColor statusColor(BoxInfo::Status s)
     case BoxInfo::Status::Running:
         return Theme::running();
     case BoxInfo::Status::Stopped:
-        return Theme::stopped();
-    case BoxInfo::Status::Known:
         return Theme::known();
+    case BoxInfo::Status::Exited:
+        return Theme::stopped();
     }
     return Theme::known();
 }
@@ -48,7 +48,7 @@ int statusRank(BoxInfo::Status s)
         return 0;
     case BoxInfo::Status::Stopped:
         return 1;
-    case BoxInfo::Status::Known:
+    case BoxInfo::Status::Exited:
         return 2;
     }
     return 3;

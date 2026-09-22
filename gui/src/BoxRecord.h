@@ -62,6 +62,12 @@ struct BoxRecord {
     // every Running box). Persisted as repeatable ssh_remote_ref= lines.
     QStringList sshRemoteRefs;
 
+    // Set when a box starts (createNew or reopen) and cleared on a deliberate
+    // stop. After a reboot all running containers vanish; this flag is what
+    // "Resume All Known" uses to distinguish boxes that were running at the
+    // time from ones the user had already closed.
+    bool wasRunning = false;
+
     // Legacy per-box inline remotes -- see SshRemote's own comment. Never
     // written by current UI (NewBoxDialog only ever touches sshRemoteRefs
     // now); read-only backward compatibility for a record saved before the
