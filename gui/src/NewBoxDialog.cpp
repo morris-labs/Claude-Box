@@ -717,8 +717,8 @@ void NewBoxDialog::addDirMount()
     const QString host = QFileInfo(hostRaw).absoluteFilePath();
     if (!QDir(host).exists()) {
         // Docker would happily create a root-owned directory here, which
-        // then isn't writable by the box's `user` user -- easier to
-        // catch it now than to debug it inside the container later.
+        // then isn't writable by the container user -- easier to catch it
+        // now than to debug it inside the container later.
         QMessageBox::warning(this, "Dir mount", host + " does not exist.");
         return;
     }
