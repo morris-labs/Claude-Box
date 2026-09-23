@@ -48,10 +48,23 @@ const QString kNoWorkspaceMarker = QStringLiteral("!");
 // `claude --effort <level>` accepts exactly these, per `claude --help`.
 const QStringList kEffortLevels = {"low", "medium", "high", "xhigh", "max"};
 
-// `claude --model` takes either one of these aliases ("an alias for the
-// latest model") or a full model name like claude-fable-5 -- which is why
-// the combo is editable rather than a fixed list.
+// `claude --model` accepts short aliases ("an alias for the latest model")
+// or full model IDs. The combo is editable so the user can type any value.
 const QStringList kModelAliases = {"opus", "sonnet", "haiku", "fable"};
+
+// Full model IDs, newest first. The empty string inserts a visual separator
+// in the combo between the aliases above and these pinned IDs.
+const QStringList kModelIds = {
+    QString(),              // separator
+    QStringLiteral("claude-fable-5"),
+    QStringLiteral("claude-opus-5"),
+    QStringLiteral("claude-sonnet-5"),
+    QStringLiteral("claude-opus-4-8"),
+    QStringLiteral("claude-opus-4-7"),
+    QStringLiteral("claude-opus-4-6"),
+    QStringLiteral("claude-sonnet-4-6"),
+    QStringLiteral("claude-haiku-4-5"),
+};
 
 // Used only when the settings files name nothing at all, so that the
 // combos always open on a real value rather than a placeholder.
@@ -270,6 +283,14 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     m_modelCombo->setInsertPolicy(QComboBox::NoInsert);
     for (const QString &alias : kModelAliases)
         m_modelCombo->addItem(alias, alias);
+    for (const QString &id : kModelIds) {
+        if (id.isEmpty()) {
+            // Visual separator between aliases and full model IDs.
+            m_modelCombo->insertSeparator(m_modelCombo->count());
+        } else {
+            m_modelCombo->addItem(id, id);
+        }
+    }
     form->addRow("Model:", m_modelCombo);
 
     m_effortCombo = new QComboBox(this);
