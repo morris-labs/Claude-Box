@@ -48,14 +48,8 @@ const QString kNoWorkspaceMarker = QStringLiteral("!");
 // `claude --effort <level>` accepts exactly these, per `claude --help`.
 const QStringList kEffortLevels = {"low", "medium", "high", "xhigh", "max"};
 
-// `claude --model` accepts short aliases ("an alias for the latest model")
-// or full model IDs. The combo is editable so the user can type any value.
-const QStringList kModelAliases = {"opus", "sonnet", "haiku", "fable"};
-
-// Full model IDs, newest first. The empty string inserts a visual separator
-// in the combo between the aliases above and these pinned IDs.
+// Full model IDs, newest first.
 const QStringList kModelIds = {
-    QString(),              // separator
     QStringLiteral("claude-fable-5"),
     QStringLiteral("claude-opus-5"),
     QStringLiteral("claude-sonnet-5"),
@@ -68,7 +62,7 @@ const QStringList kModelIds = {
 
 // Used only when the settings files name nothing at all, so that the
 // combos always open on a real value rather than a placeholder.
-const QString kFallbackModel = QStringLiteral("opus");
+const QString kFallbackModel = QStringLiteral("claude-opus-5");
 const QString kFallbackEffort = QStringLiteral("high");
 
 // What `claude` itself would pick for `key`, read from the same files it
@@ -96,9 +90,9 @@ QString settingsValue(const QString &targetDir, const QString &key)
     return QString();
 }
 
-// Selects `value` in a combo, adding it first if it isn't one of the
-// known choices -- settings can name a pinned model like claude-opus-5,
-// and dropping it on the floor would silently change which model runs.
+// Selects `value` in a combo. If the value isn't one of the listed choices
+// (e.g. a legacy alias stored in an old record) it is inserted at the top
+// so the box opens on exactly what was saved, not silently on the first item.
 void selectValue(QComboBox *combo, const QString &value)
 {
     const int existing = combo->findData(value);
@@ -279,18 +273,9 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     // with, and a placeholder makes you go and look that up elsewhere.
     // The flag is then always passed explicitly.
     m_modelCombo = new QComboBox(this);
-    m_modelCombo->setEditable(true);
-    m_modelCombo->setInsertPolicy(QComboBox::NoInsert);
-    for (const QString &alias : kModelAliases)
-        m_modelCombo->addItem(alias, alias);
-    for (const QString &id : kModelIds) {
-        if (id.isEmpty()) {
-            // Visual separator between aliases and full model IDs.
-            m_modelCombo->insertSeparator(m_modelCombo->count());
-        } else {
-            m_modelCombo->addItem(id, id);
-        }
-    }
+    m_modelCombo->setEditable(false);
+    for (const QString &id : kModelIds)
+        m_modelCombo->addItem(id, id);
     form->addRow("Model:", m_modelCombo);
 
     m_effortCombo = new QComboBox(this);
