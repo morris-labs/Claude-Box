@@ -7,6 +7,7 @@
 #include "DockerBackend.h"
 
 class QLabel;
+class QPushButton;
 class QStackedWidget;
 class QVBoxLayout;
 class CollapsibleSection;
@@ -54,6 +55,8 @@ signals:
     // The panel has no way to touch a tunnel itself -- MainWindow owns the
     // SshTunnelSessions -- so the "Reconnect" button just asks for one.
     void reconnectRequested(const QString &boxName);
+    // Emitted when the user picks a new location for a missing directory.
+    void relinkRequested(const QString &boxName, const QString &newDir);
 
 private:
     // Two pages rather than show/hide on individual widgets: the
@@ -69,6 +72,7 @@ private:
 
     QLabel *m_conversation = nullptr;
     QLabel *m_directory = nullptr;
+    QPushButton *m_relinkButton = nullptr;
     QLabel *m_sessionUuid = nullptr;
     QLabel *m_flags = nullptr;
     QLabel *m_ports = nullptr;

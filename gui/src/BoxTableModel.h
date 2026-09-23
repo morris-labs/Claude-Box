@@ -12,7 +12,10 @@ public:
     // Sorting reads this rather than DisplayRole so the Status column
     // orders by urgency (Running, then Stopped, then Exited) instead of
     // alphabetically, which would bury running boxes under "Stopped".
-    static constexpr int SortRole = Qt::UserRole + 1;
+    static constexpr int SortRole  = Qt::UserRole + 1;
+    // Float cpuPct (0-100, or -1 if no sample yet). Read by UsageBarDelegate
+    // on the Usage column.
+    static constexpr int StatsRole = Qt::UserRole + 10;
 
     explicit BoxTableModel(QObject *parent = nullptr);
 

@@ -12,7 +12,8 @@ constexpr int ColName = 1;
 constexpr int ColConversation = 2;
 constexpr int ColDirectory = 3;
 constexpr int ColDetails = 4;
-constexpr int ColumnCount = 5;
+constexpr int ColUsage = 5;
+constexpr int ColumnCount = 6;
 
 QString statusText(BoxInfo::Status s)
 {
@@ -66,6 +67,12 @@ QString tooltipFor(const BoxInfo &b)
         lines << b.detail;
     if (!b.stats.isEmpty())
         lines << b.stats;
+    if (b.cpuPct >= 0.0f)
+        lines << QStringLiteral("cpu %1%").arg(double(b.cpuPct), 0, 'f', 1);
+    if (b.memLimitBytes > 0) {
+        const auto pct = int(double(b.memUsedBytes) / double(b.memLimitBytes) * 100.0 + 0.5);
+        lines << QStringLiteral("mem %1%").arg(pct);
+    }
     return lines.join(QLatin1Char('\n'));
 }
 }
@@ -105,9 +112,16 @@ QVariant BoxTableModel::data(const QModelIndex &index, int role) const
             return b.targetDir;
         case ColDetails:
             return b.detail;
+        case ColUsage:
+            return QVariant(); // painted entirely by UsageBarDelegate
         default:
             return QVariant();
         }
+
+    case BoxTableModel::StatsRole:
+        if (index.column() == ColUsage)
+            return QVariant(b.cpuPct);
+        return QVariant();
 
     case Qt::DecorationRole:
         // Colored dot beside the status word: scanning a dozen rows for
@@ -158,6 +172,8 @@ QVariant BoxTableModel::headerData(int section, Qt::Orientation orientation, int
         return QStringLiteral("Directory");
     case ColDetails:
         return QStringLiteral("Details");
+    case ColUsage:
+        return QStringLiteral("CPU %");
     default:
         return QVariant();
     }
