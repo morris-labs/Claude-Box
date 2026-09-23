@@ -256,7 +256,7 @@ bool DockerBackend::listViaApi(QList<BoxInfo> &result, QSet<QString> &seen, bool
         }
 
         if (sampleStats)
-            info.stats = statsDetail(container.value("Id").toString());
+            info.stats = statsDetail(container.value("Id").toString(), info);
 
         result.append(info);
         seen.insert(info.name);
@@ -289,7 +289,7 @@ bool DockerBackend::listViaApi(QList<BoxInfo> &result, QSet<QString> &seen, bool
 // One sample of a container's counters, turned into the same
 // "cpu N% · mem A / B" string the CLI path produces. CPU is a rate, so it
 // needs the previous tick's sample; memory is absolute and always shown.
-QString DockerBackend::statsDetail(const QString &id) const
+QString DockerBackend::statsDetail(const QString &id, BoxInfo &out) const
 {
     if (id.isEmpty())
         return QString();
@@ -313,13 +313,14 @@ QString DockerBackend::statsDetail(const QString &id) const
     sample.onlineCpus = cpu.value("online_cpus").toInt(1);
 
     QString cpuText;
+    double cpuPctValue = -1.0;
     const auto previous = m_prevCpu.constFind(id);
     if (previous != m_prevCpu.constEnd() && sample.systemUsage > previous->systemUsage
         && sample.containerUsage >= previous->containerUsage) {
         const double containerDelta = double(sample.containerUsage - previous->containerUsage);
         const double systemDelta = double(sample.systemUsage - previous->systemUsage);
-        cpuText = QString("cpu %1% · ")
-                      .arg(containerDelta / systemDelta * sample.onlineCpus * 100.0, 0, 'f', 2);
+        cpuPctValue = containerDelta / systemDelta * sample.onlineCpus * 100.0;
+        cpuText = QString("cpu %1% · ").arg(cpuPctValue, 0, 'f', 2);
     }
     m_prevCpu.insert(id, sample);
 
@@ -330,9 +331,13 @@ QString DockerBackend::statsDetail(const QString &id) const
     const quint64 inactiveFile =
         quint64(memory.value("stats").toObject().value("inactive_file").toDouble());
     const quint64 used = usage > inactiveFile ? usage - inactiveFile : usage;
+    const quint64 limit = quint64(memory.value("limit").toDouble());
 
-    return cpuText + "mem " + humanBytes(used) + " / "
-        + humanBytes(quint64(memory.value("limit").toDouble()));
+    out.cpuPct        = float(cpuPctValue);
+    out.memUsedBytes  = used;
+    out.memLimitBytes = limit;
+
+    return cpuText + "mem " + humanBytes(used) + " / " + humanBytes(limit);
 }
 
 void DockerBackend::listViaCli(QList<BoxInfo> &result, QSet<QString> &seen, bool sampleStats) const

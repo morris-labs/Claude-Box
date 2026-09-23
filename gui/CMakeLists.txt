@@ -86,6 +86,10 @@ add_executable(claude-box-gui
     src/CollapsibleSection.h
     src/BoxDetailsPanel.cpp
     src/BoxDetailsPanel.h
+    src/UsageBarDelegate.cpp
+    src/UsageBarDelegate.h
+    src/UsageView.cpp
+    src/UsageView.h
     src/Theme.cpp
     src/Theme.h
     src/Icons.cpp

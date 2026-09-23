@@ -30,10 +30,19 @@ struct BoxInfo {
     // (collapsible) Resource Usage section.
     QString stats;
 
+    // Numeric breakdown of stats for bar rendering. cpuPct is -1 until
+    // the second poll (CPU is a rate; the first sample has no prior to diff
+    // against). Both are 0 for non-Running boxes.
+    float   cpuPct        = -1.0f;
+    quint64 memUsedBytes  = 0;
+    quint64 memLimitBytes = 0;
+
     bool operator==(const BoxInfo &o) const
     {
         return status == o.status && name == o.name && conversationName == o.conversationName
-            && targetDir == o.targetDir && detail == o.detail && stats == o.stats;
+            && targetDir == o.targetDir && detail == o.detail && stats == o.stats
+            && cpuPct == o.cpuPct && memUsedBytes == o.memUsedBytes
+            && memLimitBytes == o.memLimitBytes;
     }
     bool operator!=(const BoxInfo &o) const { return !(*this == o); }
 };
@@ -132,7 +141,7 @@ private:
         int onlineCpus = 1;
     };
     mutable QHash<QString, CpuSample> m_prevCpu;
-    QString statsDetail(const QString &id) const;
+    QString statsDetail(const QString &id, BoxInfo &out) const;
 
     bool runDocker(const QStringList &args, QString *stdoutOut, QString *errorOut, int timeoutMs) const;
     // Polls until the container is fully removed from docker (i.e. no longer

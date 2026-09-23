@@ -10,6 +10,7 @@
 #include "BoxDetailsPanel.h" // for SshTunnelStatus, a value member below
 #include "BoxTableModel.h"
 #include "DockerBackend.h"
+#include "UsageView.h"
 
 class BoxDetailsPanel;
 class SshTunnelSession;
@@ -69,6 +70,9 @@ private slots:
     void onNextTab();
     void onPrevTab();
 
+    void onMoveWorkingDirectory();
+    void onChangeWorkingDirectory();
+
     void onTerminalSessionFinished(int exitCode);
 
 private:
@@ -82,10 +86,13 @@ private:
     BoxDetailsPanel *m_details = nullptr;
 
     QTabWidget *m_tabs = nullptr;
+    QTabWidget *m_topTabWidget = nullptr;
     QStackedWidget *m_tabStack = nullptr;
 
     QSplitter *m_outerSplitter = nullptr;
     QSplitter *m_topSplitter = nullptr;
+
+    UsageView *m_usageView = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
 
@@ -114,6 +121,8 @@ private:
     QAction *m_refreshAction = nullptr;
     QAction *m_detailsAction = nullptr;
     QAction *m_closeTabAction = nullptr;
+    QAction *m_moveWorkDirAction   = nullptr;
+    QAction *m_changeWorkDirAction = nullptr;
 
     // SSH tunnels (see SshTunnelSession): one background `ssh -N` per key
     // (see syncTunnels()'s own comment for what a key looks like -- a

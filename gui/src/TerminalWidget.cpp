@@ -276,6 +276,15 @@ void TerminalWidget::focusOutEvent(QFocusEvent *event)
     update(cellRectToPixels(m_cursorRow, m_cursorRow + 1, m_cursorCol, m_cursorCol + 1));
 }
 
+bool TerminalWidget::focusNextPrevChild(bool)
+{
+    // QWidget::event() intercepts Tab/Shift+Tab to move Qt focus before
+    // keyPressEvent() is called. Returning false here tells Qt "focus did
+    // not move", so QWidget::event() falls through to keyPressEvent() and
+    // Tab reaches the terminal process (Claude Code uses it for autocomplete).
+    return false;
+}
+
 // -------------------------------------------------------------------------
 // Selection helpers
 

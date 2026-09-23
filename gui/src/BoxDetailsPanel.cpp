@@ -5,6 +5,9 @@
 #include "Icons.h"
 #include "Theme.h"
 
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -127,6 +130,28 @@ BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
 
     m_conversation = addField(fieldsLayout, "Container");
     m_directory    = addField(fieldsLayout, "Directory");
+
+    // Shown only when the recorded directory is missing on disk (externally
+    // moved or deleted). Hidden otherwise.
+    m_relinkButton = new QPushButton(QStringLiteral("Relink directory…"), m_fields);
+    m_relinkButton->setToolTip(
+        QStringLiteral("Pick the new location of this directory to update the record"));
+    m_relinkButton->setVisible(false);
+    {
+        auto *btnRow = new QHBoxLayout();
+        btnRow->addWidget(m_relinkButton);
+        btnRow->addStretch(1);
+        fieldsLayout->addLayout(btnRow);
+    }
+    connect(m_relinkButton, &QPushButton::clicked, this, [this] {
+        const QString newDir = QFileDialog::getExistingDirectory(
+            this,
+            QStringLiteral("Locate directory for '%1'").arg(m_currentBoxName),
+            QDir::homePath());
+        if (!newDir.isEmpty())
+            emit relinkRequested(m_currentBoxName, newDir);
+    });
+
     m_sessionUuid  = addField(fieldsLayout, "Session");
     m_flags        = addField(fieldsLayout, "Flags");
     m_ports        = addField(fieldsLayout, "Ports");
@@ -233,7 +258,22 @@ void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshRemote> &sshRem
     m_statusText->setStyleSheet(QString("color: %1; font-weight: 600;").arg(color.name()));
 
     m_conversation->setText(info->name);
-    m_directory->setText(info->targetDir.isEmpty() ? kNone : info->targetDir);
+
+    const bool dirMissing = !info->targetDir.isEmpty()
+                            && !QFileInfo::exists(info->targetDir);
+    if (info->targetDir.isEmpty()) {
+        m_directory->setText(kNone);
+        m_directory->setStyleSheet(QString());
+    } else if (dirMissing) {
+        m_directory->setText(info->targetDir + QStringLiteral("  [missing]"));
+        m_directory->setStyleSheet(
+            QStringLiteral("color: %1;").arg(Theme::stopped().name()));
+    } else {
+        m_directory->setText(info->targetDir);
+        m_directory->setStyleSheet(QString());
+    }
+    m_relinkButton->setVisible(dirMissing);
+
     m_detail->setText(info->detail.isEmpty() ? kNone : info->detail);
     // Separate from `detail` on purpose (see BoxInfo::stats) -- this is
     // the field the "move cpu/etc to the sidebar" request was about.

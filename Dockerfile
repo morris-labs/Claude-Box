@@ -4,12 +4,25 @@ ARG USER_ID=1000
 ARG GROUP_ID=1000
 ARG USER_NAME=user
 
+# GitHub CLI apt repo
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] \
+https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list
+
 RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    ca-certificates \
-    sudo \
-    tmux \
+    # core utilities
+    git curl wget unzip ca-certificates sudo tmux jq \
+    # GitHub CLI + git extras
+    gh tig lazygit git-delta bat git-lfs git-filter-repo pre-commit \
+    # C/C++ toolchain
+    build-essential cmake ninja-build clang gdb valgrind pkg-config \
+    # Java + Maven
+    openjdk-21-jdk maven \
+    # Python
+    python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Ubuntu 24.04+ base images ship a pre-existing uid/gid-1000 "ubuntu" user
@@ -31,6 +44,16 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 RUN npm install -g @anthropic-ai/claude-code
 
 USER ${USER_NAME}
+
+# nvm + Node.js LTS (user-level; the system Node.js above is only for the claude-code
+# global install -- project work inside the container should use nvm-managed versions)
+RUN curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/HEAD/install.sh | bash && \
+    bash -c '. "$HOME/.nvm/nvm.sh" && nvm install --lts && nvm alias default lts/*'
+
+# SDKMAN + Gradle (user-level install; SDKMAN requires an interactive-style shell init)
+RUN curl -fsSL https://get.sdkman.io | bash && \
+    bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install gradle'
+
 # The directory is handled dynamically by the orchestration script
 WORKDIR /home/${USER_NAME}/workspace
 

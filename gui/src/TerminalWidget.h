@@ -59,6 +59,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
+    bool focusNextPrevChild(bool next) override;
 
 private slots:
     void onPtyData(const QByteArray &data);

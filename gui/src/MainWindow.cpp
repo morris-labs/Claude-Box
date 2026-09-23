@@ -40,6 +40,10 @@
 #include <QTableView>
 #include <QTabWidget>
 #include <QProcess>
+#include <QScrollBar>
+#include <QFileDialog>
+#include <QMessageBox>
+#include "UsageBarDelegate.h"
 #include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -173,6 +177,18 @@ void MainWindow::buildActions()
     m_closeTabAction = new QAction(QStringLiteral("&Close Tab"), this);
     m_closeTabAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+W")));
     connect(m_closeTabAction, &QAction::triggered, this, &MainWindow::onCloseCurrentTab);
+
+    m_moveWorkDirAction = new QAction(QStringLiteral("&Move Working Directory…"), this);
+    m_moveWorkDirAction->setStatusTip(
+        QStringLiteral("Move the working directory to a new location and update the record"));
+    connect(m_moveWorkDirAction, &QAction::triggered,
+            this, &MainWindow::onMoveWorkingDirectory);
+
+    m_changeWorkDirAction = new QAction(QStringLiteral("C&hange Working Directory…"), this);
+    m_changeWorkDirAction->setStatusTip(
+        QStringLiteral("Re-point this box at a different existing directory (no file move)"));
+    connect(m_changeWorkDirAction, &QAction::triggered,
+            this, &MainWindow::onChangeWorkingDirectory);
 }
 
 void MainWindow::buildUi()
@@ -220,6 +236,8 @@ void MainWindow::buildUi()
     header->resizeSection(2, 190);      // Conversation
     header->resizeSection(3, 320);      // Directory
     m_table->resizeColumnToContents(4); // Details
+    header->resizeSection(5, 90);       // CPU %
+    m_table->setItemDelegateForColumn(5, new UsageBarDelegate(m_table));
 
     // Shown only when there are no boxes at all. Parented to the viewport
     // with a layout so it stays centered without any resize plumbing.
@@ -247,6 +265,13 @@ void MainWindow::buildUi()
     m_details = new BoxDetailsPanel(this);
     m_details->setMinimumWidth(280);
     connect(m_details, &BoxDetailsPanel::reconnectRequested, this, &MainWindow::onReconnectTunnels);
+    connect(m_details, &BoxDetailsPanel::relinkRequested, this,
+            [this](const QString &boxName, const QString &newDir) {
+        BoxRecord rec = BoxRecord::load(boxName);
+        rec.targetDir = newDir;
+        rec.save();
+        refreshBoxes();
+    });
 
     m_topSplitter = new QSplitter(Qt::Horizontal, this);
     m_topSplitter->addWidget(tableSide);
@@ -285,8 +310,15 @@ void MainWindow::buildUi()
     m_tabStack->addWidget(tabPlaceholder); // index 0
     m_tabStack->addWidget(m_tabs);         // index 1
 
+    m_topTabWidget = new QTabWidget(this);
+    m_topTabWidget->setDocumentMode(true);
+    m_topTabWidget->setTabsClosable(false);
+    m_topTabWidget->addTab(m_topSplitter, QStringLiteral("Boxes"));
+    m_usageView = new UsageView(this);
+    m_topTabWidget->addTab(m_usageView, QStringLiteral("Usage"));
+
     m_outerSplitter = new QSplitter(Qt::Vertical, this);
-    m_outerSplitter->addWidget(m_topSplitter);
+    m_outerSplitter->addWidget(m_topTabWidget);
     m_outerSplitter->addWidget(m_tabStack);
     m_outerSplitter->setStretchFactor(0, 1);
     m_outerSplitter->setStretchFactor(1, 2);
@@ -329,6 +361,9 @@ void MainWindow::buildMenus()
     boxMenu->addAction(m_stopAllAction);
     boxMenu->addAction(m_openAllAction);
     boxMenu->addAction(m_openExternalAction);
+    boxMenu->addSeparator();
+    boxMenu->addAction(m_moveWorkDirAction);
+    boxMenu->addAction(m_changeWorkDirAction);
     boxMenu->addSeparator();
     boxMenu->addAction(m_removeAction);
     boxMenu->addAction(m_purgeAction);
@@ -426,7 +461,14 @@ void MainWindow::reselectByName(const QString &name)
     for (int i = 0; i < m_proxy->rowCount(); ++i) {
         const BoxInfo *info = m_model->boxAt(m_proxy->mapToSource(m_proxy->index(i, 0)).row());
         if (info && info->name == name) {
-            m_table->selectRow(i);
+            // Use selectionModel() directly instead of selectRow() so Qt does
+            // not call scrollTo() and fight the user's scroll position.
+            const QModelIndex first = m_proxy->index(i, 0);
+            const QModelIndex last  = m_proxy->index(i, m_model->columnCount() - 1);
+            m_table->selectionModel()->select(QItemSelection(first, last),
+                                              QItemSelectionModel::ClearAndSelect);
+            m_table->selectionModel()->setCurrentIndex(first,
+                                                       QItemSelectionModel::NoUpdate);
             return;
         }
     }
@@ -458,8 +500,15 @@ void MainWindow::onBoxesLoaded()
     m_hasLoadedOnce = true;
 
     const QString selected = currentSelectedName();
-    m_model->setBoxes(m_refreshWatcher->result());
+    // setBoxes calls beginResetModel/endResetModel, which resets the view's
+    // scroll position. Save and restore it so the table doesn't jump on every
+    // refresh tick while the user is browsing away from the selected row.
+    const int scrollPos = m_table->verticalScrollBar()->value();
+    const QList<BoxInfo> freshBoxes = m_refreshWatcher->result();
+    m_model->setBoxes(freshBoxes);
     reselectByName(selected);
+    m_table->verticalScrollBar()->setValue(scrollPos);
+    m_usageView->setBoxes(freshBoxes);
     syncTunnels();
 
     if (wasFirstLoad) {
@@ -519,6 +568,11 @@ void MainWindow::updateActionStates()
     m_editAction->setEnabled(single && rec.isValid());
     m_forkAction->setEnabled(single && rec.isValid() && !rec.sessionUuid.isEmpty());
     m_purgeAction->setEnabled(single && !single->targetDir.isEmpty());
+    const bool canRelocate = single && single->status != BoxInfo::Status::Running
+                             && rec.isValid() && !single->targetDir.isEmpty();
+    m_moveWorkDirAction->setEnabled(canRelocate);
+    m_changeWorkDirAction->setEnabled(single && single->status != BoxInfo::Status::Running
+                                      && rec.isValid());
     m_openExternalAction->setEnabled(single && single->status == BoxInfo::Status::Running);
 
     // Multi-item actions: any matching selection is enough.
@@ -569,6 +623,71 @@ void MainWindow::onFilterChanged(const QString &text)
     updateActionStates();
 }
 
+void MainWindow::onMoveWorkingDirectory()
+{
+    const BoxInfo *info = selectedBoxInfo();
+    if (!info || info->status == BoxInfo::Status::Running)
+        return;
+    const QString currentDir = info->targetDir;
+    if (currentDir.isEmpty())
+        return;
+
+    const QFileInfo fi(currentDir);
+    const QString newParent = QFileDialog::getExistingDirectory(
+        this,
+        QStringLiteral("Choose new parent directory for '%1'").arg(fi.fileName()),
+        fi.absolutePath());
+    if (newParent.isEmpty())
+        return;
+
+    const QString newPath = newParent + QDir::separator() + fi.fileName();
+    if (QDir(newPath) == QDir(currentDir))
+        return;
+
+    if (QFileInfo::exists(newPath)) {
+        QMessageBox::warning(this, QStringLiteral("Move failed"),
+            QStringLiteral("A directory named '%1' already exists in the chosen location.")
+                .arg(fi.fileName()));
+        return;
+    }
+
+    if (!QDir().rename(currentDir, newPath)) {
+        QMessageBox::critical(this, QStringLiteral("Move failed"),
+            QStringLiteral("Could not move '%1' to '%2'.\n"
+                           "Check that you have write access to both locations.")
+                .arg(currentDir, newParent));
+        return;
+    }
+
+    BoxRecord rec = BoxRecord::load(info->name);
+    rec.targetDir = newPath;
+    rec.save();
+    refreshBoxes();
+}
+
+void MainWindow::onChangeWorkingDirectory()
+{
+    const BoxInfo *info = selectedBoxInfo();
+    if (!info || info->status == BoxInfo::Status::Running)
+        return;
+
+    const QString startDir = info->targetDir.isEmpty()
+        ? QDir::homePath() : info->targetDir;
+
+    const QString newDir = QFileDialog::getExistingDirectory(
+        this,
+        QStringLiteral("Choose new working directory for '%1'")
+            .arg(info->conversationName.isEmpty() ? info->name : info->conversationName),
+        startDir);
+    if (newDir.isEmpty() || newDir == info->targetDir)
+        return;
+
+    BoxRecord rec = BoxRecord::load(info->name);
+    rec.targetDir = newDir;
+    rec.save();
+    refreshBoxes();
+}
+
 // --- context menus ------------------------------------------------------
 
 void MainWindow::showTableContextMenu(const QPoint &pos)
@@ -580,6 +699,10 @@ void MainWindow::showTableContextMenu(const QPoint &pos)
     menu.addSeparator();
     menu.addAction(m_closeAction);
     menu.addAction(m_openExternalAction);
+    menu.addSeparator();
+    menu.addSeparator();
+    menu.addAction(m_moveWorkDirAction);
+    menu.addAction(m_changeWorkDirAction);
     menu.addSeparator();
     menu.addAction(m_removeAction);
     menu.addAction(m_purgeAction);

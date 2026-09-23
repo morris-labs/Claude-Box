@@ -556,6 +556,7 @@ void NewBoxDialog::reloadForDirectory()
     if (dir == m_scannedDir && m_sessionCombo->count() > 0)
         return;
     m_scannedDir = dir;
+    m_folderMatchDir.clear();
     const QString absDir = dir.isEmpty() ? QString() : QDir(dir).absolutePath();
 
     const QList<ConversationInfo> conversations =
@@ -627,27 +628,96 @@ void NewBoxDialog::reloadForDirectory()
 
 // Says, in the form, exactly what will appear on disk -- the slug rules
 // are the container's (alphanumeric runs joined by underscores), so
-// showing the result beats explaining it.
+// showing the result beats explaining it. Also detects an existing
+// matching subfolder and pre-populates the conversation combo with its
+// conversations (folder-match), restoring the parent dir's list when the
+// match is no longer applicable.
 void NewBoxDialog::updateWorkspaceHint()
 {
+    auto restoreParentConversations = [this] {
+        if (!m_folderMatchDir.isEmpty()) {
+            m_folderMatchDir.clear();
+            m_scannedDir.clear(); // force reloadForDirectory to rescan
+            reloadForDirectory(); // also calls updateWorkspaceHint; m_folderMatchDir is now clear so no loop
+        }
+    };
+
     if (!m_workspaceCheck->isChecked()) {
         m_workspaceHint->setText(QStringLiteral("The agent works in the target directory itself."));
+        restoreParentConversations();
         return;
     }
 
     const QString slug = slugify(m_nameEdit->text().trimmed());
     if (slug.isEmpty()) {
         m_workspaceHint->setText(QStringLiteral("Needs a conversation name -- the folder is named after it."));
+        restoreParentConversations();
         return;
     }
 
     const QString dir = m_dirEdit->text().trimmed();
     const QString path = dir + "/" + slug;
-    if (QDir(path).exists())
-        m_workspaceHint->setText(QStringLiteral("%1/ already exists -- it will be reused as-is.").arg(slug));
-    else
+
+    if (!QDir(path).exists()) {
+        restoreParentConversations();
         m_workspaceHint->setText(QStringLiteral("%1/ will be created, and the agent told to set it up "
                                                "per this directory's CLAUDE.md and work there.").arg(slug));
+        return;
+    }
+
+    // Folder exists. If this is a newly matched folder, rebuild the combo
+    // from the subfolder's conversations.
+    if (m_folderMatchDir != path) {
+        m_folderMatchDir = path;
+        const QString absPath = QDir(path).absolutePath();
+        const QList<ConversationInfo> convs = ConversationCatalog::forDirectory(absPath);
+
+        {
+            QSignalBlocker blocker(m_sessionCombo);
+            m_sessionCombo->clear();
+            m_sessionCombo->addItem(QStringLiteral("Start a new conversation"), QString());
+            for (const ConversationInfo &c : convs) {
+                QString label = c.title;
+                if (!c.trackedBy.isEmpty())
+                    label += QStringLiteral("  [%1]").arg(c.trackedBy);
+                label += QStringLiteral("  ·  %1  ·  %2 turns")
+                             .arg(ConversationCatalog::relativeTime(c.lastActive))
+                             .arg(c.userTurns);
+                m_sessionCombo->addItem(label, c.sessionUuid);
+                m_sessionCombo->setItemData(m_sessionCombo->count() - 1, c.title, kTitleRole);
+                QString tip = c.sessionUuid;
+                if (!c.lastPrompt.isEmpty())
+                    tip += QStringLiteral("\n\nLast prompt: ") + c.lastPrompt;
+                if (!c.trackedBy.isEmpty())
+                    tip += QStringLiteral("\n\nAlready tracked by box ") + c.trackedBy;
+                m_sessionCombo->setItemData(m_sessionCombo->count() - 1, tip, Qt::ToolTipRole);
+            }
+        }
+
+        if (!convs.isEmpty()) {
+            m_sessionCombo->setCurrentIndex(1);
+            onConversationChanged(1);
+            m_workspaceHint->setText(QStringLiteral(
+                "%1/ already exists -- %2 conversation(s) found. Selecting the most recent.")
+                .arg(slug).arg(convs.size()));
+        } else {
+            m_sessionCombo->setCurrentIndex(0);
+            onConversationChanged(0);
+            m_workspaceHint->setText(
+                QStringLiteral("%1/ already exists -- it will be reused as-is.").arg(slug));
+        }
+        return;
+    }
+
+    // Already showing this folder's conversations -- just refresh the hint.
+    const int nConvs = m_sessionCombo->count() - 1; // subtract "Start a new conversation"
+    if (nConvs > 0)
+        m_workspaceHint->setText(QStringLiteral(
+            "%1/ already exists -- %2 conversation(s) found. Selecting the most recent.")
+            .arg(slug).arg(nConvs));
+    else
+        m_workspaceHint->setText(
+            QStringLiteral("%1/ already exists -- it will be reused as-is.").arg(slug));
 }
 
 void NewBoxDialog::onConversationChanged(int index)
