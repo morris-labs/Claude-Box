@@ -42,7 +42,6 @@
 #include <QProcess>
 #include <QScrollBar>
 #include <QFileDialog>
-#include <QMessageBox>
 #include "UsageBarDelegate.h"
 #include <QTimer>
 #include <QToolBar>
