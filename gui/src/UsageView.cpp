@@ -114,6 +114,12 @@ UsageView::UsageView(QWidget *parent)
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll->setWidget(m_rowsWidget);
     outer->addWidget(scroll, 1);
+
+    // Show placeholder immediately; rebuild() replaces it when boxes appear.
+    auto *none = new QLabel(QStringLiteral("No running boxes."), m_rowsWidget);
+    none->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+    none->setAlignment(Qt::AlignCenter);
+    m_rowsLayout->insertWidget(0, none);
 }
 
 void UsageView::setBoxes(const QList<BoxInfo> &boxes)
@@ -175,6 +181,13 @@ void UsageView::updateRow(const QString &name, const BoxInfo &b)
     if (it == m_rowCache.end())
         return;
     RowWidgets &rw = it.value();
+
+    // Refresh label in case conversationName changed since the row was created.
+    if (rw.nameLabel) {
+        const QString label = b.conversationName.isEmpty() ? b.name : b.conversationName;
+        if (rw.nameLabel->text() != label)
+            rw.nameLabel->setText(label);
+    }
 
     if (b.cpuPct >= 0.0f) {
         rw.cpuBar->setStyleSheet(progressBarStyle(barChunkColor(b.cpuPct / 100.0)));
@@ -246,6 +259,7 @@ void UsageView::rebuild(const QList<BoxInfo> &boxes)
 
             RowWidgets rw;
             rw.container = row;
+            rw.nameLabel = nameLabel;
             rw.cpuBar    = cpuBar;
             rw.memBar    = memBar;
             m_rowCache[name] = rw;

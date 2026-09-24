@@ -50,6 +50,27 @@
 namespace {
 constexpr int kRefreshIntervalMs = 3000;
 
+// Pre-fills a dialog with tentative port allocations without advancing the
+// stored next-base pointer. Returns the tentative list so the caller can
+// pass it to commitPortAllocation() after a successful dialog accept.
+// Cancelling without calling commitPortAllocation leaves the range unchanged.
+QList<int> setupPortAllocation(NewBoxDialog &dlg)
+{
+    const QList<int> ports = PortAllocator::tentativeAllocate(5, BoxRecord::loadAll());
+    dlg.preallocatePorts(ports);
+    return ports;
+}
+
+void commitPortAllocation(const QList<int> &tentativePorts)
+{
+    if (tentativePorts.isEmpty())
+        return;
+    int next = tentativePorts.last() + 1;
+    if (next > PortAllocator::kRangeEnd)
+        next = PortAllocator::kRangeStart;
+    PortAllocator::setNextBase(next);
+}
+
 // QSettings keys. Grouped under a prefix so the file stays readable if
 // anything else ever needs to persist state.
 const QString kGeometryKey    = QStringLiteral("ui/geometry");
@@ -266,10 +287,27 @@ void MainWindow::buildUi()
     connect(m_details, &BoxDetailsPanel::reconnectRequested, this, &MainWindow::onReconnectTunnels);
     connect(m_details, &BoxDetailsPanel::relinkRequested, this,
             [this](const QString &boxName, const QString &newDir) {
-        BoxRecord rec = BoxRecord::load(boxName);
+        const BoxRecord oldRec = BoxRecord::load(boxName);
+        const QString oldDir = oldRec.targetDir;
+        BoxRecord rec = oldRec;
         rec.targetDir = newDir;
         rec.save();
         refreshBoxes();
+        // The transcript is stored under ~/.claude/projects/<encoded-old-path>/
+        // because the directory moved externally (before Relink). The box will
+        // resume correctly only if that directory is renamed to match the new
+        // path. Show the paths so the user can do it manually if needed.
+        if (!oldDir.isEmpty() && oldDir != newDir) {
+            const QString oldProject = ConversationCatalog::projectDirFor(oldDir);
+            const QString newProject = ConversationCatalog::projectDirFor(newDir);
+            if (QDir(oldProject).exists() && !QDir(newProject).exists()) {
+                QMessageBox::information(this, QStringLiteral("Relink"),
+                    QStringLiteral("Record updated. To keep conversation history findable, "
+                                   "rename the transcript directory:\n\n"
+                                   "From: %1\n\nTo: %2")
+                        .arg(oldProject, newProject));
+            }
+        }
     });
 
     m_topSplitter = new QSplitter(Qt::Horizontal, this);
@@ -504,6 +542,25 @@ void MainWindow::onBoxesLoaded()
     // refresh tick while the user is browsing away from the selected row.
     const int scrollPos = m_table->verticalScrollBar()->value();
     const QList<BoxInfo> freshBoxes = m_refreshWatcher->result();
+
+    // Detect boxes that stopped externally (no terminal tab was open to fire
+    // onTerminalSessionFinished) and clear their wasRunning flag so they are
+    // not offered for restart-after-reboot on the next launch.
+    QSet<QString> prevRunning;
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        if (const BoxInfo *b = m_model->boxAt(i); b && b->status == BoxInfo::Status::Running)
+            prevRunning.insert(b->name);
+    }
+    for (const BoxInfo &b : freshBoxes) {
+        if (b.status != BoxInfo::Status::Running && prevRunning.contains(b.name)) {
+            BoxRecord rec = BoxRecord::load(b.name);
+            if (rec.isValid() && rec.wasRunning) {
+                rec.wasRunning = false;
+                rec.save();
+            }
+        }
+    }
+
     m_model->setBoxes(freshBoxes);
     reselectByName(selected);
     m_table->verticalScrollBar()->setValue(scrollPos);
@@ -705,19 +762,12 @@ void MainWindow::onChangeWorkingDirectory()
     if (newDir.isEmpty() || newDir == oldDir)
         return;
 
-    // Rename the Claude project directory alongside the working directory.
-    const QString oldProjectDir = ConversationCatalog::projectDirFor(oldDir);
-    const QString newProjectDir = ConversationCatalog::projectDirFor(newDir);
-    if (!oldDir.isEmpty() && oldProjectDir != newProjectDir
-        && QDir(oldProjectDir).exists() && !QDir(newProjectDir).exists()) {
-        if (!QDir().rename(oldProjectDir, newProjectDir)) {
-            QMessageBox::warning(this, QStringLiteral("Change directory"),
-                QStringLiteral("Directory changed, but could not rename conversation history "
-                               "from '%1' to '%2'. The conversation may not resume correctly.")
-                    .arg(oldProjectDir, newProjectDir));
-        }
-    }
-
+    // Do NOT rename ~/.claude/projects/<old-encoded>/ here. Unlike Move (where
+    // the directory physically moved and no other sessions point at the old
+    // path), Change only repoints this box's record. The old directory still
+    // exists on disk and other boxes or plain `claude` sessions may still
+    // refer to it; renaming its project directory would hijack all of their
+    // conversation history into this box's new namespace.
     BoxRecord rec = BoxRecord::load(boxName);
     rec.targetDir = newDir;
     rec.save();
@@ -1227,19 +1277,11 @@ void MainWindow::onNew()
 {
     NewBoxDialog dlg(this);
     dlg.setInitialDir(SetupWizard::defaultTargetDir());
-    // Pre-fill port rows without advancing the stored next-base pointer so
-    // that cancelling this dialog does not consume a block of port numbers.
-    const QList<int> tentativePorts = PortAllocator::tentativeAllocate(5, BoxRecord::loadAll());
-    dlg.preallocatePorts(tentativePorts);
+    // Pre-fill port rows tentatively; advance the pointer only on accept.
+    const QList<int> tentativePorts = setupPortAllocation(dlg);
     if (dlg.exec() != QDialog::Accepted)
         return;
-    // User accepted: advance the pointer past the tentative block.
-    if (!tentativePorts.isEmpty()) {
-        int next = tentativePorts.last() + 1;
-        if (next > PortAllocator::kRangeEnd)
-            next = PortAllocator::kRangeStart;
-        PortAllocator::setNextBase(next);
-    }
+    commitPortAllocation(tentativePorts);
 
     BoxRecord rec;
     rec.targetDir = dlg.targetDir();
@@ -1359,20 +1401,14 @@ void MainWindow::onFork()
 
     NewBoxDialog dlg(this);
     dlg.loadForFork(source);
-    // Replace the source's ports (copied by loadForFork) with a fresh
-    // allocation -- the source's ports are already in use if it's running,
-    // and two boxes sharing the same docker -p bindings won't start.
-    // Tentative so cancelling does not permanently consume port numbers.
-    const QList<int> tentativePorts = PortAllocator::tentativeAllocate(5, BoxRecord::loadAll());
-    dlg.preallocatePorts(tentativePorts);
+    // Replace the source's ports with a fresh allocation -- the source's
+    // ports are already in use if it's running, and two boxes sharing the
+    // same docker -p bindings won't start. Tentative so cancelling does not
+    // permanently consume port numbers.
+    const QList<int> tentativePorts = setupPortAllocation(dlg);
     if (dlg.exec() != QDialog::Accepted)
         return;
-    if (!tentativePorts.isEmpty()) {
-        int next = tentativePorts.last() + 1;
-        if (next > PortAllocator::kRangeEnd)
-            next = PortAllocator::kRangeStart;
-        PortAllocator::setNextBase(next);
-    }
+    commitPortAllocation(tentativePorts);
 
     BoxRecord rec;
     rec.targetDir = dlg.targetDir();

@@ -23,6 +23,7 @@ private:
     // Holds the live widgets for one per-box row.
     struct RowWidgets {
         QWidget      *container = nullptr;
+        QLabel       *nameLabel = nullptr;
         QProgressBar *cpuBar    = nullptr;
         QProgressBar *memBar    = nullptr;
     };
