@@ -25,8 +25,14 @@ public:
     // entire range is occupied.
     static QList<int> allocate(int count, const QList<BoxRecord> &existing);
 
+    // Like allocate(), but does NOT advance the stored next-base pointer.
+    // Use this to pre-fill a dialog: call tentativeAllocate() before
+    // exec(), then call setNextBase() only after the user clicks Accept.
+    // This way cancelling the dialog does not permanently consume the ports.
+    static QList<int> tentativeAllocate(int count, const QList<BoxRecord> &existing);
+    static void setNextBase(int port);
+
 private:
     static QSet<int> reservedPorts(const QList<BoxRecord> &existing);
     static int  nextBase();
-    static void setNextBase(int port);
 };

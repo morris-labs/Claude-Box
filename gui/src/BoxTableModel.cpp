@@ -187,6 +187,39 @@ void BoxTableModel::setBoxes(const QList<BoxInfo> &boxes)
     if (boxes == m_boxes)
         return;
 
+    // When only the numeric stats (cpuPct, memUsedBytes, memLimitBytes) changed
+    // on a subset of rows and the row count/identities are all unchanged, a
+    // full model reset would drop scroll position and selection for no good
+    // reason. Emit targeted dataChanged signals for just those rows instead.
+    if (boxes.size() == m_boxes.size()) {
+        bool onlyStatsDiffer = true;
+        for (int i = 0; i < boxes.size(); ++i) {
+            const BoxInfo &a = m_boxes.at(i);
+            const BoxInfo &b = boxes.at(i);
+            if (a.status != b.status || a.name != b.name
+                || a.conversationName != b.conversationName
+                || a.targetDir != b.targetDir || a.detail != b.detail
+                || a.stats != b.stats) {
+                onlyStatsDiffer = false;
+                break;
+            }
+        }
+        if (onlyStatsDiffer) {
+            for (int i = 0; i < boxes.size(); ++i) {
+                if (m_boxes.at(i).cpuPct != boxes.at(i).cpuPct
+                    || m_boxes.at(i).memUsedBytes != boxes.at(i).memUsedBytes
+                    || m_boxes.at(i).memLimitBytes != boxes.at(i).memLimitBytes) {
+                    m_boxes[i].cpuPct        = boxes.at(i).cpuPct;
+                    m_boxes[i].memUsedBytes  = boxes.at(i).memUsedBytes;
+                    m_boxes[i].memLimitBytes = boxes.at(i).memLimitBytes;
+                    const QModelIndex idx = createIndex(i, ColUsage);
+                    emit dataChanged(idx, idx, {Qt::DisplayRole});
+                }
+            }
+            return;
+        }
+    }
+
     beginResetModel();
     m_boxes = boxes;
     endResetModel();

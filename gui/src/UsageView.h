@@ -2,6 +2,7 @@
 
 #include "DockerBackend.h"
 
+#include <QMap>
 #include <QWidget>
 
 class QLabel;
@@ -19,10 +20,23 @@ public:
     void setBoxes(const QList<BoxInfo> &boxes);
 
 private:
+    // Holds the live widgets for one per-box row.
+    struct RowWidgets {
+        QWidget      *container = nullptr;
+        QProgressBar *cpuBar    = nullptr;
+        QProgressBar *memBar    = nullptr;
+    };
+
     void rebuild(const QList<BoxInfo> &boxes);
+    void updateTotals(const QList<BoxInfo> &boxes);
+    void updateRow(const QString &name, const BoxInfo &b);
 
     QProgressBar *m_totalCpuBar  = nullptr;
     QProgressBar *m_totalMemBar  = nullptr;
     QWidget      *m_rowsWidget   = nullptr;
     QVBoxLayout  *m_rowsLayout   = nullptr;
+
+    // Per-box row widgets, keyed by box name. Rows are added/removed only
+    // when the running set changes; bar values are updated in place each tick.
+    QMap<QString, RowWidgets> m_rowCache;
 };

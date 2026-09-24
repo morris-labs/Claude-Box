@@ -1,5 +1,7 @@
 #pragma once
 
+#include <climits>
+
 #include <QWidget>
 #include <QFont>
 #include <QString>
@@ -88,6 +90,13 @@ private:
     int m_selAnchorRow = -1, m_selAnchorCol = -1;
     int m_selEndRow = -1, m_selEndCol = -1;
     bool m_selecting = false;
+
+    // Row range damaged during the current vterm_input_write() call.
+    // Set in handleDamage(); used by onPtyData() to decide whether to
+    // clear the selection (only clear when damage overlaps selected rows).
+    bool m_trackingDamage = false;
+    int m_pendingDamageMinRow = INT_MAX;
+    int m_pendingDamageMaxRow = -1;
 
     void setupVterm();
     void updateGridSize();

@@ -4,7 +4,12 @@ ARG USER_ID=1000
 ARG GROUP_ID=1000
 ARG USER_NAME=user
 
-# GitHub CLI apt repo
+# Install curl first so the GitHub CLI apt repo block below can run.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI apt repo (curl is now available).
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
@@ -14,7 +19,7 @@ https://cli.github.com/packages stable main" \
 
 RUN apt-get update && apt-get install -y \
     # core utilities
-    git curl wget unzip ca-certificates sudo tmux jq \
+    git wget unzip sudo tmux jq \
     # GitHub CLI + git extras
     gh tig lazygit git-delta bat git-lfs git-filter-repo pre-commit \
     # C/C++ toolchain
@@ -33,8 +38,11 @@ RUN usermod -l ${USER_NAME} ubuntu && \
 
 # Passwordless sudo: this is a disposable sandbox already run with
 # --dangerously-skip-permissions, so gating sudo behind a password adds no safety.
-RUN echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USER_NAME} && \
-    chmod 0440 /etc/sudoers.d/${USER_NAME}
+# sudoers.d filenames must not contain a dot -- sudo(8) ignores files
+# whose names match its DefaultIgnorePattern. Use a fixed name so this
+# rule still works when USER_NAME contains a dot (e.g. "first.last").
+RUN echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/claude-box && \
+    chmod 0440 /etc/sudoers.d/claude-box
 
 # Ubuntu's apt repos lag on Node.js versions, so install via NodeSource instead.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
@@ -47,7 +55,7 @@ USER ${USER_NAME}
 
 # nvm + Node.js LTS (user-level; the system Node.js above is only for the claude-code
 # global install -- project work inside the container should use nvm-managed versions)
-RUN curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/HEAD/install.sh | bash && \
+RUN curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && \
     bash -c '. "$HOME/.nvm/nvm.sh" && nvm install --lts && nvm alias default lts/*'
 
 # SDKMAN + Gradle (user-level install; SDKMAN requires an interactive-style shell init)
