@@ -19,10 +19,9 @@ public:
     static constexpr int kRangeStart = 20000;
     static constexpr int kRangeEnd   = 20999;
 
-    // Allocate `count` sequential ports not already held by any box in
-    // `existing`. The next-base pointer advances past the returned block and
-    // wraps back to kRangeStart if needed. Returns an empty list only if the
-    // entire range is occupied.
+    // Prefer tentativeAllocate() + setNextBase() (called on dialog accept) so
+    // that cancelling a dialog does not permanently consume a block of ports.
+    [[deprecated("Use tentativeAllocate() + setNextBase() instead")]]
     static QList<int> allocate(int count, const QList<BoxRecord> &existing);
 
     // Like allocate(), but does NOT advance the stored next-base pointer.

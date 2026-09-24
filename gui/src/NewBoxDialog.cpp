@@ -698,14 +698,16 @@ void NewBoxDialog::updateWorkspaceHint()
         }
 
         if (!convs.isEmpty()) {
-            // Don't auto-select the conversation: these transcripts live under
-            // the subfolder's project dir, but the container runs with
-            // -w <baseDir>, so `claude --resume <uuid>` won't find them.
-            // Leave the combo on "Start a new conversation" and let the user
-            // pick manually if they want to resume one.
+            // The container runs with -w <baseDir>, not the subfolder, so
+            // `claude --resume <uuid>` looks in the base directory's project
+            // dir and won't find transcripts stored under the subfolder's
+            // encoded path. Show them in the combo for visibility but warn
+            // that selecting one won't resume correctly from this box.
             m_workspaceHint->setText(QStringLiteral(
-                "%1/ already exists — %2 conversation(s) found in this folder. "
-                "Select one above to resume it.")
+                "%1/ already exists (%2 conversation(s) shown above). "
+                "Note: these transcripts are from the subfolder's project directory "
+                "and cannot be resumed from this box — the container runs in the "
+                "base directory. Start a new conversation instead.")
                 .arg(slug).arg(convs.size()));
         } else {
             m_workspaceHint->setText(
@@ -718,8 +720,9 @@ void NewBoxDialog::updateWorkspaceHint()
     const int nConvs = m_sessionCombo->count() - 1; // subtract "Start a new conversation"
     if (nConvs > 0)
         m_workspaceHint->setText(QStringLiteral(
-            "%1/ already exists — %2 conversation(s) found in this folder. "
-            "Select one above to resume it.")
+            "%1/ already exists (%2 conversation(s) shown above). "
+            "Note: these transcripts cannot be resumed from this box — "
+            "the container runs in the base directory. Start a new conversation.")
             .arg(slug).arg(nConvs));
     else
         m_workspaceHint->setText(

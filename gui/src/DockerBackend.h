@@ -39,12 +39,13 @@ struct BoxInfo {
 
     bool operator==(const BoxInfo &o) const
     {
-        // cpuPct/memUsedBytes/memLimitBytes are deliberately excluded: they
-        // change every poll tick for running boxes, and including them would
-        // defeat BoxTableModel::setBoxes()'s no-op check and cause a full
-        // model reset (dropping selection/scroll) on every refresh.
+        // cpuPct/memUsedBytes/memLimitBytes/stats/detail are deliberately
+        // excluded: they change every poll tick for running boxes. Including
+        // them would defeat BoxTableModel::setBoxes()'s structural no-op
+        // check and cause a full model reset every refresh. setBoxes()
+        // handles volatile field changes with targeted dataChanged instead.
         return status == o.status && name == o.name && conversationName == o.conversationName
-            && targetDir == o.targetDir && detail == o.detail && stats == o.stats;
+            && targetDir == o.targetDir;
     }
     bool operator!=(const BoxInfo &o) const { return !(*this == o); }
 };

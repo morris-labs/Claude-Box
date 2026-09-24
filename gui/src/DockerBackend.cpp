@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QThread>
 #include <QUrl>
 #include <QSet>
@@ -427,6 +428,17 @@ static QString containerUsername()
         u = qEnvironmentVariable("USERNAME");
     if (u.isEmpty())
         u = QStringLiteral("user");
+
+    // Sanitize: a Linux username is [a-z0-9_-]. $USERNAME on Windows may be
+    // "John Smith" (spaces and capitals); passing that as --user or embedding
+    // it in a bind-mount path would fail. Fall back to "user" (the Dockerfile's
+    // own fallback) rather than forwarding a broken value.
+    static const QRegularExpression kValidLinuxUser(QStringLiteral("^[a-z0-9_][a-z0-9_-]*$"));
+    if (!kValidLinuxUser.match(u).hasMatch()) {
+        qWarning("containerUsername: '%s' is not a valid Linux username; falling back to 'user'",
+                 qUtf8Printable(u));
+        u = QStringLiteral("user");
+    }
     return u;
 }
 
