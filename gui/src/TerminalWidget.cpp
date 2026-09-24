@@ -151,10 +151,28 @@ bool TerminalWidget::isRunning() const
 
 void TerminalWidget::onPtyData(const QByteArray &data)
 {
-    if (m_vterm) {
-        if (m_selAnchorRow >= 0)
+    if (!m_vterm)
+        return;
+
+    // Track the row range that gets damaged by this write so we can decide
+    // whether it overlaps the selection. handleDamage() fills in
+    // m_pendingDamageMinRow/MaxRow while m_trackingDamage is true.
+    m_trackingDamage = true;
+    m_pendingDamageMinRow = INT_MAX;
+    m_pendingDamageMaxRow = -1;
+
+    vterm_input_write(m_vterm, data.constData(), static_cast<size_t>(data.size()));
+
+    m_trackingDamage = false;
+
+    // Clear the selection only when the incoming data actually modified
+    // the selected rows. Claude Code's TUI repaints continuously, so
+    // clearing unconditionally makes text selection essentially impossible.
+    if (m_selAnchorRow >= 0 && m_pendingDamageMinRow <= m_pendingDamageMaxRow) {
+        const int selMin = qMin(m_selAnchorRow, m_selEndRow);
+        const int selMax = qMax(m_selAnchorRow, m_selEndRow);
+        if (m_pendingDamageMinRow <= selMax && m_pendingDamageMaxRow >= selMin)
             clearSelection();
-        vterm_input_write(m_vterm, data.constData(), static_cast<size_t>(data.size()));
     }
 }
 
@@ -216,6 +234,10 @@ void TerminalWidget::sendToPty(const QByteArray &data)
 
 void TerminalWidget::handleDamage(int startRow, int endRow, int startCol, int endCol)
 {
+    if (m_trackingDamage) {
+        m_pendingDamageMinRow = qMin(m_pendingDamageMinRow, startRow);
+        m_pendingDamageMaxRow = qMax(m_pendingDamageMaxRow, endRow);
+    }
     update(cellRectToPixels(startRow, endRow, startCol, endCol));
 }
 

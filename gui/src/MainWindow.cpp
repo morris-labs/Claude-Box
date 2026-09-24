@@ -627,6 +627,11 @@ void MainWindow::onMoveWorkingDirectory()
     const BoxInfo *info = selectedBoxInfo();
     if (!info || info->status == BoxInfo::Status::Running)
         return;
+
+    // Copy fields out before opening a dialog: info points into the model's
+    // live vector, and the 3s refresh timer replaces that vector whenever a
+    // modal event loop is spinning (same reason onEdit() copies wasRunning).
+    const QString boxName    = info->name;
     const QString currentDir = info->targetDir;
     if (currentDir.isEmpty())
         return;
@@ -654,11 +659,26 @@ void MainWindow::onMoveWorkingDirectory()
         QMessageBox::critical(this, QStringLiteral("Move failed"),
             QStringLiteral("Could not move '%1' to '%2'.\n"
                            "Check that you have write access to both locations.")
-                .arg(currentDir, newParent));
+                .arg(currentDir, newPath));
         return;
     }
 
-    BoxRecord rec = BoxRecord::load(info->name);
+    // Rename the Claude project directory alongside the working directory so
+    // that conversations remain findable (ConversationCatalog encodes the
+    // container-side path into the directory name).
+    const QString oldProjectDir = ConversationCatalog::projectDirFor(currentDir);
+    const QString newProjectDir = ConversationCatalog::projectDirFor(newPath);
+    if (oldProjectDir != newProjectDir && QDir(oldProjectDir).exists()
+        && !QDir(newProjectDir).exists()) {
+        if (!QDir().rename(oldProjectDir, newProjectDir)) {
+            QMessageBox::warning(this, QStringLiteral("Move"),
+                QStringLiteral("Directory moved, but could not rename conversation history "
+                               "from '%1' to '%2'. The conversation may not resume correctly.")
+                    .arg(oldProjectDir, newProjectDir));
+        }
+    }
+
+    BoxRecord rec = BoxRecord::load(boxName);
     rec.targetDir = newPath;
     rec.save();
     refreshBoxes();
@@ -670,18 +690,35 @@ void MainWindow::onChangeWorkingDirectory()
     if (!info || info->status == BoxInfo::Status::Running)
         return;
 
-    const QString startDir = info->targetDir.isEmpty()
-        ? QDir::homePath() : info->targetDir;
+    // Copy fields before opening a dialog (see onMoveWorkingDirectory).
+    const QString boxName  = info->name;
+    const QString oldDir   = info->targetDir;
+    const QString convName = info->conversationName;
+
+    const QString startDir = oldDir.isEmpty() ? QDir::homePath() : oldDir;
 
     const QString newDir = QFileDialog::getExistingDirectory(
         this,
         QStringLiteral("Choose new working directory for '%1'")
-            .arg(info->conversationName.isEmpty() ? info->name : info->conversationName),
+            .arg(convName.isEmpty() ? boxName : convName),
         startDir);
-    if (newDir.isEmpty() || newDir == info->targetDir)
+    if (newDir.isEmpty() || newDir == oldDir)
         return;
 
-    BoxRecord rec = BoxRecord::load(info->name);
+    // Rename the Claude project directory alongside the working directory.
+    const QString oldProjectDir = ConversationCatalog::projectDirFor(oldDir);
+    const QString newProjectDir = ConversationCatalog::projectDirFor(newDir);
+    if (!oldDir.isEmpty() && oldProjectDir != newProjectDir
+        && QDir(oldProjectDir).exists() && !QDir(newProjectDir).exists()) {
+        if (!QDir().rename(oldProjectDir, newProjectDir)) {
+            QMessageBox::warning(this, QStringLiteral("Change directory"),
+                QStringLiteral("Directory changed, but could not rename conversation history "
+                               "from '%1' to '%2'. The conversation may not resume correctly.")
+                    .arg(oldProjectDir, newProjectDir));
+        }
+    }
+
+    BoxRecord rec = BoxRecord::load(boxName);
     rec.targetDir = newDir;
     rec.save();
     refreshBoxes();
@@ -698,7 +735,6 @@ void MainWindow::showTableContextMenu(const QPoint &pos)
     menu.addSeparator();
     menu.addAction(m_closeAction);
     menu.addAction(m_openExternalAction);
-    menu.addSeparator();
     menu.addSeparator();
     menu.addAction(m_moveWorkDirAction);
     menu.addAction(m_changeWorkDirAction);
@@ -1095,6 +1131,15 @@ void MainWindow::onTerminalSessionFinished(int exitCode)
         m_tabs->setTabIcon(index, Icons::statusDot(Theme::stopped()));
         m_tabs->setTabText(index, m_tabs->tabText(index) + QStringLiteral("  (ended)"));
         m_tabs->setTabToolTip(index, name + QStringLiteral(" — session ended; close this tab to dismiss"));
+
+        // Clear wasRunning so this box is not offered for restart-after-reboot:
+        // it exited on its own (not because the host shut down), so the user
+        // did not lose state they did not expect to lose.
+        BoxRecord rec = BoxRecord::load(name);
+        if (rec.isValid() && rec.wasRunning) {
+            rec.wasRunning = false;
+            rec.save();
+        }
     }
     refreshBoxes();
 }
@@ -1182,9 +1227,19 @@ void MainWindow::onNew()
 {
     NewBoxDialog dlg(this);
     dlg.setInitialDir(SetupWizard::defaultTargetDir());
-    dlg.preallocatePorts(PortAllocator::allocate(5, BoxRecord::loadAll()));
+    // Pre-fill port rows without advancing the stored next-base pointer so
+    // that cancelling this dialog does not consume a block of port numbers.
+    const QList<int> tentativePorts = PortAllocator::tentativeAllocate(5, BoxRecord::loadAll());
+    dlg.preallocatePorts(tentativePorts);
     if (dlg.exec() != QDialog::Accepted)
         return;
+    // User accepted: advance the pointer past the tentative block.
+    if (!tentativePorts.isEmpty()) {
+        int next = tentativePorts.last() + 1;
+        if (next > PortAllocator::kRangeEnd)
+            next = PortAllocator::kRangeStart;
+        PortAllocator::setNextBase(next);
+    }
 
     BoxRecord rec;
     rec.targetDir = dlg.targetDir();
@@ -1307,9 +1362,17 @@ void MainWindow::onFork()
     // Replace the source's ports (copied by loadForFork) with a fresh
     // allocation -- the source's ports are already in use if it's running,
     // and two boxes sharing the same docker -p bindings won't start.
-    dlg.preallocatePorts(PortAllocator::allocate(5, BoxRecord::loadAll()));
+    // Tentative so cancelling does not permanently consume port numbers.
+    const QList<int> tentativePorts = PortAllocator::tentativeAllocate(5, BoxRecord::loadAll());
+    dlg.preallocatePorts(tentativePorts);
     if (dlg.exec() != QDialog::Accepted)
         return;
+    if (!tentativePorts.isEmpty()) {
+        int next = tentativePorts.last() + 1;
+        if (next > PortAllocator::kRangeEnd)
+            next = PortAllocator::kRangeStart;
+        PortAllocator::setNextBase(next);
+    }
 
     BoxRecord rec;
     rec.targetDir = dlg.targetDir();

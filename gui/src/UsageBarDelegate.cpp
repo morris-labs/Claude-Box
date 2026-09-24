@@ -102,5 +102,7 @@ QSize UsageBarDelegate::sizeHint(const QStyleOptionViewItem &option,
                                   const QModelIndex &index) const
 {
     Q_UNUSED(index);
-    return QSize(80, option.rect.height());
+    // option.rect is typically invalid/zero in sizeHint; use font metrics
+    // for the row height rather than the (often-zero) option.rect.height().
+    return QSize(80, option.fontMetrics.height() + 6);
 }

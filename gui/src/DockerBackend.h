@@ -39,10 +39,12 @@ struct BoxInfo {
 
     bool operator==(const BoxInfo &o) const
     {
+        // cpuPct/memUsedBytes/memLimitBytes are deliberately excluded: they
+        // change every poll tick for running boxes, and including them would
+        // defeat BoxTableModel::setBoxes()'s no-op check and cause a full
+        // model reset (dropping selection/scroll) on every refresh.
         return status == o.status && name == o.name && conversationName == o.conversationName
-            && targetDir == o.targetDir && detail == o.detail && stats == o.stats
-            && cpuPct == o.cpuPct && memUsedBytes == o.memUsedBytes
-            && memLimitBytes == o.memLimitBytes;
+            && targetDir == o.targetDir && detail == o.detail && stats == o.stats;
     }
     bool operator!=(const BoxInfo &o) const { return !(*this == o); }
 };
@@ -57,6 +59,10 @@ struct BoxInfo {
 // assumed slow and kept off the UI thread.
 class DockerBackend {
 public:
+    // Human-readable byte count in docker's own format (binary units, four
+    // significant digits): "1.234 MiB", "987.6 KiB". Used here and by
+    // UsageView so they format memory identically.
+    static QString humanBytes(quint64 bytes);
     // Running + stopped-but-not-removed + known-but-not-running boxes,
     // merged with ~/.claude-box/known/ records. Running entries carry a
     // cached `docker stats` snapshot in detail.

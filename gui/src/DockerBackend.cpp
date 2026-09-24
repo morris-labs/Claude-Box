@@ -3,6 +3,7 @@
 #include "ContainerPaths.h"
 #include "DockerApi.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -70,20 +71,6 @@ QString containerName(const QJsonObject &container)
     return name;
 }
 
-// docker's own sizing: binary units, four significant digits, so these
-// read identically to `docker stats` / `docker ps -s` output.
-QString humanBytes(quint64 bytes)
-{
-    static const char *units[] = {"B", "KiB", "MiB", "GiB", "TiB"};
-    double value = double(bytes);
-    int unit = 0;
-    while (value >= 1024.0 && unit < 4) {
-        value /= 1024.0;
-        ++unit;
-    }
-    return QString::number(value, 'g', 4) + units[unit];
-}
-
 // Builds the sentence added to the opening prompt when a new box has mapped
 // ports, so the agent knows which ports it can use for services that need to
 // be reached on the host via localhost. Container-side port numbers are used
@@ -111,6 +98,20 @@ QString portHint(const QStringList &ports)
 }
 
 } // namespace
+
+// docker's own sizing: binary units, four significant digits, so these
+// read identically to `docker stats` / `docker ps -s` output.
+QString DockerBackend::humanBytes(quint64 bytes)
+{
+    static const char *units[] = {"B", "KiB", "MiB", "GiB", "TiB"};
+    double value = double(bytes);
+    int unit = 0;
+    while (value >= 1024.0 && unit < 4) {
+        value /= 1024.0;
+        ++unit;
+    }
+    return QString::number(value, 'g', 4) + units[unit];
+}
 
 bool DockerBackend::runDocker(const QStringList &args, QString *stdoutOut, QString *errorOut, int timeoutMs) const
 {
@@ -300,8 +301,10 @@ QString DockerBackend::statsDetail(const QString &id, BoxInfo &out) const
         QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + id
             + "/stats?stream=false&one-shot=true",
         nullptr, 5000);
-    if (doc.isNull())
+    if (doc.isNull()) {
+        out.cpuPct = -1.0f;
         return QString();
+    }
 
     const QJsonObject stats = doc.object();
     const QJsonObject cpu = stats.value("cpu_stats").toObject();
@@ -413,11 +416,13 @@ bool DockerBackend::isRunning(const QString &name) const
 
 // Username inside the container, derived from the host at runtime so the
 // image can be built with any USER_NAME and still match what the host expects.
-// Falls back to "user" if neither $USER (Linux/macOS) nor $USERNAME (Windows)
-// is set -- in practice one of them is always present.
+// Falls back to "user" if none of $USER (Linux/macOS), $LOGNAME (POSIX),
+// or $USERNAME (Windows) is set -- in practice one of them is always present.
 static QString containerUsername()
 {
     QString u = qEnvironmentVariable("USER");
+    if (u.isEmpty())
+        u = qEnvironmentVariable("LOGNAME");
     if (u.isEmpty())
         u = qEnvironmentVariable("USERNAME");
     if (u.isEmpty())
@@ -839,6 +844,10 @@ bool DockerBackend::waitForRemoval(const QString &name) const
         if (!exists)
             return true;
         QThread::msleep(kPollMs);
+        // stop() is called on the GUI thread; pumping events here keeps the
+        // window responsive during the wait. ExcludeUserInputEvents prevents
+        // re-entrant button clicks while we are mid-stop.
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     }
     return false;
 }

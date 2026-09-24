@@ -1,5 +1,6 @@
 #include "UsageView.h"
 
+#include "DockerBackend.h"
 #include "Theme.h"
 
 #include <QFrame>
@@ -51,16 +52,6 @@ QProgressBar *makeBar(const QString &chunkColor, QWidget *parent)
     bar->setFixedHeight(18);
     bar->setTextVisible(true);
     return bar;
-}
-
-// Human-readable byte count, matching DockerBackend's own humanBytes().
-QString humanBytes(quint64 b)
-{
-    if (b < 1024)           return QStringLiteral("%1 B").arg(b);
-    if (b < 1024 * 1024)    return QStringLiteral("%1 KiB").arg(b / 1024);
-    if (b < 1024ull * 1024 * 1024)
-        return QStringLiteral("%1 MiB").arg(b / (1024 * 1024));
-    return QStringLiteral("%1 GiB").arg(double(b) / (1024.0 * 1024 * 1024), 0, 'f', 2);
 }
 
 void clearLayout(QLayout *layout)
@@ -130,9 +121,8 @@ void UsageView::setBoxes(const QList<BoxInfo> &boxes)
     rebuild(boxes);
 }
 
-void UsageView::rebuild(const QList<BoxInfo> &boxes)
+void UsageView::updateTotals(const QList<BoxInfo> &boxes)
 {
-    // ---- compute totals ------------------------------------------------
     double totalCpu = 0.0;
     quint64 totalMemUsed = 0, totalMemLimit = 0;
     int cpuSampled = 0;
@@ -145,10 +135,13 @@ void UsageView::rebuild(const QList<BoxInfo> &boxes)
             ++cpuSampled;
         }
         totalMemUsed  += b.memUsedBytes;
-        totalMemLimit += b.memLimitBytes;
+        // Each container's memLimitBytes is the host RAM when no --memory
+        // limit is set, so summing would give N × host RAM as the denominator.
+        // Use the max instead: when all containers share the same host RAM
+        // limit, this gives the actual available memory as the scale.
+        totalMemLimit = qMax(totalMemLimit, b.memLimitBytes);
     }
 
-    // Update total bars. Cap CPU display at 100 * running-box-count.
     if (cpuSampled > 0) {
         const int cpuDisplay = int(qBound(0.0, totalCpu, 100.0 * cpuSampled));
         m_totalCpuBar->setRange(0, 100 * qMax(cpuSampled, 1));
@@ -157,6 +150,7 @@ void UsageView::rebuild(const QList<BoxInfo> &boxes)
         m_totalCpuBar->setStyleSheet(progressBarStyle(barChunkColor(frac)));
         m_totalCpuBar->setFormat(QStringLiteral("%1%").arg(int(totalCpu + 0.5)));
     } else {
+        m_totalCpuBar->setRange(0, 100);
         m_totalCpuBar->setValue(0);
         m_totalCpuBar->setFormat(QStringLiteral("—"));
     }
@@ -167,82 +161,111 @@ void UsageView::rebuild(const QList<BoxInfo> &boxes)
         const double frac = qBound(0.0, double(totalMemUsed) / double(totalMemLimit), 1.0);
         m_totalMemBar->setStyleSheet(progressBarStyle(barChunkColor(frac)));
         m_totalMemBar->setFormat(QStringLiteral("%1  (%2 / %3)")
-            .arg(memPct).arg(humanBytes(totalMemUsed), humanBytes(totalMemLimit)));
+            .arg(memPct).arg(DockerBackend::humanBytes(totalMemUsed),
+                             DockerBackend::humanBytes(totalMemLimit)));
     } else {
         m_totalMemBar->setValue(0);
         m_totalMemBar->setFormat(QStringLiteral("—"));
     }
+}
 
-    // ---- per-box rows --------------------------------------------------
-    // Remove old stretch, rebuild rows, re-add stretch.
-    // The stretch is always the last item; remove it first.
-    {
+void UsageView::updateRow(const QString &name, const BoxInfo &b)
+{
+    auto it = m_rowCache.find(name);
+    if (it == m_rowCache.end())
+        return;
+    RowWidgets &rw = it.value();
+
+    if (b.cpuPct >= 0.0f) {
+        rw.cpuBar->setStyleSheet(progressBarStyle(barChunkColor(b.cpuPct / 100.0)));
+        rw.cpuBar->setValue(int(qBound(0.0f, b.cpuPct, 100.0f)));
+        rw.cpuBar->setFormat(QStringLiteral("%1%").arg(int(b.cpuPct + 0.5f)));
+    } else {
+        rw.cpuBar->setValue(0);
+        rw.cpuBar->setFormat(QStringLiteral("—"));
+    }
+
+    const double memFrac = b.memLimitBytes > 0
+        ? qBound(0.0, double(b.memUsedBytes) / double(b.memLimitBytes), 1.0)
+        : 0.0;
+    rw.memBar->setStyleSheet(progressBarStyle(barChunkColor(memFrac)));
+    if (b.memLimitBytes > 0) {
+        const int memPct = int(memFrac * 100.0 + 0.5);
+        rw.memBar->setValue(memPct);
+        rw.memBar->setFormat(QStringLiteral("%1  (%2)")
+            .arg(memPct).arg(DockerBackend::humanBytes(b.memUsedBytes)));
+    } else {
+        rw.memBar->setValue(0);
+        rw.memBar->setFormat(QStringLiteral("—"));
+    }
+}
+
+void UsageView::rebuild(const QList<BoxInfo> &boxes)
+{
+    // Build the new running set: map box name -> BoxInfo.
+    QMap<QString, const BoxInfo *> newRunning;
+    for (const BoxInfo &b : boxes) {
+        if (b.status == BoxInfo::Status::Running)
+            newRunning[b.name] = &b;
+    }
+
+    const QStringList newNames = newRunning.keys(); // sorted
+    const QStringList oldNames = m_rowCache.keys(); // sorted
+
+    if (newNames != oldNames) {
+        // Running set changed -- rebuild all per-box rows from scratch.
+        // Remove the trailing stretch before clearing the layout.
         const int n = m_rowsLayout->count();
         if (n > 0) {
             QLayoutItem *stretch = m_rowsLayout->takeAt(n - 1);
             delete stretch;
         }
-    }
-    clearLayout(m_rowsLayout);
+        clearLayout(m_rowsLayout);
+        m_rowCache.clear();
 
-    for (const BoxInfo &b : boxes) {
-        if (b.status != BoxInfo::Status::Running)
-            continue;
+        for (const QString &name : newNames) {
+            const BoxInfo &b = *newRunning[name];
+            auto *row = new QWidget(m_rowsWidget);
+            auto *rowLayout = new QHBoxLayout(row);
+            rowLayout->setContentsMargins(0, 2, 0, 2);
+            rowLayout->setSpacing(6);
 
-        auto *row = new QWidget(m_rowsWidget);
-        auto *rowLayout = new QHBoxLayout(row);
-        rowLayout->setContentsMargins(0, 2, 0, 2);
-        rowLayout->setSpacing(6);
+            auto *nameLabel = new QLabel(b.conversationName.isEmpty() ? b.name : b.conversationName, row);
+            nameLabel->setFixedWidth(200);
+            nameLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::text().name()));
+            nameLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            rowLayout->addWidget(nameLabel);
 
-        // Name label, fixed width so bars align across rows.
-        auto *nameLabel = new QLabel(b.conversationName.isEmpty() ? b.name : b.conversationName,
-                                     row);
-        nameLabel->setFixedWidth(200);
-        nameLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::text().name()));
-        nameLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        rowLayout->addWidget(nameLabel);
+            auto *cpuBar = makeBar(QColor(45, 160, 80).name(), row);
+            rowLayout->addWidget(cpuBar, 2);
 
-        // CPU bar.
-        auto *cpuBar = makeBar(b.cpuPct >= 0 ? barChunkColor(b.cpuPct / 100.0)
-                                              : QColor(45, 160, 80).name(), row);
-        if (b.cpuPct >= 0.0f) {
-            cpuBar->setValue(int(qBound(0.0f, b.cpuPct, 100.0f)));
-            cpuBar->setFormat(QStringLiteral("%1%").arg(int(b.cpuPct + 0.5f)));
-        } else {
-            cpuBar->setValue(0);
-            cpuBar->setFormat(QStringLiteral("—"));
+            auto *memBar = makeBar(barChunkColor(0.0), row);
+            rowLayout->addWidget(memBar, 3);
+
+            m_rowsLayout->addWidget(row);
+
+            RowWidgets rw;
+            rw.container = row;
+            rw.cpuBar    = cpuBar;
+            rw.memBar    = memBar;
+            m_rowCache[name] = rw;
+
+            updateRow(name, b);
         }
-        rowLayout->addWidget(cpuBar, 2);
 
-        // Memory bar.
-        const double memFrac = b.memLimitBytes > 0
-            ? qBound(0.0, double(b.memUsedBytes) / double(b.memLimitBytes), 1.0)
-            : 0.0;
-        auto *memBar = makeBar(barChunkColor(memFrac), row);
-        if (b.memLimitBytes > 0) {
-            const int memPct = int(memFrac * 100.0 + 0.5);
-            memBar->setValue(memPct);
-            memBar->setFormat(QStringLiteral("%1  (%2)")
-                .arg(memPct).arg(humanBytes(b.memUsedBytes)));
-        } else {
-            memBar->setValue(0);
-            memBar->setFormat(QStringLiteral("—"));
+        if (newNames.isEmpty()) {
+            auto *none = new QLabel(QStringLiteral("No running boxes."), m_rowsWidget);
+            none->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+            none->setAlignment(Qt::AlignCenter);
+            m_rowsLayout->addWidget(none);
         }
-        rowLayout->addWidget(memBar, 3);
 
-        m_rowsLayout->addWidget(row);
+        m_rowsLayout->addStretch(1);
+    } else {
+        // Running set unchanged -- update bar values in place.
+        for (const QString &name : newNames)
+            updateRow(name, *newRunning[name]);
     }
 
-    // Placeholder when no boxes are running.
-    bool anyRunning = false;
-    for (const BoxInfo &b : boxes)
-        if (b.status == BoxInfo::Status::Running) { anyRunning = true; break; }
-    if (!anyRunning) {
-        auto *none = new QLabel(QStringLiteral("No running boxes."), m_rowsWidget);
-        none->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
-        none->setAlignment(Qt::AlignCenter);
-        m_rowsLayout->addWidget(none);
-    }
-
-    m_rowsLayout->addStretch(1);
+    updateTotals(boxes);
 }

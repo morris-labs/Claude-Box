@@ -35,27 +35,24 @@ void PortAllocator::setNextBase(int port)
     s.setValue(kNextBaseKey, port);
 }
 
-QList<int> PortAllocator::allocate(int count, const QList<BoxRecord> &existing)
+// Core allocation logic: compute a free block of `count` ports starting from
+// `startBase`, skipping any in `reserved`. Returns the ports and the next
+// base to use after this block, or an empty list when the range is full.
+static QPair<QList<int>, int> computeAllocation(int count, const QSet<int> &reserved, int startBase)
 {
-    if (count <= 0)
-        return {};
+    const int rangeSize = PortAllocator::kRangeEnd - PortAllocator::kRangeStart + 1;
 
-    const QSet<int> reserved = reservedPorts(existing);
-    const int rangeSize = kRangeEnd - kRangeStart + 1;
-
-    int candidate = nextBase();
+    int candidate = startBase;
     int checked = 0;
 
     while (checked < rangeSize) {
-        // A block that would overflow the range can't be used; wrap to start.
-        if (candidate + count - 1 > kRangeEnd) {
-            const int skipped = kRangeEnd - candidate + 1;
+        if (candidate + count - 1 > PortAllocator::kRangeEnd) {
+            const int skipped = PortAllocator::kRangeEnd - candidate + 1;
             checked += skipped;
-            candidate = kRangeStart;
+            candidate = PortAllocator::kRangeStart;
             continue;
         }
 
-        // Find the first reserved port in [candidate, candidate+count).
         int conflict = -1;
         for (int i = 0; i < count; ++i) {
             if (reserved.contains(candidate + i)) {
@@ -70,18 +67,34 @@ QList<int> PortAllocator::allocate(int count, const QList<BoxRecord> &existing)
             for (int i = 0; i < count; ++i)
                 result.append(candidate + i);
             int next = candidate + count;
-            if (next > kRangeEnd)
-                next = kRangeStart;
-            setNextBase(next);
-            return result;
+            if (next > PortAllocator::kRangeEnd)
+                next = PortAllocator::kRangeStart;
+            return {result, next};
         }
 
-        // Skip past the conflict and try again.
         checked   += conflict + 1;
         candidate += conflict + 1;
-        if (candidate > kRangeEnd)
-            candidate = kRangeStart;
+        if (candidate > PortAllocator::kRangeEnd)
+            candidate = PortAllocator::kRangeStart;
     }
 
-    return {};  // entire range is occupied
+    return {{}, PortAllocator::kRangeStart};
+}
+
+QList<int> PortAllocator::allocate(int count, const QList<BoxRecord> &existing)
+{
+    if (count <= 0)
+        return {};
+
+    const auto [ports, next] = computeAllocation(count, reservedPorts(existing), nextBase());
+    if (!ports.isEmpty())
+        setNextBase(next);
+    return ports;
+}
+
+QList<int> PortAllocator::tentativeAllocate(int count, const QList<BoxRecord> &existing)
+{
+    if (count <= 0)
+        return {};
+    return computeAllocation(count, reservedPorts(existing), nextBase()).first;
 }

@@ -264,9 +264,6 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     m_nameEdit->setPlaceholderText("optional -- used as-is, or as the issue name if new-issue.sh exists");
     form->addRow("Conversation name:", m_nameEdit);
 
-    // Editable so a pinned full model name (claude-opus-5, a dated
-    // snapshot, whatever a project standardizes on) can be typed in
-    // instead of an alias.
     // Both combos open on the value the settings files already resolve to
     // (see reloadForDirectory) rather than on a "leave it to the settings"
     // placeholder: the point of the row is to show what this box will run
@@ -701,16 +698,18 @@ void NewBoxDialog::updateWorkspaceHint()
         }
 
         if (!convs.isEmpty()) {
-            m_sessionCombo->setCurrentIndex(1);
-            onConversationChanged(1);
+            // Don't auto-select the conversation: these transcripts live under
+            // the subfolder's project dir, but the container runs with
+            // -w <baseDir>, so `claude --resume <uuid>` won't find them.
+            // Leave the combo on "Start a new conversation" and let the user
+            // pick manually if they want to resume one.
             m_workspaceHint->setText(QStringLiteral(
-                "%1/ already exists -- %2 conversation(s) found. Selecting the most recent.")
+                "%1/ already exists — %2 conversation(s) found in this folder. "
+                "Select one above to resume it.")
                 .arg(slug).arg(convs.size()));
         } else {
-            m_sessionCombo->setCurrentIndex(0);
-            onConversationChanged(0);
             m_workspaceHint->setText(
-                QStringLiteral("%1/ already exists -- it will be reused as-is.").arg(slug));
+                QStringLiteral("%1/ already exists — it will be reused as-is.").arg(slug));
         }
         return;
     }
@@ -719,11 +718,12 @@ void NewBoxDialog::updateWorkspaceHint()
     const int nConvs = m_sessionCombo->count() - 1; // subtract "Start a new conversation"
     if (nConvs > 0)
         m_workspaceHint->setText(QStringLiteral(
-            "%1/ already exists -- %2 conversation(s) found. Selecting the most recent.")
+            "%1/ already exists — %2 conversation(s) found in this folder. "
+            "Select one above to resume it.")
             .arg(slug).arg(nConvs));
     else
         m_workspaceHint->setText(
-            QStringLiteral("%1/ already exists -- it will be reused as-is.").arg(slug));
+            QStringLiteral("%1/ already exists — it will be reused as-is.").arg(slug));
 }
 
 void NewBoxDialog::onConversationChanged(int index)
