@@ -96,3 +96,7 @@ The one real source patch, in `gui/third_party/libvterm/include/vterm.h` (marked
 - `gui/` changes: the app now builds clean (no warnings-as-errors configured, no errors) against Qt 6.10.2 and libvterm 0.3.3 on Ubuntu resolute. The libvterm C API surface can shift between versions, so if you're on a different libvterm, `TerminalWidget.cpp` is the first place a build breaks.
 - **libvterm gotcha, learned the hard way:** `vterm_screen_set_callbacks()` stores the `VTermScreenCallbacks*` you give it — it does *not* copy the struct. Passing a stack local segfaults on the first byte of container output. `screenCallbacks()` in `TerminalWidget.cpp` exists solely to hand it something with static lifetime; don't "simplify" it back into a local.
 - **Also non-obvious:** libvterm only allocates the alternate-screen buffer if you call `vterm_screen_enable_altscreen(screen, 1)`. Without it the altscreen escape is silently ignored and Claude Code's TUI draws over the primary buffer instead of switching — which looks like a rendering bug, not a missing-init bug.
+
+## Review history
+
+Last code review: 91c28d9 (2026-09-23)

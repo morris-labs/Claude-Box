@@ -190,7 +190,11 @@ void UsageView::updateRow(const QString &name, const BoxInfo &b)
     }
 
     if (b.cpuPct >= 0.0f) {
-        rw.cpuBar->setStyleSheet(progressBarStyle(barChunkColor(b.cpuPct / 100.0)));
+        const QString cpuStyle = progressBarStyle(barChunkColor(b.cpuPct / 100.0));
+        if (cpuStyle != rw.lastCpuStyle) {
+            rw.cpuBar->setStyleSheet(cpuStyle);
+            rw.lastCpuStyle = cpuStyle;
+        }
         rw.cpuBar->setValue(int(qBound(0.0f, b.cpuPct, 100.0f)));
         rw.cpuBar->setFormat(QStringLiteral("%1%").arg(int(b.cpuPct + 0.5f)));
     } else {
@@ -201,7 +205,11 @@ void UsageView::updateRow(const QString &name, const BoxInfo &b)
     const double memFrac = b.memLimitBytes > 0
         ? qBound(0.0, double(b.memUsedBytes) / double(b.memLimitBytes), 1.0)
         : 0.0;
-    rw.memBar->setStyleSheet(progressBarStyle(barChunkColor(memFrac)));
+    const QString memStyle = progressBarStyle(barChunkColor(memFrac));
+    if (memStyle != rw.lastMemStyle) {
+        rw.memBar->setStyleSheet(memStyle);
+        rw.lastMemStyle = memStyle;
+    }
     if (b.memLimitBytes > 0) {
         const int memPct = int(memFrac * 100.0 + 0.5);
         rw.memBar->setValue(memPct);

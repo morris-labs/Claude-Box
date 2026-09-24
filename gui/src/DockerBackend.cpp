@@ -5,6 +5,8 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QEventLoop>
+#include <QTimer>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -12,7 +14,6 @@
 #include <QFile>
 #include <QProcess>
 #include <QRegularExpression>
-#include <QThread>
 #include <QUrl>
 #include <QSet>
 #include <QUuid>
@@ -304,6 +305,9 @@ QString DockerBackend::statsDetail(const QString &id, BoxInfo &out) const
         nullptr, 5000);
     if (doc.isNull()) {
         out.cpuPct = -1.0f;
+        // Remove the stale prior-sample so the next successful call doesn't
+        // compute a delta across a double-length interval and return a bogus %.
+        m_prevCpu.remove(id);
         return QString();
     }
 
@@ -429,13 +433,14 @@ static QString containerUsername()
     if (u.isEmpty())
         u = QStringLiteral("user");
 
-    // Sanitize: a Linux username is [a-z0-9_-]. $USERNAME on Windows may be
-    // "John Smith" (spaces and capitals); passing that as --user or embedding
-    // it in a bind-mount path would fail. Fall back to "user" (the Dockerfile's
-    // own fallback) rather than forwarding a broken value.
-    static const QRegularExpression kValidLinuxUser(QStringLiteral("^[a-z0-9_][a-z0-9_-]*$"));
-    if (!kValidLinuxUser.match(u).hasMatch()) {
-        qWarning("containerUsername: '%s' is not a valid Linux username; falling back to 'user'",
+    // Reject only characters that break docker's --user flag or a bind-mount
+    // path: whitespace, ':', and '/'. Dots are valid in Linux usernames (e.g.
+    // "first.last") and the Dockerfile bakes the exact host username, so those
+    // must pass through unchanged. $USERNAME on Windows may contain spaces --
+    // that's the case we guard against here.
+    static const QRegularExpression kBadChars(QStringLiteral("[\\s:/]"));
+    if (u.isEmpty() || kBadChars.match(u).hasMatch()) {
+        qWarning("containerUsername: '%s' contains invalid characters; falling back to 'user'",
                  qUtf8Printable(u));
         u = QStringLiteral("user");
     }
@@ -837,31 +842,45 @@ bool DockerBackend::stop(const QString &name, QString *errorOut) const
 
 bool DockerBackend::waitForRemoval(const QString &name) const
 {
-    constexpr int kPollMs = 100;
+    constexpr int kPollMs   = 100;
     constexpr int kTimeoutMs = 5000;
-    for (int elapsed = 0; elapsed < kTimeoutMs; elapsed += kPollMs) {
+
+    // Use a dedicated QEventLoop driven by a QTimer rather than pumping the
+    // application event loop directly. processEvents(ExcludeUserInputEvents)
+    // still lets timers fire and can deliver re-entrant signals (the 3s refresh
+    // watcher, onTerminalSessionFinished) onto the GUI stack while stop() is
+    // still on it. A nested QEventLoop only exits on its own quit() signal, so
+    // nothing unrelated can be delivered during the wait.
+    bool gone = false;
+    QEventLoop loop;
+    QTimer poller;
+    QTimer timeout;
+
+    QObject::connect(&poller, &QTimer::timeout, [&]() {
         bool exists = false;
         if (DockerApi::isAvailable()) {
-            // 404 means the container is gone; any other response means it's still there.
             QString error;
             DockerApi::get(QStringLiteral("/") + DockerApi::kApiVersion
                            + "/containers/" + name + "/json", &error);
-            exists = error.isEmpty(); // no error = 200 = still exists
+            exists = error.isEmpty();
         } else {
             QString out, err;
             if (runDocker({"ps", "-a", "--filter", "name=^" + name + "$",
                            "--format", "{{.Names}}"}, &out, &err, 2000))
-                exists = out.trimmed() == name;
+                exists = (out.trimmed() == name);
         }
-        if (!exists)
-            return true;
-        QThread::msleep(kPollMs);
-        // stop() is called on the GUI thread; pumping events here keeps the
-        // window responsive during the wait. ExcludeUserInputEvents prevents
-        // re-entrant button clicks while we are mid-stop.
-        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    }
-    return false;
+        if (!exists) {
+            gone = true;
+            loop.quit();
+        }
+    });
+
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timeout.setSingleShot(true);
+    timeout.start(kTimeoutMs);
+    poller.start(kPollMs);
+    loop.exec();
+    return gone;
 }
 
 bool DockerBackend::remove(const QString &name, QString *errorOut) const

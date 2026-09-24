@@ -26,6 +26,10 @@ private:
         QLabel       *nameLabel = nullptr;
         QProgressBar *cpuBar    = nullptr;
         QProgressBar *memBar    = nullptr;
+        // Cached stylesheet strings: setStyleSheet forces a full re-polish of
+        // the widget subtree, so only call it when the color actually changes.
+        QString       lastCpuStyle;
+        QString       lastMemStyle;
     };
 
     void rebuild(const QList<BoxInfo> &boxes);

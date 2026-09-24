@@ -81,17 +81,6 @@ static QPair<QList<int>, int> computeAllocation(int count, const QSet<int> &rese
     return {{}, PortAllocator::kRangeStart};
 }
 
-QList<int> PortAllocator::allocate(int count, const QList<BoxRecord> &existing)
-{
-    if (count <= 0)
-        return {};
-
-    const auto [ports, next] = computeAllocation(count, reservedPorts(existing), nextBase());
-    if (!ports.isEmpty())
-        setNextBase(next);
-    return ports;
-}
-
 QList<int> PortAllocator::tentativeAllocate(int count, const QList<BoxRecord> &existing)
 {
     if (count <= 0)
