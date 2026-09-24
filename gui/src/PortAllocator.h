@@ -19,12 +19,7 @@ public:
     static constexpr int kRangeStart = 20000;
     static constexpr int kRangeEnd   = 20999;
 
-    // Prefer tentativeAllocate() + setNextBase() (called on dialog accept) so
-    // that cancelling a dialog does not permanently consume a block of ports.
-    [[deprecated("Use tentativeAllocate() + setNextBase() instead")]]
-    static QList<int> allocate(int count, const QList<BoxRecord> &existing);
-
-    // Like allocate(), but does NOT advance the stored next-base pointer.
+    // Like allocate() (removed), but does NOT advance the stored next-base pointer.
     // Use this to pre-fill a dialog: call tentativeAllocate() before
     // exec(), then call setNextBase() only after the user clicks Accept.
     // This way cancelling the dialog does not permanently consume the ports.

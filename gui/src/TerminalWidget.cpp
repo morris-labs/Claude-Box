@@ -236,7 +236,10 @@ void TerminalWidget::handleDamage(int startRow, int endRow, int startCol, int en
 {
     if (m_trackingDamage) {
         m_pendingDamageMinRow = qMin(m_pendingDamageMinRow, startRow);
-        m_pendingDamageMaxRow = qMax(m_pendingDamageMaxRow, endRow);
+        // end_row is exclusive (libvterm convention), so the last damaged row
+        // is end_row - 1. Using end_row directly would make damage [5,7) report
+        // max=7 and falsely overlap a selection starting at row 7.
+        m_pendingDamageMaxRow = qMax(m_pendingDamageMaxRow, endRow - 1);
     }
     update(cellRectToPixels(startRow, endRow, startCol, endCol));
 }

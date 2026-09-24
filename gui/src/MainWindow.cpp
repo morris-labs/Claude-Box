@@ -735,9 +735,22 @@ void MainWindow::onMoveWorkingDirectory()
         }
     }
 
+    // Repoint this box's record first.
     BoxRecord rec = BoxRecord::load(boxName);
     rec.targetDir = newPath;
     rec.save();
+
+    // Repoint every other box that also pointed at the old directory.
+    // Do this before the project-dir rename below so the old path is still
+    // valid for the lookup (though the rename is best-effort anyway).
+    const QList<BoxRecord> all = BoxRecord::loadAll();
+    for (BoxRecord sibling : all) {
+        if (sibling.name != boxName && sibling.targetDir == currentDir) {
+            sibling.targetDir = newPath;
+            sibling.save();
+        }
+    }
+
     refreshBoxes();
 }
 

@@ -32,9 +32,9 @@ RUN apt-get update && apt-get install -y \
 
 # Ubuntu 24.04+ base images ship a pre-existing uid/gid-1000 "ubuntu" user
 # (like node:*-slim's "node"); rename it to match host naming/permissions.
-RUN usermod -l ${USER_NAME} ubuntu && \
-    groupmod -n ${USER_NAME} ubuntu && \
-    usermod -d /home/${USER_NAME} -m ${USER_NAME}
+RUN usermod -l "${USER_NAME}" ubuntu && \
+    groupmod -n "${USER_NAME}" ubuntu && \
+    usermod -d "/home/${USER_NAME}" -m "${USER_NAME}"
 
 # Passwordless sudo: this is a disposable sandbox already run with
 # --dangerously-skip-permissions, so gating sudo behind a password adds no safety.

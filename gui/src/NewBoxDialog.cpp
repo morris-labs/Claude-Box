@@ -697,6 +697,15 @@ void NewBoxDialog::updateWorkspaceHint()
             }
         }
 
+        // Clear m_sessionHint: it may still describe a conversation from the
+        // parent directory (since the QSignalBlocker above prevented
+        // onConversationChanged from running and updating it). The combo is
+        // back on index 0, so hint should say nothing about a session.
+        m_sessionHint->setText(QString());
+        // Reset m_autoFilledName so the next auto-fill comparison is against
+        // the current name field, not whatever a prior selection set.
+        m_autoFilledName = m_nameEdit->text();
+
         if (!convs.isEmpty()) {
             // The container runs with -w <baseDir>, not the subfolder, so
             // `claude --resume <uuid>` looks in the base directory's project
