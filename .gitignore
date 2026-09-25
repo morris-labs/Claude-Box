@@ -4,6 +4,9 @@ gui/build/
 # Release packages (AppImage, .deb) -- built artifacts, not source.
 /dist/
 
+# IDE/editor state -- local to each developer's machine.
+/.vscode/
+
 # Git credential store -- holds a live GitHub PAT, must never be committed.
 /.git-credentials
 
