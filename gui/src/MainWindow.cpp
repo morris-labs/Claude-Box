@@ -166,9 +166,9 @@ void MainWindow::buildActions()
     m_openAllAction->setStatusTip(QStringLiteral("Start every stopped box that was running before the last reboot or crash"));
     connect(m_openAllAction, &QAction::triggered, this, &MainWindow::onOpenAll);
 
-    m_openExternalAction = new QAction(QStringLiteral("Open in &Terminal (tmux)"), this);
+    m_openExternalAction = new QAction(QStringLiteral("Open Shell in &Container"), this);
     m_openExternalAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+T")));
-    m_openExternalAction->setStatusTip(QStringLiteral("Open this container in an external terminal with tmux"));
+    m_openExternalAction->setStatusTip(QStringLiteral("Open an interactive shell inside this container in an external terminal"));
     connect(m_openExternalAction, &QAction::triggered, this, &MainWindow::onOpenExternal);
 
     m_removeAction = new QAction(Icons::removeBox(), QStringLiteral("&Remove"), this);
