@@ -215,7 +215,9 @@ find_program(ICONUTIL      iconutil)
 
 if(RSVG_CONVERT AND ICONUTIL)
     # macOS requires these exact filenames inside the .iconset directory.
-    set(ICNS_SIZES 16 32 64 128 256 512)
+    # iconutil accepts exactly: 16, 32, 128, 256, 512 (plus @2x variants).
+    # 64 is not a valid slot and causes iconutil to fail or silently drop it.
+    set(ICNS_SIZES 16 32 128 256 512)
     set(icns_pngs)
     foreach(sz IN LISTS ICNS_SIZES)
         math(EXPR sz2 "${sz} * 2")
@@ -240,18 +242,22 @@ if(RSVG_CONVERT AND ICONUTIL)
         DEPENDS ${icns_pngs}
         VERBATIM
     )
-    add_custom_target(generate-icns DEPENDS "${ICNS_FILE}")
-
-    # Copy the .icns into the bundle's Resources after the binary is built.
-    # The file must be present before the app is first launched or the dock
-    # shows a generic icon -- run `generate-icns` once after a clean checkout.
-    add_custom_command(TARGET claude-box-gui POST_BUILD
+    # generate-icns: build the .icns from the iconset PNGs, then copy it
+    # into the app bundle's Resources directory.  The bundle must exist
+    # first (i.e. `cmake --build build` must have already run), so the
+    # correct workflow is:
+    #   cmake --build build
+    #   cmake --build build --target generate-icns
+    # The copy is here rather than as a POST_BUILD on claude-box-gui so
+    # that a plain build never fails when rsvg-convert / iconutil are absent.
+    add_custom_target(generate-icns
         COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_BUNDLE_DIR:claude-box-gui>/Contents/Resources"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${ICNS_FILE}"
                 "$<TARGET_BUNDLE_DIR:claude-box-gui>/Contents/Resources/claude-box.icns"
-        COMMENT "Copying claude-box.icns into the app bundle"
+        DEPENDS "${ICNS_FILE}"
+        COMMENT "Generating icon and installing it into the app bundle"
         VERBATIM
     )
 else()
@@ -284,10 +290,19 @@ if(MACDEPLOYQT)
     # Notarization (notarytool) is not automated here -- it requires a
     # Developer ID certificate and Apple ID credentials, so it is a
     # manual step documented in the README once those are in place.
-    set(DMG_PATH "${CMAKE_BINARY_DIR}/Claude Box.dmg")
+    #
+    # hdiutil -srcfolder DIR copies the *contents* of DIR into the DMG
+    # volume root, so the .app must be inside a staging directory, not
+    # passed directly -- otherwise the DMG root holds Contents/MacOS/…
+    # instead of the bundle itself.
+    set(DMG_STAGE "${CMAKE_BINARY_DIR}/dmg-stage")
+    set(DMG_PATH  "${CMAKE_BINARY_DIR}/Claude Box.dmg")
     add_custom_target(dmg
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${DMG_STAGE}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory   "${DMG_STAGE}"
+        COMMAND cp -R "$<TARGET_BUNDLE_DIR:claude-box-gui>" "${DMG_STAGE}/"
         COMMAND hdiutil create -volname "Claude Box"
-                -srcfolder "$<TARGET_BUNDLE_DIR:claude-box-gui>"
+                -srcfolder "${DMG_STAGE}"
                 -ov -format UDZO
                 "${DMG_PATH}"
         DEPENDS app-bundle
