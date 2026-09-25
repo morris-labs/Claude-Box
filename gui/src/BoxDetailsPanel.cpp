@@ -272,7 +272,20 @@ void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshRemote> &sshRem
         m_directory->setText(info->targetDir);
         m_directory->setStyleSheet(QString());
     }
+    // A Running box still has its old path bind-mounted even if the host
+    // side of that path is temporarily unreachable (a flaky network mount,
+    // say) -- relinking then would silently make the dashboard show a path
+    // the live container isn't actually using. Match Move/Change Working
+    // Directory's own guard: relinking is disabled, not hidden, while
+    // Running, so the missing-path warning stays visible either way.
+    const bool relinkable = dirMissing && info->status != BoxInfo::Status::Running;
     m_relinkButton->setVisible(dirMissing);
+    m_relinkButton->setEnabled(relinkable);
+    m_relinkButton->setToolTip(
+        info->status == BoxInfo::Status::Running
+            ? QStringLiteral("Stop the box before relinking its directory -- "
+                              "it's still bind-mounted to the current path")
+            : QStringLiteral("Pick the new location of this directory to update the record"));
 
     m_detail->setText(info->detail.isEmpty() ? kNone : info->detail);
     // Separate from `detail` on purpose (see BoxInfo::stats) -- this is

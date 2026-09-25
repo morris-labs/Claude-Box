@@ -252,6 +252,7 @@ QList<BoxInfo> DockerBackend::listBoxes(bool sampleStats) const
 {
     QList<BoxInfo> result;
     QSet<QString> seen;
+    m_lastPollDaemonUnreachable = false;
 
     // The API first, the CLI if it isn't reachable. Both fill the same two
     // containers, so the "merge in the known records" tail below doesn't
@@ -292,8 +293,14 @@ bool DockerBackend::listViaApi(QList<BoxInfo> &result, QSet<QString> &seen, bool
 
     QString error;
     const QJsonDocument running = DockerApi::get(base + "?filters=" + nameFilter, &error);
-    if (running.isNull() || !running.isArray())
+    if (running.isNull() || !running.isArray()) {
+        // isAvailable() only latches true once the socket has answered at
+        // least once, so getting here means a daemon that was reachable a
+        // moment ago just stopped answering -- a real "went away", not the
+        // routine "this DOCKER_HOST needs the CLI fallback" case.
+        m_lastPollDaemonUnreachable = true;
         return false; // fall back rather than show an empty dashboard
+    }
 
     for (const QJsonValue &value : running.array()) {
         const QJsonObject container = value.toObject();
@@ -409,8 +416,12 @@ void DockerBackend::listViaCli(QList<BoxInfo> &result, QSet<QString> &seen, bool
     QString out, err;
 
     // Running.
-    if (runDocker({"ps", "--filter", "name=^claude-agent-", "--format", "{{.Names}}\t{{.Status}}"},
-                   &out, &err, 5000)) {
+    if (!runDocker({"ps", "--filter", "name=^claude-agent-", "--format", "{{.Names}}\t{{.Status}}"},
+                    &out, &err, 5000)) {
+        // The command itself failed to run rather than running and finding
+        // nothing -- the daemon this CLI talks to is unreachable right now.
+        m_lastPollDaemonUnreachable = true;
+    } else {
         const QStringList lines = out.split('\n', Qt::SkipEmptyParts);
         for (const QString &line : lines) {
             const QStringList parts = line.split('\t');
