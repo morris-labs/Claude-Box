@@ -150,7 +150,7 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
 {
     double totalCpu = 0.0;
     quint64 totalMemUsed = 0, totalMemLimit = 0;
-    quint64 totalDiskRead = 0, totalDiskWrite = 0;
+    quint64 totalDiskRw = 0, totalDiskTotal = 0;
     int cpuSampled = 0;
 
     for (const BoxInfo &b : boxes) {
@@ -166,8 +166,8 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
         // Use the max instead: when all containers share the same host RAM
         // limit, this gives the actual available memory as the scale.
         totalMemLimit  = qMax(totalMemLimit, b.memLimitBytes);
-        totalDiskRead  += b.diskReadBytes;
-        totalDiskWrite += b.diskWriteBytes;
+        totalDiskRw    += b.diskRwBytes;
+        totalDiskTotal += b.diskTotalBytes;
     }
 
     if (cpuSampled > 0) {
@@ -204,12 +204,11 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
         m_totalMemBar->setFormat(QStringLiteral("—"));
     }
 
-    if (cpuSampled > 0) {
-        // Stats API returned data; show disk even if zero (valid on cgroupsv2).
+    if (cpuSampled > 0 && totalDiskTotal > 0) {
         m_totalDiskLabel->setText(
-            QStringLiteral("R: %1  W: %2")
-                .arg(DockerBackend::humanBytes(totalDiskRead),
-                     DockerBackend::humanBytes(totalDiskWrite)));
+            QStringLiteral("Rw: %1  Total: %2")
+                .arg(DockerBackend::humanBytes(totalDiskRw),
+                     DockerBackend::humanBytes(totalDiskTotal)));
     } else {
         m_totalDiskLabel->setText(QStringLiteral("—"));
     }
@@ -261,13 +260,11 @@ void UsageView::updateRow(const QString &name, const BoxInfo &b)
     }
 
     if (rw.diskLabel) {
-        // Show values whenever stats are available (cpuPct >= 0 means
-        // the stats API returned data). Zero bytes is valid on cgroupsv2.
-        if (b.cpuPct >= 0.0f) {
+        if (b.diskTotalBytes > 0) {
             rw.diskLabel->setText(
-                QStringLiteral("R: %1  W: %2")
-                    .arg(DockerBackend::humanBytes(b.diskReadBytes),
-                         DockerBackend::humanBytes(b.diskWriteBytes)));
+                QStringLiteral("Rw: %1  Total: %2")
+                    .arg(DockerBackend::humanBytes(b.diskRwBytes),
+                         DockerBackend::humanBytes(b.diskTotalBytes)));
         } else {
             rw.diskLabel->setText(QStringLiteral("—"));
         }

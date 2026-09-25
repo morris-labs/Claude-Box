@@ -174,8 +174,8 @@ void BoxTableModel::setBoxes(const QList<BoxInfo> &boxes)
                 || a.cpuPct != b.cpuPct
                 || a.memUsedBytes != b.memUsedBytes
                 || a.memLimitBytes != b.memLimitBytes
-                || a.diskReadBytes != b.diskReadBytes
-                || a.diskWriteBytes != b.diskWriteBytes) {
+                || a.diskRwBytes != b.diskRwBytes
+                || a.diskTotalBytes != b.diskTotalBytes) {
                 m_boxes[i] = b;
                 const QModelIndex left  = createIndex(i, 0);
                 const QModelIndex right = createIndex(i, ColumnCount - 1);

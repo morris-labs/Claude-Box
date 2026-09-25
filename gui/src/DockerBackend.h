@@ -42,10 +42,11 @@ struct BoxInfo {
     float   cpuPct         = -1.0f;
     quint64 memUsedBytes   = 0;
     quint64 memLimitBytes  = 0;
-    // Cumulative block I/O bytes since container start (from blkio_stats).
-    // Zero on the CLI fallback path and on the first stats poll.
-    quint64 diskReadBytes  = 0;
-    quint64 diskWriteBytes = 0;
+    // Disk space from the container's overlay layers (from container inspect
+    // ?size=true). SizeRw is the writable layer; SizeRootFs is the total
+    // (image layers + writable). Zero on the CLI fallback path.
+    quint64 diskRwBytes    = 0;
+    quint64 diskTotalBytes = 0;
 
     bool operator==(const BoxInfo &o) const
     {

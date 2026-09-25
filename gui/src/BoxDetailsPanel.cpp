@@ -385,13 +385,11 @@ void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshRemote> &sshRem
         m_memBar->setFormat(QStringLiteral("—"));
     }
 
-    // Show values whenever the stats API returned data (cpuPct >= 0).
-    // Zero bytes is valid on cgroupsv2 where blkio_stats is unavailable.
-    if (info->cpuPct >= 0.0f) {
+    if (info->diskTotalBytes > 0) {
         m_diskLabel->setText(
-            QStringLiteral("R: %1  W: %2")
-                .arg(DockerBackend::humanBytes(info->diskReadBytes),
-                     DockerBackend::humanBytes(info->diskWriteBytes)));
+            QStringLiteral("Rw: %1  Total: %2")
+                .arg(DockerBackend::humanBytes(info->diskRwBytes),
+                     DockerBackend::humanBytes(info->diskTotalBytes)));
     } else {
         m_diskLabel->setText(QStringLiteral("—"));
     }
