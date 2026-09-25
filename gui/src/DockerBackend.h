@@ -38,10 +38,14 @@ struct BoxInfo {
 
     // Numeric breakdown of stats for bar rendering. cpuPct is -1 until
     // the second poll (CPU is a rate; the first sample has no prior to diff
-    // against). Both are 0 for non-Running boxes.
-    float   cpuPct        = -1.0f;
-    quint64 memUsedBytes  = 0;
-    quint64 memLimitBytes = 0;
+    // against). All zero for non-Running boxes.
+    float   cpuPct         = -1.0f;
+    quint64 memUsedBytes   = 0;
+    quint64 memLimitBytes  = 0;
+    // Cumulative block I/O bytes since container start (from blkio_stats).
+    // Zero on the CLI fallback path and on the first stats poll.
+    quint64 diskReadBytes  = 0;
+    quint64 diskWriteBytes = 0;
 
     bool operator==(const BoxInfo &o) const
     {

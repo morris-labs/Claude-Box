@@ -54,40 +54,36 @@ void UsageBarDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opti
     const QRect bar  = cell.adjusted(4, 4, -4, -4);
 
     painter->save();
-    painter->setRenderHint(QPainter::Antialiasing, false);
+    painter->setRenderHint(QPainter::Antialiasing, true);
 
-    const bool selected = option.state & QStyle::State_Selected;
-    const QColor outlineColor = selected ? option.palette.color(QPalette::Highlight).lighter(130)
-                                         : Theme::border();
+    constexpr double kRadius = 4.0;
 
     if (value < 0.0) {
-        // No sample yet — draw an empty dimmed outline only.
-        painter->setPen(outlineColor);
+        // No sample yet -- draw a dimmed empty pill outline only.
+        painter->setPen(Theme::border());
         painter->setBrush(Qt::NoBrush);
-        painter->drawRect(bar);
+        painter->drawRoundedRect(QRectF(bar), kRadius, kRadius);
         painter->restore();
         return;
     }
 
     // Background track.
     painter->setPen(Qt::NoPen);
-    painter->setBrush(Theme::baseBg());
-    painter->drawRect(bar);
+    painter->setBrush(Theme::panelBg());
+    painter->drawRoundedRect(QRectF(bar), kRadius, kRadius);
 
-    // Filled portion.
+    // Filled portion, clipped to bar bounds so the left end of the chunk
+    // inherits the bar's rounded corners without per-pixel math.
     if (fraction > 0.0) {
-        QRect fill = bar;
-        fill.setWidth(int(bar.width() * fraction));
+        painter->save();
+        painter->setClipRect(bar);
+        QRectF fill(bar.x(), bar.y(), bar.width() * fraction, bar.height());
         painter->setBrush(barColor(fraction));
-        painter->drawRect(fill);
+        painter->drawRoundedRect(fill, kRadius, kRadius);
+        painter->restore();
     }
 
-    // Outline.
-    painter->setPen(outlineColor);
-    painter->setBrush(Qt::NoBrush);
-    painter->drawRect(bar);
-
-    // Percentage label.
+    // Percentage label over the bar.
     painter->setPen(Qt::white);
     QFont f = option.font;
     f.setPointSizeF(f.pointSizeF() - 1.0);

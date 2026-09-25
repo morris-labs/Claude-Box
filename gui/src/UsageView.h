@@ -26,6 +26,7 @@ private:
         QLabel       *nameLabel = nullptr;
         QProgressBar *cpuBar    = nullptr;
         QProgressBar *memBar    = nullptr;
+        QLabel       *diskLabel = nullptr;
         // Cached stylesheet strings: setStyleSheet forces a full re-polish of
         // the widget subtree, so only call it when the color actually changes.
         QString       lastCpuStyle;
@@ -36,8 +37,9 @@ private:
     void updateTotals(const QList<BoxInfo> &boxes);
     void updateRow(const QString &name, const BoxInfo &b);
 
-    QProgressBar *m_totalCpuBar  = nullptr;
-    QProgressBar *m_totalMemBar  = nullptr;
+    QProgressBar *m_totalCpuBar    = nullptr;
+    QProgressBar *m_totalMemBar    = nullptr;
+    QLabel       *m_totalDiskLabel = nullptr;
     // Mirrors RowWidgets::lastCpuStyle/lastMemStyle for the totals bars, so
     // updateTotals() only calls setStyleSheet() when the color actually
     // changes rather than on every refresh tick.

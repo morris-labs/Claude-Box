@@ -12,26 +12,26 @@
 
 namespace {
 
-// Shared QProgressBar stylesheet: flat bar with no native chrome, using the
-// dark theme colors so it reads as one app with the rest of the UI.
+// Rounded pill-style bar: no border, subtle track, filled chunk with
+// rounded ends. Less blocky than the previous bordered rectangle.
 QString progressBarStyle(const QString &chunkColor)
 {
     return QStringLiteral(
         "QProgressBar {"
-        "  border: 1px solid %1;"
-        "  background: %2;"
+        "  border: none;"
+        "  background: %1;"
+        "  border-radius: 5px;"
         "  text-align: center;"
         "  color: white;"
         "}"
         "QProgressBar::chunk {"
-        "  background: %3;"
+        "  background: %2;"
+        "  border-radius: 5px;"
         "}")
-        .arg(Theme::border().name(),
-             Theme::baseBg().name(),
-             chunkColor);
+        .arg(Theme::panelBg().name(), chunkColor);
 }
 
-// Color shifts from green at low load to red at high load (matching UsageBarDelegate).
+// Color shifts from green at low load to red at high load.
 QString barChunkColor(double fraction)
 {
     const QColor green(45, 160, 80);
@@ -49,9 +49,18 @@ QProgressBar *makeBar(const QString &chunkColor, QWidget *parent)
     bar->setRange(0, 100);
     bar->setValue(0);
     bar->setStyleSheet(progressBarStyle(chunkColor));
-    bar->setFixedHeight(18);
+    bar->setFixedHeight(20);
     bar->setTextVisible(true);
     return bar;
+}
+
+// Row label with consistent dim styling.
+QLabel *makeBarLabel(const QString &text, QWidget *parent)
+{
+    auto *lbl = new QLabel(text, parent);
+    lbl->setFixedWidth(44);
+    lbl->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+    return lbl;
 }
 
 void clearLayout(QLayout *layout)
@@ -72,27 +81,37 @@ UsageView::UsageView(QWidget *parent)
     : QWidget(parent)
 {
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(12, 10, 12, 10);
-    outer->setSpacing(6);
+    outer->setContentsMargins(14, 12, 14, 12);
+    outer->setSpacing(10);
 
     // ---- totals section ------------------------------------------------
     auto *totalGrid = new QVBoxLayout();
-    totalGrid->setSpacing(4);
+    totalGrid->setSpacing(8);
 
     auto addTotalRow = [&](const QString &label, QProgressBar *&bar, const QString &color) {
         auto *row = new QHBoxLayout();
         row->setSpacing(8);
-        auto *lbl = new QLabel(label, this);
-        lbl->setFixedWidth(80);
-        lbl->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+        row->addWidget(makeBarLabel(label, this));
         bar = makeBar(color, this);
-        row->addWidget(lbl);
         row->addWidget(bar, 1);
         totalGrid->addLayout(row);
     };
 
-    addTotalRow(QStringLiteral("Total CPU"), m_totalCpuBar, QColor(45, 160, 80).name());
-    addTotalRow(QStringLiteral("Total MEM"), m_totalMemBar, QColor(80, 130, 200).name());
+    addTotalRow(QStringLiteral("CPU"), m_totalCpuBar, QColor(45, 160, 80).name());
+    addTotalRow(QStringLiteral("MEM"), m_totalMemBar, QColor(80, 130, 200).name());
+
+    // Disk I/O totals (no fill bar -- unbounded cumulative bytes).
+    {
+        auto *diskRow = new QHBoxLayout();
+        diskRow->setSpacing(8);
+        diskRow->addWidget(makeBarLabel(QStringLiteral("Disk"), this));
+        m_totalDiskLabel = new QLabel(QStringLiteral("—"), this);
+        m_totalDiskLabel->setStyleSheet(
+            QStringLiteral("color: %1;").arg(Theme::text().name()));
+        diskRow->addWidget(m_totalDiskLabel, 1);
+        totalGrid->addLayout(diskRow);
+    }
+
     outer->addLayout(totalGrid);
 
     // Separator between totals and per-box rows.
@@ -105,7 +124,7 @@ UsageView::UsageView(QWidget *parent)
     m_rowsWidget = new QWidget(this);
     m_rowsLayout = new QVBoxLayout(m_rowsWidget);
     m_rowsLayout->setContentsMargins(0, 0, 0, 0);
-    m_rowsLayout->setSpacing(4);
+    m_rowsLayout->setSpacing(14);
     m_rowsLayout->addStretch(1);
 
     auto *scroll = new QScrollArea(this);
@@ -131,6 +150,7 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
 {
     double totalCpu = 0.0;
     quint64 totalMemUsed = 0, totalMemLimit = 0;
+    quint64 totalDiskRead = 0, totalDiskWrite = 0;
     int cpuSampled = 0;
 
     for (const BoxInfo &b : boxes) {
@@ -145,7 +165,9 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
         // limit is set, so summing would give N × host RAM as the denominator.
         // Use the max instead: when all containers share the same host RAM
         // limit, this gives the actual available memory as the scale.
-        totalMemLimit = qMax(totalMemLimit, b.memLimitBytes);
+        totalMemLimit  = qMax(totalMemLimit, b.memLimitBytes);
+        totalDiskRead  += b.diskReadBytes;
+        totalDiskWrite += b.diskWriteBytes;
     }
 
     if (cpuSampled > 0) {
@@ -174,12 +196,21 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
             m_totalMemBar->setStyleSheet(memStyle);
             m_lastTotalMemStyle = memStyle;
         }
-        m_totalMemBar->setFormat(QStringLiteral("%1  (%2 / %3)")
+        m_totalMemBar->setFormat(QStringLiteral("%1%  (%2 / %3)")
             .arg(memPct).arg(DockerBackend::humanBytes(totalMemUsed),
                              DockerBackend::humanBytes(totalMemLimit)));
     } else {
         m_totalMemBar->setValue(0);
         m_totalMemBar->setFormat(QStringLiteral("—"));
+    }
+
+    if (totalDiskRead > 0 || totalDiskWrite > 0) {
+        m_totalDiskLabel->setText(
+            QStringLiteral("R: %1  W: %2")
+                .arg(DockerBackend::humanBytes(totalDiskRead),
+                     DockerBackend::humanBytes(totalDiskWrite)));
+    } else {
+        m_totalDiskLabel->setText(QStringLiteral("—"));
     }
 }
 
@@ -221,11 +252,22 @@ void UsageView::updateRow(const QString &name, const BoxInfo &b)
     if (b.memLimitBytes > 0) {
         const int memPct = int(memFrac * 100.0 + 0.5);
         rw.memBar->setValue(memPct);
-        rw.memBar->setFormat(QStringLiteral("%1  (%2)")
+        rw.memBar->setFormat(QStringLiteral("%1%  (%2)")
             .arg(memPct).arg(DockerBackend::humanBytes(b.memUsedBytes)));
     } else {
         rw.memBar->setValue(0);
         rw.memBar->setFormat(QStringLiteral("—"));
+    }
+
+    if (rw.diskLabel) {
+        if (b.diskReadBytes > 0 || b.diskWriteBytes > 0) {
+            rw.diskLabel->setText(
+                QStringLiteral("R: %1  W: %2")
+                    .arg(DockerBackend::humanBytes(b.diskReadBytes),
+                         DockerBackend::humanBytes(b.diskWriteBytes)));
+        } else {
+            rw.diskLabel->setText(QStringLiteral("—"));
+        }
     }
 }
 
@@ -243,7 +285,6 @@ void UsageView::rebuild(const QList<BoxInfo> &boxes)
 
     if (newNames != oldNames) {
         // Running set changed -- rebuild all per-box rows from scratch.
-        // Remove the trailing stretch before clearing the layout.
         const int n = m_rowsLayout->count();
         if (n > 0) {
             QLayoutItem *stretch = m_rowsLayout->takeAt(n - 1);
@@ -254,30 +295,55 @@ void UsageView::rebuild(const QList<BoxInfo> &boxes)
 
         for (const QString &name : newNames) {
             const BoxInfo &b = *newRunning[name];
-            auto *row = new QWidget(m_rowsWidget);
-            auto *rowLayout = new QHBoxLayout(row);
-            rowLayout->setContentsMargins(0, 2, 0, 2);
-            rowLayout->setSpacing(6);
+            auto *card = new QWidget(m_rowsWidget);
+            auto *cardLayout = new QVBoxLayout(card);
+            cardLayout->setContentsMargins(0, 0, 0, 0);
+            cardLayout->setSpacing(5);
 
-            auto *nameLabel = new QLabel(b.conversationName.isEmpty() ? b.name : b.conversationName, row);
-            nameLabel->setFixedWidth(200);
-            nameLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::text().name()));
+            // Name heading.
+            auto *nameLabel = new QLabel(
+                b.conversationName.isEmpty() ? b.name : b.conversationName, card);
             nameLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-            rowLayout->addWidget(nameLabel);
+            QFont boldFont = nameLabel->font();
+            boldFont.setBold(true);
+            nameLabel->setFont(boldFont);
+            nameLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::text().name()));
+            cardLayout->addWidget(nameLabel);
 
-            auto *cpuBar = makeBar(QColor(45, 160, 80).name(), row);
-            rowLayout->addWidget(cpuBar, 2);
+            // CPU bar row.
+            auto *cpuRow = new QHBoxLayout();
+            cpuRow->setSpacing(8);
+            cpuRow->addWidget(makeBarLabel(QStringLiteral("CPU"), card));
+            auto *cpuBar = makeBar(QColor(45, 160, 80).name(), card);
+            cpuRow->addWidget(cpuBar, 1);
+            cardLayout->addLayout(cpuRow);
 
-            auto *memBar = makeBar(barChunkColor(0.0), row);
-            rowLayout->addWidget(memBar, 3);
+            // MEM bar row.
+            auto *memRow = new QHBoxLayout();
+            memRow->setSpacing(8);
+            memRow->addWidget(makeBarLabel(QStringLiteral("MEM"), card));
+            auto *memBar = makeBar(barChunkColor(0.0), card);
+            memRow->addWidget(memBar, 1);
+            cardLayout->addLayout(memRow);
 
-            m_rowsLayout->addWidget(row);
+            // Disk I/O row.
+            auto *diskRow = new QHBoxLayout();
+            diskRow->setSpacing(8);
+            diskRow->addWidget(makeBarLabel(QStringLiteral("Disk"), card));
+            auto *diskLabel = new QLabel(QStringLiteral("—"), card);
+            diskLabel->setStyleSheet(
+                QStringLiteral("color: %1;").arg(Theme::text().name()));
+            diskRow->addWidget(diskLabel, 1);
+            cardLayout->addLayout(diskRow);
+
+            m_rowsLayout->addWidget(card);
 
             RowWidgets rw;
-            rw.container = row;
+            rw.container = card;
             rw.nameLabel = nameLabel;
             rw.cpuBar    = cpuBar;
             rw.memBar    = memBar;
+            rw.diskLabel = diskLabel;
             m_rowCache[name] = rw;
 
             updateRow(name, b);

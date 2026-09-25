@@ -7,6 +7,7 @@
 #include "DockerBackend.h"
 
 class QLabel;
+class QProgressBar;
 class QPushButton;
 class QStackedWidget;
 class QVBoxLayout;
@@ -93,7 +94,11 @@ private:
     // box, isn't the reason most people open this panel -- see the "move
     // cpu/etc status to the info sidebar" request this was built for.
     CollapsibleSection *m_statsSection = nullptr;
-    QLabel *m_statsLabel = nullptr;
+    QProgressBar *m_cpuBar   = nullptr;
+    QProgressBar *m_memBar   = nullptr;
+    QLabel       *m_diskLabel = nullptr;
+    QString       m_lastCpuStyle;
+    QString       m_lastMemStyle;
 
     QLabel *addField(class QVBoxLayout *layout, const QString &label);
     void rebuildSshSection(const QList<SshRemote> &remotes,

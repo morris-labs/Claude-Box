@@ -240,24 +240,18 @@ void MainWindow::buildUi()
 
     // Every column interactively resizable -- ResizeToContents/Stretch
     // both lock a column against manual dragging, which is exactly what
-    // stopped Status/Name/Details from being resized before. Starting
-    // widths mirror what those modes used to compute, so this is a
-    // one-time-editable version of the old layout, not a fresh guess: the
-    // narrow columns get resizeColumnToContents()'s answer and Directory
-    // (previously the one Stretch column, and still the field most likely
-    // to need extra room) starts wide. restoreSettings() overwrites all of
-    // this from QSettings on every launch after the first.
+    // stopped Status from being resized before. Starting widths are a
+    // sensible default; restoreSettings() overwrites them from QSettings
+    // on every launch after the first.
     QHeaderView *header = m_table->horizontalHeader();
     header->setStretchLastSection(false);
     for (int col = 0; col < m_model->columnCount(); ++col)
         header->setSectionResizeMode(col, QHeaderView::Interactive);
     m_table->resizeColumnToContents(0); // Status
-    m_table->resizeColumnToContents(1); // Name
+    header->resizeSection(1, 320);      // Directory
     header->resizeSection(2, 190);      // Conversation
-    header->resizeSection(3, 320);      // Directory
-    m_table->resizeColumnToContents(4); // Details
-    header->resizeSection(5, 90);       // CPU %
-    m_table->setItemDelegateForColumn(5, new UsageBarDelegate(m_table));
+    header->resizeSection(3, 90);       // CPU %
+    m_table->setItemDelegateForColumn(3, new UsageBarDelegate(m_table));
 
     // Shown only when there are no boxes at all. Parented to the viewport
     // with a layout so it stays centered without any resize plumbing.
