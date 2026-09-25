@@ -24,7 +24,7 @@ https://cli.github.com/packages stable main" \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # core utilities
-    git wget unzip sudo tmux jq \
+    git wget zip unzip sudo tmux jq \
     # GitHub CLI + git extras
     gh tig lazygit git-delta bat git-lfs git-filter-repo pre-commit \
     # C/C++ toolchain
