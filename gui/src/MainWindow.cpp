@@ -1776,12 +1776,15 @@ void MainWindow::onOpenExternal()
     }
 
     // Terminal.app is always present on macOS and is the final fallback.
-    // `activate` is required: without it the new tab opens behind claude-box-gui
-    // and the user never sees it.
+    // Two-step: `do script ""` opens a fresh window and returns a tab ref;
+    // `do script "cmd" in newTab` targets that specific tab. A bare
+    // `do script "cmd"` without a target injects into whatever tab happens
+    // to be frontmost in an existing Terminal window, which is wrong.
     if (QProcess::startDetached(QStringLiteral("osascript"), {
             "-e", "tell application \"Terminal\"",
             "-e", "  activate",
-            "-e", QStringLiteral("  do script \"%1\"").arg(dockerCmd),
+            "-e", "  set newTab to (do script \"\")",
+            "-e", QStringLiteral("  do script \"%1\" in newTab").arg(dockerCmd),
             "-e", "end tell"}))
         return;
 
