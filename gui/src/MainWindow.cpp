@@ -1685,6 +1685,9 @@ void MainWindow::onOpenAll()
 // console, so the child inherits none either and docker's -it / attach
 // fails silently. Route through wt.exe (Windows Terminal) first;
 // conhost.exe (always present since Windows 10) as fallback.
+// Note: if docker exits immediately (bad container name, daemon error)
+// the terminal window closes before the error is readable. Not fixable
+// without a wrapper script; document rather than paper over.
 static bool launchInWindowsTerminal(const QStringList &dockerArgs)
 {
     QStringList wtArgs = {QStringLiteral("--"), QStringLiteral("docker.exe")};
@@ -1719,11 +1722,14 @@ void MainWindow::onOpenExternalClaude()
                          "Neither wt.exe nor conhost.exe could be started."));
 #else
     // docker attach connects directly to the Claude session (PID 1 in the
-    // container). --detach-keys=ctrl-q overrides docker's default ctrl-p
-    // ctrl-q so ctrl-p reaches Claude instead.
+    // container). ctrl-q,q overrides docker's default ctrl-p ctrl-q so
+    // ctrl-p reaches Claude instead; the two-key sequence avoids accidental
+    // detach on a bare Ctrl+Q, and avoids the XON/XOFF issue where a
+    // single ctrl-q (ASCII 0x11) is consumed by the PTY line discipline
+    // before docker attach ever sees it.
     const QStringList innerCmd = {
         "bash", "-c",
-        QStringLiteral("docker attach --detach-keys=ctrl-q %1").arg(info->name)
+        QStringLiteral("docker attach --detach-keys=ctrl-q,q %1").arg(info->name)
     };
 
     struct Spec { QString term; bool gnomeStyle; };

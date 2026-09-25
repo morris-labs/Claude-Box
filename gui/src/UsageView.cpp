@@ -204,7 +204,7 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
         m_totalMemBar->setFormat(QStringLiteral("—"));
     }
 
-    if (cpuSampled > 0 && totalDiskTotal > 0) {
+    if (totalDiskTotal > 0) {
         m_totalDiskLabel->setText(
             QStringLiteral("Rw: %1  Total: %2")
                 .arg(DockerBackend::humanBytes(totalDiskRw),
