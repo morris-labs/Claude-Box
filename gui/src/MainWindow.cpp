@@ -1724,6 +1724,55 @@ void MainWindow::onOpenExternal()
     QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
                          QStringLiteral("Could not launch a terminal.\n"
                          "Neither docker.exe nor wt.exe could be started."));
+#elif defined(Q_OS_DARWIN)
+    // The shell command to run inside the new terminal window.
+    const QString dockerCmd = QStringLiteral(
+        "docker exec -it %1 bash -c 'tmux attach 2>/dev/null || tmux'"
+    ).arg(info->name);
+
+    // Honor $TERMINAL if set -- covers kitty, alacritty, and similar
+    // cross-platform terminals installed via Homebrew that accept `-e`.
+    {
+        const QString envTerm = qEnvironmentVariable("TERMINAL").trimmed();
+        if (!envTerm.isEmpty()) {
+            if (QProcess::startDetached(envTerm, {"-e", "bash", "-c", dockerCmd}))
+                return;
+        }
+    }
+
+    // iTerm2 -- check common install locations before attempting the
+    // AppleScript, so osascript doesn't report a "can't find application"
+    // error if iTerm2 isn't installed.
+    // dockerCmd contains only single quotes so it embeds safely inside
+    // the AppleScript double-quoted string without further escaping.
+    const QStringList iterm2Paths = {
+        QStringLiteral("/Applications/iTerm.app"),
+        QDir::homePath() + QStringLiteral("/Applications/iTerm.app"),
+    };
+    for (const QString &p : iterm2Paths) {
+        if (QFileInfo::exists(p)) {
+            if (QProcess::startDetached(QStringLiteral("osascript"), {
+                    "-e", "tell application \"iTerm2\"",
+                    "-e", "  set w to (create window with default profile)",
+                    "-e", "  tell current session of w",
+                    "-e", QStringLiteral("    write text \"%1\"").arg(dockerCmd),
+                    "-e", "  end tell",
+                    "-e", "end tell"}))
+                return;
+            break;
+        }
+    }
+
+    // Terminal.app is always present on macOS and is the final fallback.
+    if (QProcess::startDetached(QStringLiteral("osascript"), {
+            "-e", QStringLiteral(
+                "tell application \"Terminal\" to do script \"%1\""
+            ).arg(dockerCmd)}))
+        return;
+
+    QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
+                         QStringLiteral("Could not open an external terminal.\n"
+                         "osascript could not start Terminal.app."));
 #else
     // Attach to the container and attach or start a tmux session.
     const QStringList innerCmd = {
