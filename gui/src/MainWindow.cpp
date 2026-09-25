@@ -1682,29 +1682,54 @@ void MainWindow::onOpenExternal()
     // parity; needs a Windows-side check before this is considered
     // confirmed, the way the ConPTY/PtySessionWin work was. The docker CLI
     // is a native Windows binary talking to the daemon over a named pipe
-    // (see DockerApi::socketPath()), so it runs directly from cmd.exe --
-    // no WSL or bash-on-the-host dependency, unlike the container's own
-    // `tmux attach`, which runs *inside* the Linux container and is
-    // unaffected by the host shell either way.
-    // No outer `bash -c "..."` wrapper: `docker exec` runs directly, and
-    // the container-side tmux fallback only needs the single-quoted inner
-    // command (matching the Linux branch below). An outer double-quoted
-    // wrapper would put the same string through two independent
-    // command-line re-parsers -- Qt's Win32 quoting, then wt.exe/cmd.exe's
-    // own tokenizer -- which are prone to disagreeing on embedded quotes.
-    const QString dockerCmd = QStringLiteral(
-        "docker exec -it %1 bash -c 'tmux attach 2>/dev/null || tmux'").arg(info->name);
+    // (see DockerApi::socketPath()), so it runs directly -- no WSL or
+    // bash-on-the-host dependency, unlike the container's own `tmux
+    // attach`, which runs *inside* the Linux container and is unaffected
+    // by the host shell either way.
+    //
+    // Deliberately not routed through `cmd /k "<command string>"`: /K
+    // re-parses its argument as a fresh command line, and this command
+    // contains cmd.exe metacharacters (`|`, `>`) that cmd would then try
+    // to interpret itself (as its own pipe/redirect operators) rather than
+    // pass through to bash -- cmd's own quote-preservation rule only
+    // applies when no such characters appear between the quotes, so it
+    // strips them and misparses the line. Passing an argv list straight to
+    // docker.exe instead means Qt builds the Win32 command line and no
+    // shell ever re-tokenizes it: bash -c receives the script as one
+    // literal argument, exactly as intended.
+    const QStringList dockerArgs = {
+        "exec", "-it", info->name, "bash", "-c",
+        QStringLiteral("tmux attach 2>/dev/null || tmux")
+    };
 
-    // Windows Terminal first (wt.exe, ships with modern Windows and the
-    // Store), falling back to a plain cmd.exe console window.
-    if (QProcess::startDetached(QStringLiteral("wt.exe"), {"cmd", "/k", dockerCmd}))
+    // docker.exe launched directly, with no shell wrapper at all, is
+    // tried first: it's the one path with no re-tokenizing step of any
+    // kind between Qt's argv and the child process, so it's the most
+    // trustworthy. A detached console-subsystem process started from
+    // this console-less GUI app gets its own new console window
+    // automatically, so this still opens a visible terminal; it just
+    // won't stay open once the process exits the way `cmd /k` would
+    // have (worth noting if `docker exec` fails immediately -- the
+    // window can close before an error is readable).
+    if (QProcess::startDetached(QStringLiteral("docker.exe"), dockerArgs))
         return;
-    if (QProcess::startDetached(QStringLiteral("cmd.exe"), {"/k", dockerCmd}))
+
+    // Windows Terminal as a fallback, launching docker.exe via `--` (its
+    // direct-command syntax, which also bypasses cmd.exe parsing). Tried
+    // second rather than first: wt.exe's own positional-argument handling
+    // has documented cases of not preserving a multi-word quoted argument
+    // intact when rebuilding the child's command line, which could
+    // word-split the bash -c script rather than pass it through whole --
+    // a different, subtler failure than the cmd.exe bug this whole
+    // rewrite exists to avoid.
+    QStringList wtArgs = {"--", "docker.exe"};
+    wtArgs += dockerArgs;
+    if (QProcess::startDetached(QStringLiteral("wt.exe"), wtArgs))
         return;
 
     QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
                          QStringLiteral("Could not launch a terminal.\n"
-                         "Neither wt.exe nor cmd.exe could be started."));
+                         "Neither docker.exe nor wt.exe could be started."));
 #else
     // Attach to the container and attach or start a tmux session.
     const QStringList innerCmd = {

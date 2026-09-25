@@ -199,7 +199,12 @@ void BoxTableModel::setBoxes(const QList<BoxInfo> &boxes)
                 m_boxes[i] = b;
                 const QModelIndex left  = createIndex(i, 0);
                 const QModelIndex right = createIndex(i, ColumnCount - 1);
-                emit dataChanged(left, right, {Qt::DisplayRole, Qt::ToolTipRole, StatsRole});
+                // Include SortRole: QSortFilterProxyModel only re-sorts on a
+                // dataChanged whose roles include its configured sort role, so
+                // omitting it here would silently freeze row order under a
+                // CPU%/Details sort even as the values keep changing.
+                emit dataChanged(left, right,
+                                  {Qt::DisplayRole, Qt::ToolTipRole, StatsRole, SortRole});
             }
         }
         return;
