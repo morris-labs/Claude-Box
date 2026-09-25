@@ -20,6 +20,7 @@
 #include <QtConcurrent>
 #include <QDir>
 #include <QFile>
+#include <QTextStream>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -1775,22 +1776,32 @@ void MainWindow::onOpenExternal()
         }
     }
 
-    // Terminal.app is always present on macOS and is the final fallback.
-    // Two-step: `do script ""` opens a fresh window and returns a tab ref;
-    // `do script "cmd" in newTab` targets that specific tab. A bare
-    // `do script "cmd"` without a target injects into whatever tab happens
-    // to be frontmost in an existing Terminal window, which is wrong.
-    if (QProcess::startDetached(QStringLiteral("osascript"), {
-            "-e", "tell application \"Terminal\"",
-            "-e", "  activate",
-            "-e", "  set newTab to (do script \"\")",
-            "-e", QStringLiteral("  do script \"%1\" in newTab").arg(dockerCmd),
-            "-e", "end tell"}))
-        return;
+    // Terminal.app: write the command to a fixed temp script and open it.
+    // `open -a Terminal script.sh` always opens in a new window. AppleScript's
+    // `do script "cmd"` is unreliable — without an explicit target it injects
+    // into the frontmost existing tab regardless of the two-step new-tab trick,
+    // which just confused the user's own shell history.
+    // Fixed name means no temp-file accumulation: each open overwrites the last.
+    {
+        const QString tmpPath = QDir::tempPath()
+            + QStringLiteral("/claude-box-open.sh");
+        QFile f(tmpPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream s(&f);
+            s << "#!/bin/sh\nexec " << dockerCmd << "\n";
+            f.close();
+            f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+                           | QFile::ReadGroup  | QFile::ExeGroup
+                           | QFile::ReadOther  | QFile::ExeOther);
+            if (QProcess::startDetached(QStringLiteral("open"),
+                    {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath}))
+                return;
+        }
+    }
 
     QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
                          QStringLiteral("Could not open an external terminal.\n"
-                         "osascript could not start Terminal.app."));
+                         "Failed to write or open the launcher script."));
 #else
     // Attach to the container and attach or start a tmux session.
     const QStringList innerCmd = {
