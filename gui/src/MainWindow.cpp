@@ -1764,6 +1764,7 @@ void MainWindow::onOpenExternal()
         if (QFileInfo::exists(p)) {
             if (QProcess::startDetached(QStringLiteral("osascript"), {
                     "-e", "tell application \"iTerm2\"",
+                    "-e", "  activate",
                     "-e", "  set w to (create window with default profile)",
                     "-e", "  tell current session of w",
                     "-e", QStringLiteral("    write text \"%1\"").arg(dockerCmd),
@@ -1775,10 +1776,13 @@ void MainWindow::onOpenExternal()
     }
 
     // Terminal.app is always present on macOS and is the final fallback.
+    // `activate` is required: without it the new tab opens behind claude-box-gui
+    // and the user never sees it.
     if (QProcess::startDetached(QStringLiteral("osascript"), {
-            "-e", QStringLiteral(
-                "tell application \"Terminal\" to do script \"%1\""
-            ).arg(dockerCmd)}))
+            "-e", "tell application \"Terminal\"",
+            "-e", "  activate",
+            "-e", QStringLiteral("  do script \"%1\"").arg(dockerCmd),
+            "-e", "end tell"}))
         return;
 
     QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
