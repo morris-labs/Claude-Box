@@ -14,11 +14,25 @@ files.
 
 ## Features
 
+### Dashboard and terminal
+
 - **Dashboard**: a filterable table of every `claude-agent-*` container, with
-  live status, CPU and memory stats, and a details panel for the selected box.
+  live status, a CPU and memory usage bar per box, and a details panel for the
+  selected box. A separate Usage tab shows a live summary across every running
+  box.
 - **Embedded terminal**: attach to a running box in a tab and interact with
   Claude Code directly, backed by a real VT100/xterm terminal emulator
-  ([libvterm](https://www.leonerd.org.uk/code/libvterm/)).
+  ([libvterm](https://www.leonerd.org.uk/code/libvterm/)), with text selection
+  and copy and paste (Ctrl+Shift+C and Ctrl+Shift+V).
+- **Multi-select actions**: select several boxes at once to open, stop, or
+  remove them together.
+- **Open in an external terminal**: attach to a running box's `tmux` session
+  in your system terminal instead of an in-app tab.
+- **Single instance**: launching the app while it's already running raises
+  the existing window instead of opening a second one.
+
+### Conversations and boxes
+
 - **Conversation management**: start a new conversation, resume a known one,
   adopt a conversation that Claude Code already created outside the app, or
   fork an existing conversation into a new box.
@@ -27,8 +41,34 @@ files.
 - **Workspace folders**: point a box at a named subfolder of your project
   instead of the tree root, so several conversations can work side by side
   without colliding.
-- **Cross-platform**: a native build for Linux, with a Windows port in
-  progress (see [Windows support](#windows-support)).
+- **Working directory management**: move or change a box's project directory
+  from within the app, and relink a box whose directory has gone missing.
+- **Automatic port allocation**: each new box gets a block of 5 host ports
+  from a shared range, so simultaneous boxes never collide.
+- **Resume after reboot**: the app remembers which boxes were running and
+  offers to resume them after your app or host restarts.
+
+### SSH remotes
+
+- **Shared remote catalog**: define an SSH remote once and attach any number
+  of boxes to it; boxes that share a remote share one tunnel instead of each
+  opening a redundant connection.
+- **Port forwarding**: editable `-L`/`-R` forwards per remote, with a
+  per-remote tunnel status indicator and manual reconnect.
+- **Connection testing**: test an SSH connection from within the app, with an
+  interactive login prompt when a key needs a passphrase or hasn't been
+  authorized yet.
+
+### Setup
+
+- **First-run setup wizard**: checks that Docker and an SSH client are
+  reachable, builds the sandbox image from this repository's `Dockerfile`,
+  and generates an SSH keypair if you don't already have one.
+
+### Cross-platform
+
+A native build for Linux, with a Windows port in progress. For details, see
+[Windows support](#windows-support).
 
 ## How it works
 

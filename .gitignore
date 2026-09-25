@@ -1,6 +1,9 @@
 # Build output
 gui/build/
 
+# Release packages (AppImage, .deb) -- built artifacts, not source.
+/dist/
+
 # Git credential store -- holds a live GitHub PAT, must never be committed.
 /.git-credentials
 
