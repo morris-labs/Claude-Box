@@ -81,6 +81,21 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
         // controlling terminal (forkpty() handles setsid()/TIOCSCTTY).
         if (!workingDirBytes.isEmpty() && ::chdir(workingDirBytes.constData()) != 0)
             ::_exit(127); // better to fail visibly than exec in the wrong directory
+#ifdef __APPLE__
+        // A .app bundle launched via `open` inherits only
+        // /usr/bin:/bin:/usr/sbin:/sbin. Docker Desktop installs its CLI at
+        // /usr/local/bin; Homebrew on Apple Silicon uses /opt/homebrew/bin.
+        // Prepend both so `docker` is found regardless of install location.
+        {
+            const char *cur = ::getenv("PATH");
+            char buf[4096];
+            if (cur && *cur)
+                ::snprintf(buf, sizeof(buf), "/usr/local/bin:/opt/homebrew/bin:%s", cur);
+            else
+                ::snprintf(buf, sizeof(buf), "/usr/local/bin:/opt/homebrew/bin");
+            ::setenv("PATH", buf, 1);
+        }
+#endif
         ::execvp(argv[0], argv.data());
         ::_exit(127); // only reached if exec failed
     }
