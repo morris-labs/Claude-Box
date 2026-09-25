@@ -204,7 +204,8 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
         m_totalMemBar->setFormat(QStringLiteral("—"));
     }
 
-    if (totalDiskRead > 0 || totalDiskWrite > 0) {
+    if (cpuSampled > 0) {
+        // Stats API returned data; show disk even if zero (valid on cgroupsv2).
         m_totalDiskLabel->setText(
             QStringLiteral("R: %1  W: %2")
                 .arg(DockerBackend::humanBytes(totalDiskRead),
@@ -260,7 +261,9 @@ void UsageView::updateRow(const QString &name, const BoxInfo &b)
     }
 
     if (rw.diskLabel) {
-        if (b.diskReadBytes > 0 || b.diskWriteBytes > 0) {
+        // Show values whenever stats are available (cpuPct >= 0 means
+        // the stats API returned data). Zero bytes is valid on cgroupsv2.
+        if (b.cpuPct >= 0.0f) {
             rw.diskLabel->setText(
                 QStringLiteral("R: %1  W: %2")
                     .arg(DockerBackend::humanBytes(b.diskReadBytes),

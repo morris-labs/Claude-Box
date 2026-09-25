@@ -42,7 +42,6 @@
 #include <QProcess>
 #include <QScrollBar>
 #include <QFileDialog>
-#include "UsageBarDelegate.h"
 #include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -250,8 +249,6 @@ void MainWindow::buildUi()
     m_table->resizeColumnToContents(0); // Status
     header->resizeSection(1, 320);      // Directory
     header->resizeSection(2, 190);      // Conversation
-    header->resizeSection(3, 90);       // CPU %
-    m_table->setItemDelegateForColumn(3, new UsageBarDelegate(m_table));
 
     // Shown only when there are no boxes at all. Parented to the viewport
     // with a layout so it stays centered without any resize plumbing.
@@ -369,6 +366,14 @@ void MainWindow::buildUi()
     m_outerSplitter->setChildrenCollapsible(false);
     m_outerSplitter->setSizes({440, 360});
     setCentralWidget(m_outerSplitter);
+
+    // When the Usage tab is active, the terminal panel is irrelevant and
+    // would only waste vertical space. Hide it so Usage gets full height;
+    // show it again when switching back to the Boxes tab.
+    connect(m_topTabWidget, &QTabWidget::currentChanged, this, [this](int index) {
+        const bool onUsage = (index == 1);
+        m_tabStack->setVisible(!onUsage);
+    });
 
     connect(m_table, &QTableView::doubleClicked, this, &MainWindow::onRowDoubleClicked);
     connect(m_table, &QTableView::customContextMenuRequested, this, &MainWindow::showTableContextMenu);
