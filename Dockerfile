@@ -88,4 +88,4 @@ ENV PATH=${NVM_DIR}/current/bin:${SDKMAN_DIR}/candidates/gradle/current/bin:${PA
 # The directory is handled dynamically by the orchestration script
 WORKDIR /home/${USER_NAME}/workspace
 
-CMD ["claude"]
+CMD ["tmux", "new-session", "-s", "main", "--", "claude"]
