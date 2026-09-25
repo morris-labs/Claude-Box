@@ -197,6 +197,11 @@ target_compile_definitions(claude-box-gui
         # distributed today); SetupWizard checks the Dockerfile is
         # actually there before trusting this rather than assuming so.
         CLAUDE_BOX_REPO_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
+        # The Windows SDK's <windows.h> (pulled in via Qt) #defines min
+        # and max as macros, which corrupts std::min({...}) and
+        # std::max({...}) initializer-list calls into parse errors.
+        # NOMINMAX suppresses those macros for the whole target.
+        $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
 
 target_link_libraries(claude-box-gui
