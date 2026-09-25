@@ -171,6 +171,11 @@ void MainWindow::buildActions()
     m_openExternalAction->setStatusTip(QStringLiteral("Open an interactive shell inside this container in an external terminal"));
     connect(m_openExternalAction, &QAction::triggered, this, &MainWindow::onOpenExternal);
 
+    m_attachClaudeAction = new QAction(QStringLiteral("&Attach to Claude Session"), this);
+    m_attachClaudeAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")));
+    m_attachClaudeAction->setStatusTip(QStringLiteral("Attach to the running Claude session in this container via tmux"));
+    connect(m_attachClaudeAction, &QAction::triggered, this, &MainWindow::onAttachClaude);
+
     m_removeAction = new QAction(Icons::removeBox(), QStringLiteral("&Remove"), this);
     m_removeAction->setStatusTip(QStringLiteral("docker rm this stopped container"));
     connect(m_removeAction, &QAction::triggered, this, &MainWindow::onRemove);
@@ -407,6 +412,7 @@ void MainWindow::buildMenus()
     boxMenu->addAction(m_stopAllAction);
     boxMenu->addAction(m_openAllAction);
     boxMenu->addAction(m_openExternalAction);
+    boxMenu->addAction(m_attachClaudeAction);
     boxMenu->addSeparator();
     boxMenu->addAction(m_moveWorkDirAction);
     boxMenu->addAction(m_changeWorkDirAction);
@@ -451,6 +457,7 @@ void MainWindow::buildToolBar()
     toolbar->addAction(m_forkAction);
     toolbar->addAction(m_closeAction);
     toolbar->addAction(m_openExternalAction);
+    toolbar->addAction(m_attachClaudeAction);
     toolbar->addSeparator();
     toolbar->addAction(m_removeAction);
     toolbar->addAction(m_purgeAction);
@@ -706,6 +713,7 @@ void MainWindow::updateActionStates()
     m_changeWorkDirAction->setEnabled(single && single->status != BoxInfo::Status::Running
                                       && rec.isValid());
     m_openExternalAction->setEnabled(single && single->status == BoxInfo::Status::Running);
+    m_attachClaudeAction->setEnabled(single && single->status == BoxInfo::Status::Running);
 
     // Multi-item actions: any matching selection is enough.
     m_openAction->setEnabled(anyStopped);
@@ -883,6 +891,7 @@ void MainWindow::showTableContextMenu(const QPoint &pos)
     menu.addSeparator();
     menu.addAction(m_closeAction);
     menu.addAction(m_openExternalAction);
+    menu.addAction(m_attachClaudeAction);
     menu.addSeparator();
     menu.addAction(m_moveWorkDirAction);
     menu.addAction(m_changeWorkDirAction);
@@ -1694,8 +1703,7 @@ void MainWindow::onOpenExternal()
     // shell ever re-tokenizes it: bash -c receives the script as one
     // literal argument, exactly as intended.
     const QStringList dockerArgs = {
-        "exec", "-it", info->name, "bash", "-c",
-        QStringLiteral("tmux attach 2>/dev/null || tmux")
+        "exec", "-it", info->name, "bash"
     };
 
     // docker.exe launched directly, with no shell wrapper at all, is
@@ -1739,7 +1747,7 @@ void MainWindow::onOpenExternal()
     if (dockerBin.isEmpty())
         dockerBin = QStringLiteral("docker"); // fallback: let the shell find it
     const QString dockerCmd = QStringLiteral(
-        "%1 exec -it %2 bash -c 'tmux attach 2>/dev/null || tmux'"
+        "%1 exec -it %2 bash"
     ).arg(dockerBin, info->name);
 
     // Honor $TERMINAL if set -- covers kitty, alacritty, and similar
@@ -1803,11 +1811,10 @@ void MainWindow::onOpenExternal()
                          QStringLiteral("Could not open an external terminal.\n"
                          "Failed to write or open the launcher script."));
 #else
-    // Attach to the container and attach or start a tmux session.
+    // Open a plain interactive shell in the container.
     const QStringList innerCmd = {
         "bash", "-c",
-        QStringLiteral("docker exec -it %1 bash -c 'tmux attach 2>/dev/null || tmux'")
-            .arg(info->name)
+        QStringLiteral("docker exec -it %1 bash").arg(info->name)
     };
 
     // Try terminals in preference order: $TERMINAL env var, then common ones.
@@ -1833,6 +1840,117 @@ void MainWindow::onOpenExternal()
     }
 
     QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
+                         QStringLiteral("No terminal emulator found.\n"
+                         "Set $TERMINAL, or install xterm or gnome-terminal."));
+#endif
+}
+
+void MainWindow::onAttachClaude()
+{
+    const BoxInfo *info = selectedBoxInfo();
+    if (!info || info->status != BoxInfo::Status::Running)
+        return;
+
+#ifdef Q_OS_WIN
+    const QStringList dockerArgs = {
+        "exec", "-it", info->name, "tmux", "attach", "-t", "main"
+    };
+    if (QProcess::startDetached(QStringLiteral("docker.exe"), dockerArgs))
+        return;
+    QStringList wtArgs = {"--", "docker.exe"};
+    wtArgs += dockerArgs;
+    if (QProcess::startDetached(QStringLiteral("wt.exe"), wtArgs))
+        return;
+    QMessageBox::warning(this, QStringLiteral("Attach to Claude Session"),
+                         QStringLiteral("Could not launch a terminal.\n"
+                         "Neither docker.exe nor wt.exe could be started."));
+#elif defined(Q_OS_DARWIN)
+    QString dockerBin = QStandardPaths::findExecutable(
+        QStringLiteral("docker"),
+        {QStringLiteral("/usr/local/bin"),
+         QStringLiteral("/opt/homebrew/bin"),
+         QStringLiteral("/Applications/Docker.app/Contents/Resources/bin"),
+         QDir::homePath() + QStringLiteral("/.docker/bin")});
+    if (dockerBin.isEmpty())
+        dockerBin = QStringLiteral("docker");
+    const QString dockerCmd = QStringLiteral(
+        "%1 exec -it %2 tmux attach -t main"
+    ).arg(dockerBin, info->name);
+
+    {
+        const QString envTerm = qEnvironmentVariable("TERMINAL").trimmed();
+        if (!envTerm.isEmpty()) {
+            if (QProcess::startDetached(envTerm, {"-e", "bash", "-c", dockerCmd}))
+                return;
+        }
+    }
+
+    const QStringList iterm2Paths = {
+        QStringLiteral("/Applications/iTerm.app"),
+        QDir::homePath() + QStringLiteral("/Applications/iTerm.app"),
+    };
+    for (const QString &p : iterm2Paths) {
+        if (QFileInfo::exists(p)) {
+            if (QProcess::startDetached(QStringLiteral("osascript"), {
+                    "-e", "tell application \"iTerm2\"",
+                    "-e", "  activate",
+                    "-e", "  set w to (create window with default profile)",
+                    "-e", "  tell current session of w",
+                    "-e", QStringLiteral("    write text \"%1\"").arg(dockerCmd),
+                    "-e", "  end tell",
+                    "-e", "end tell"}))
+                return;
+            break;
+        }
+    }
+
+    {
+        const QString tmpPath = QDir::tempPath()
+            + QStringLiteral("/claude-box-attach.sh");
+        QFile f(tmpPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream s(&f);
+            s << "#!/bin/sh\nexec " << dockerCmd << "\n";
+            f.close();
+            f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+                           | QFile::ReadGroup  | QFile::ExeGroup
+                           | QFile::ReadOther  | QFile::ExeOther);
+            if (QProcess::startDetached(QStringLiteral("open"),
+                    {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath}))
+                return;
+        }
+    }
+
+    QMessageBox::warning(this, QStringLiteral("Attach to Claude Session"),
+                         QStringLiteral("Could not open an external terminal.\n"
+                         "Failed to write or open the launcher script."));
+#else
+    const QStringList innerCmd = {
+        "bash", "-c",
+        QStringLiteral("docker exec -it %1 tmux attach -t main").arg(info->name)
+    };
+
+    struct Spec { QString term; bool gnomeStyle; };
+    const QList<Spec> candidates = {
+        {qEnvironmentVariable("TERMINAL"), false},
+        {QStringLiteral("x-terminal-emulator"), false},
+        {QStringLiteral("gnome-terminal"),      true},
+        {QStringLiteral("xterm"),               false},
+        {QStringLiteral("kitty"),               false},
+        {QStringLiteral("alacritty"),           false},
+    };
+
+    for (const Spec &s : candidates) {
+        if (s.term.trimmed().isEmpty())
+            continue;
+        const QStringList args = s.gnomeStyle
+            ? QStringList{"--"} + innerCmd
+            : QStringList{"-e"} + innerCmd;
+        if (QProcess::startDetached(s.term, args))
+            return;
+    }
+
+    QMessageBox::warning(this, QStringLiteral("Attach to Claude Session"),
                          QStringLiteral("No terminal emulator found.\n"
                          "Set $TERMINAL, or install xterm or gnome-terminal."));
 #endif
