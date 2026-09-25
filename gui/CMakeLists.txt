@@ -267,14 +267,35 @@ find_program(MACDEPLOYQT macdeployqt
           "${Qt6_DIR}/../../../../bin"
 )
 if(MACDEPLOYQT)
+    # app-bundle: run macdeployqt, then ad-hoc-sign the result so Gatekeeper
+    # allows it to run on the local machine without a Developer ID.
+    # For distribution to other machines, replace `-s -` with your Developer ID:
+    #   codesign --deep --force --verify --sign "Developer ID Application: ..."
     add_custom_target(app-bundle
         COMMAND ${MACDEPLOYQT} "$<TARGET_BUNDLE_DIR:claude-box-gui>"
+        COMMAND codesign --deep --force --verify --sign -
+                "$<TARGET_BUNDLE_DIR:claude-box-gui>"
         DEPENDS claude-box-gui
-        COMMENT "Running macdeployqt to make the .app self-contained"
+        COMMENT "Running macdeployqt and ad-hoc signing the .app bundle"
+        VERBATIM
+    )
+
+    # dmg: create a distributable disk image from the signed .app.
+    # Notarization (notarytool) is not automated here -- it requires a
+    # Developer ID certificate and Apple ID credentials, so it is a
+    # manual step documented in the README once those are in place.
+    set(DMG_PATH "${CMAKE_BINARY_DIR}/Claude Box.dmg")
+    add_custom_target(dmg
+        COMMAND hdiutil create -volname "Claude Box"
+                -srcfolder "$<TARGET_BUNDLE_DIR:claude-box-gui>"
+                -ov -format UDZO
+                "${DMG_PATH}"
+        DEPENDS app-bundle
+        COMMENT "Creating Claude Box.dmg"
         VERBATIM
     )
 else()
-    message(STATUS "macdeployqt not found -- app-bundle target unavailable. "
+    message(STATUS "macdeployqt not found -- app-bundle and dmg targets unavailable. "
                    "Ensure the Qt bin directory is on PATH.")
 endif()
 
