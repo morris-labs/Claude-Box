@@ -404,6 +404,11 @@ QString DockerBackend::statsDetail(const QString &id, BoxInfo &out) const
     // Disk usage via container inspect with ?size=true. Works on both
     // cgroupsv1 and cgroupsv2, unlike blkio_stats.io_service_bytes_recursive
     // which is null on cgroupsv2 (Linux 5.8+ default, Ubuntu 22.04+).
+    // Cost: a second sequential HTTP call per container per poll cycle.
+    // Both calls run on a background thread (QtConcurrent), so the GUI
+    // stays responsive, but the refresh watcher's isRunning() guard means
+    // a slow daemon can stall the next poll for up to 2*N*5s (N containers).
+    // Do not add more sequential calls here without measuring the impact.
     quint64 diskRw = 0, diskTotal = 0;
     const QJsonDocument sizeDoc = DockerApi::get(
         QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + id
