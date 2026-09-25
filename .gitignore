@@ -1,8 +1,9 @@
 # Build output
 gui/build/
 
-# Release packages (AppImage, .deb) -- built artifacts, not source.
+# Release packages (AppImage, .deb, Windows installer) -- built artifacts, not source.
 /dist/
+/installer/
 
 # IDE/editor state -- local to each developer's machine.
 /.vscode/
