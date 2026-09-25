@@ -287,6 +287,19 @@ void MainWindow::buildUi()
     connect(m_details, &BoxDetailsPanel::reconnectRequested, this, &MainWindow::onReconnectTunnels);
     connect(m_details, &BoxDetailsPanel::relinkRequested, this,
             [this](const QString &boxName, const QString &newDir) {
+        // The button that sends this is disabled while Running (see
+        // BoxDetailsPanel::setBox), but re-check here too: the box could
+        // have started running again between the button's last repaint and
+        // this click landing.
+        for (int i = 0; i < m_model->rowCount(); ++i) {
+            const BoxInfo *row = m_model->boxAt(i);
+            if (row && row->name == boxName && row->status == BoxInfo::Status::Running) {
+                QMessageBox::information(this, QStringLiteral("Relink"),
+                    QStringLiteral("This box is running. Stop it before relinking its "
+                                   "directory."));
+                return;
+            }
+        }
         const BoxRecord oldRec = BoxRecord::load(boxName);
         const QString oldDir = oldRec.targetDir;
         BoxRecord rec = oldRec;
@@ -578,17 +591,29 @@ void MainWindow::onBoxesLoaded()
     }
 
     // A live Docker Engine restart (Docker Desktop update, WSL2 restart)
-    // while the GUI stays open drops the entire running fleet from
-    // `docker ps` in one tick, same as an isolated box exiting -- but
-    // clearing wasRunning for all of them here would erase the very
-    // recovery signal offerResumeAfterReboot() needs, and that only runs
-    // on this app's own startup, not on an Engine-level event. Distinguish
-    // the two: an isolated single-box exit still clears normally below; a
-    // majority of a non-trivial previously-running fleet disappearing at
-    // once is treated as a likely Engine event and left alone for this
-    // tick (an isolated mass crash that isn't an Engine restart just means
-    // the boxes stay offered for resume, which is a stale-but-harmless
-    // prompt rather than a lost one).
+    // while the GUI stays open drops running boxes from `docker ps` the
+    // same way an isolated box exiting does -- but clearing wasRunning for
+    // boxes lost to an Engine event here would erase the very recovery
+    // signal offerResumeAfterReboot() needs, and that only runs on this
+    // app's own startup, not on an Engine-level event. Two signals
+    // distinguish the two cases:
+    //
+    //  - lastPollDaemonUnreachable(): the poll that just produced
+    //    freshBoxes couldn't actually reach the daemon at all, rather than
+    //    reaching it and finding fewer containers. This is the strong
+    //    signal -- it covers a single running box just as well as a whole
+    //    fleet, since it doesn't depend on counting anything that
+    //    "disappeared".
+    //  - the older count-based heuristic, kept as a fallback for a daemon
+    //    that answered the poll (so isn't flagged unreachable) but still
+    //    lost most of a non-trivial fleet at once -- e.g. an Engine
+    //    restart landing between two ticks in a way this poll's query
+    //    still succeeded against a freshly-restarted, empty daemon.
+    //
+    // An isolated single-box exit while the daemon stays reachable still
+    // clears normally below; an isolated mass crash that isn't actually an
+    // Engine event just means the boxes stay offered for resume, which is
+    // a stale-but-harmless prompt rather than a lost one.
     QSet<QString> stillRunning;
     for (const BoxInfo &b : freshBoxes) {
         if (b.status == BoxInfo::Status::Running)
@@ -600,7 +625,8 @@ void MainWindow::onBoxesLoaded()
             ++droppedCount;
     }
     const bool likelyEngineRestart =
-        prevRunning.size() >= 2 && droppedCount * 2 >= prevRunning.size();
+        m_docker.lastPollDaemonUnreachable() ||
+        (prevRunning.size() >= 2 && droppedCount * 2 >= prevRunning.size());
 
     if (!likelyEngineRestart) {
         for (BoxInfo &b : freshBoxes) {
@@ -1660,8 +1686,14 @@ void MainWindow::onOpenExternal()
     // no WSL or bash-on-the-host dependency, unlike the container's own
     // `tmux attach`, which runs *inside* the Linux container and is
     // unaffected by the host shell either way.
+    // No outer `bash -c "..."` wrapper: `docker exec` runs directly, and
+    // the container-side tmux fallback only needs the single-quoted inner
+    // command (matching the Linux branch below). An outer double-quoted
+    // wrapper would put the same string through two independent
+    // command-line re-parsers -- Qt's Win32 quoting, then wt.exe/cmd.exe's
+    // own tokenizer -- which are prone to disagreeing on embedded quotes.
     const QString dockerCmd = QStringLiteral(
-        "docker exec -it %1 bash -c \"tmux attach 2>/dev/null || tmux\"").arg(info->name);
+        "docker exec -it %1 bash -c 'tmux attach 2>/dev/null || tmux'").arg(info->name);
 
     // Windows Terminal first (wt.exe, ships with modern Windows and the
     // Store), falling back to a plain cmd.exe console window.

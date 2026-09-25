@@ -84,6 +84,20 @@ public:
     // cache has gone stale this also spends a second or two refreshing it.
     QList<BoxInfo> listBoxes(bool sampleStats = true) const;
 
+    // True when the listBoxes() call just made could not reach the daemon
+    // at all (the API query failed after previously working, or the CLI's
+    // own `docker ps` failed to run) -- as opposed to reaching it and
+    // legitimately finding zero containers. Sampled once per listBoxes()
+    // call; read this only after that call returns, from the same thread
+    // that receives its result (see the QFutureWatcher usage in
+    // MainWindow::refreshBoxes/onBoxesLoaded, which is what makes reading
+    // this plain bool after a background listBoxes() safe without an
+    // atomic -- the future's finished signal is the synchronization point).
+    // Used to tell a live Docker Engine restart apart from the user simply
+    // stopping their own boxes, so wasRunning isn't cleared for boxes that
+    // dropped out only because the daemon itself vanished.
+    bool lastPollDaemonUnreachable() const { return m_lastPollDaemonUnreachable; }
+
     // Forces the next listBoxes(true) to re-sample stats regardless of
     // cache age. Used by the explicit Refresh action.
     void invalidateStats();
@@ -146,6 +160,9 @@ private:
     // such as a tcp:// or ssh:// DOCKER_HOST.
     bool listViaApi(QList<BoxInfo> &result, QSet<QString> &seen, bool sampleStats) const;
     void listViaCli(QList<BoxInfo> &result, QSet<QString> &seen, bool sampleStats) const;
+
+    // See lastPollDaemonUnreachable() above.
+    mutable bool m_lastPollDaemonUnreachable = false;
 
     // `docker stats --no-stream` takes 1-2 seconds to return no matter how
     // many containers it reports on, because it samples CPU over an

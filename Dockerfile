@@ -10,8 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI apt repo (curl is now available).
+# -o rather than piping through dd: the default /bin/sh (dash) has no
+# pipefail, so a failed curl in a pipe still lets dd "succeed" writing an
+# empty/corrupt keyring, and the build would only fail later and more
+# confusingly at `apt-get install gh`. Writing straight to a file makes a
+# curl failure fail this RUN step immediately, at the actual problem.
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] \
 https://cli.github.com/packages stable main" \
@@ -55,39 +60,30 @@ USER ${USER_NAME}
 
 # nvm + Node.js (user-level; the system Node.js above is only for the
 # claude-code global install -- project work inside the container should use
-# the nvm-managed version). Pinned to a concrete release, not --lts, so two
-# builds of this Dockerfile from the same commit produce the same image;
-# bump NODE_VERSION here by hand rather than tracking whatever LTS is
-# current at build time.
-ENV NODE_VERSION=22.13.0
-RUN curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && \
-    bash -c '. "$HOME/.nvm/nvm.sh" && nvm install '"${NODE_VERSION}"' && nvm alias default '"${NODE_VERSION}"
+# the nvm-managed version). Installs whatever the current LTS release is at
+# build time. A "current" symlink is created alongside nvm's own versioned
+# install directory so the PATH entry below can reference a fixed path
+# without needing to know which version that resolves to.
+RUN curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash && \
+    bash -c '. "$HOME/.nvm/nvm.sh" && nvm install --lts && nvm alias default node && \
+      ln -s "$NVM_DIR/versions/node/$(nvm version default)" "$NVM_DIR/current"'
 
 # SDKMAN + Gradle (user-level install; SDKMAN requires an interactive-style
-# shell init). Gradle is pinned for the same reproducibility reason as
-# Node above. get.sdkman.io has no versioned URL the way nvm's tagged
-# install.sh does -- it always serves whatever the current stable installer
-# is -- so the script is pinned by checksum instead: the build fails loudly
-# if SDKMAN changes what it serves, rather than silently installing a
-# different SDKMAN CLI version. Bump SDKMAN_INSTALL_SHA256 by hand (fetch
-# https://get.sdkman.io and sha256sum it) for a deliberate upgrade.
-ENV GRADLE_VERSION=8.10.2
-ENV SDKMAN_INSTALL_SHA256=b6f4fb257b420c7291c35549ae714af6d5af290bb8d57c219918f1f3d3d3e052
-RUN curl -fsSL https://get.sdkman.io -o /tmp/sdkman-install.sh && \
-    echo "${SDKMAN_INSTALL_SHA256}  /tmp/sdkman-install.sh" | sha256sum -c - && \
-    bash /tmp/sdkman-install.sh && \
-    rm /tmp/sdkman-install.sh && \
-    bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install gradle '"${GRADLE_VERSION}"
+# shell init). Installs whatever the current default Gradle release is at
+# build time.
+RUN curl -fsSL https://get.sdkman.io | bash && \
+    bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install gradle'
 
 # nvm and SDKMAN only wire their PATH/init lines into ~/.bashrc, which a
 # non-interactive `bash -c` -- how this image's entrypoint actually invokes
 # claude -- never sources. Expose both toolchains via PATH directly so
 # gradle and the nvm-managed node/npm resolve regardless of how the shell
-# is invoked. The gradle path relies on SDKMAN's "current" symlink, which
-# `sdk install` maintains on disk and needs no shell init to read.
+# is invoked. Both paths rely on a "current" symlink maintained on disk --
+# SDKMAN's own, and the one created above for nvm -- so neither needs a
+# shell init to resolve.
 ENV NVM_DIR=/home/${USER_NAME}/.nvm
 ENV SDKMAN_DIR=/home/${USER_NAME}/.sdkman
-ENV PATH=${NVM_DIR}/versions/node/v${NODE_VERSION}/bin:${SDKMAN_DIR}/candidates/gradle/current/bin:${PATH}
+ENV PATH=${NVM_DIR}/current/bin:${SDKMAN_DIR}/candidates/gradle/current/bin:${PATH}
 
 # The directory is handled dynamically by the orchestration script
 WORKDIR /home/${USER_NAME}/workspace
