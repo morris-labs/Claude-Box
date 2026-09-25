@@ -299,10 +299,15 @@ void SetupWizard::buildDockerImage()
     // passes to `docker run --user`: the image's uid-1000 account is renamed
     // to this value at build time, and a run with a different --user finds no
     // matching passwd entry.
+    // --no-cache and --pull force a genuinely fresh build: Docker won't reuse
+    // cached layers and will pull the latest base image. This is always what
+    // you want when triggering a rebuild from the UI.
     auto *dlg = new CommandTerminalDialog(QStringLiteral("Building claude-code image"),
                                           QStringLiteral("docker"),
                                           {QStringLiteral("build"), QStringLiteral("-t"),
                                            QStringLiteral("claude-code"),
+                                           QStringLiteral("--no-cache"),
+                                           QStringLiteral("--pull"),
                                            QStringLiteral("--build-arg"),
                                            QStringLiteral("USER_NAME=") + userName, repoDir},
                                           this);
