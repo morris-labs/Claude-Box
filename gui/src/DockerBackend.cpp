@@ -401,25 +401,25 @@ QString DockerBackend::statsDetail(const QString &id, BoxInfo &out) const
     const quint64 used = usage > inactiveFile ? usage - inactiveFile : usage;
     const quint64 limit = quint64(memory.value("limit").toDouble());
 
-    // Cumulative block I/O bytes (read and write separately).
-    const QJsonArray blkio = stats.value("blkio_stats").toObject()
-        .value("io_service_bytes_recursive").toArray();
-    quint64 blkRead = 0, blkWrite = 0;
-    for (const QJsonValue &entry : blkio) {
-        const QJsonObject e = entry.toObject();
-        const quint64 val = quint64(e.value("value").toDouble());
-        const QString op = e.value("op").toString();
-        if (op == QLatin1String("Read"))
-            blkRead += val;
-        else if (op == QLatin1String("Write"))
-            blkWrite += val;
+    // Disk usage via container inspect with ?size=true. Works on both
+    // cgroupsv1 and cgroupsv2, unlike blkio_stats.io_service_bytes_recursive
+    // which is null on cgroupsv2 (Linux 5.8+ default, Ubuntu 22.04+).
+    quint64 diskRw = 0, diskTotal = 0;
+    const QJsonDocument sizeDoc = DockerApi::get(
+        QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + id
+            + "/json?size=true",
+        nullptr, 5000);
+    if (!sizeDoc.isNull()) {
+        const QJsonObject sizeObj = sizeDoc.object();
+        diskRw    = quint64(sizeObj.value(QStringLiteral("SizeRw")).toDouble());
+        diskTotal = quint64(sizeObj.value(QStringLiteral("SizeRootFs")).toDouble());
     }
 
     out.cpuPct         = float(cpuPctValue);
     out.memUsedBytes   = used;
     out.memLimitBytes  = limit;
-    out.diskReadBytes  = blkRead;
-    out.diskWriteBytes = blkWrite;
+    out.diskRwBytes    = diskRw;
+    out.diskTotalBytes = diskTotal;
 
     return cpuText + "mem " + humanBytes(used) + " / " + humanBytes(limit);
 }
