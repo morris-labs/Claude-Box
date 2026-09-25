@@ -34,9 +34,16 @@ int main(int argc, char *argv[])
     if (appIcon.isNull()) {
         // fromTheme() only resolves once a platform theme is in play, and
         // there isn't always one (minimal sessions, offscreen, plain WMs).
-        // The install path is known, so fall back to reading the file.
+        // Try known install paths in platform priority order.
+#ifdef Q_OS_DARWIN
+        // Inside a .app bundle the icon lives in Contents/Resources/;
+        // applicationDirPath() is Contents/MacOS/, so step one level up.
+        const QString iconFile = QApplication::applicationDirPath()
+            + QStringLiteral("/../Resources/claude-box.icns");
+#else
         const QString iconFile = QDir::homePath()
             + QStringLiteral("/.local/share/icons/hicolor/scalable/apps/claude-box.svg");
+#endif
         if (QFileInfo::exists(iconFile))
             appIcon = QIcon(iconFile);
     }

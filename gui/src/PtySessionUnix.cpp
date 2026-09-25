@@ -6,7 +6,11 @@
 #include <vector>
 
 #include <fcntl.h>
-#include <pty.h>
+#ifdef Q_OS_DARWIN
+#  include <util.h>   // macOS ships forkpty() here
+#else
+#  include <pty.h>
+#endif
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>

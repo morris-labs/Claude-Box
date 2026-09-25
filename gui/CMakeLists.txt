@@ -184,6 +184,102 @@ add_custom_target(desktop-install
 
 endif() # UNIX AND NOT APPLE
 
+# --- macOS .app bundle ---------------------------------------------------
+#
+# Sets up the .app bundle structure, embeds the Info.plist, and adds an
+# optional `generate-icns` target that creates the dock icon from the SVG
+# source.  The icon generation requires rsvg-convert (librsvg) and the
+# Xcode-supplied iconutil to be on PATH.
+#
+# Build:               cmake -B build && cmake --build build
+# Run:                 open build/claude-box-gui.app
+# Generate .icns:      cmake --build build --target generate-icns
+# Self-contained .app: cmake --build build --target app-bundle
+if(APPLE)
+
+set_target_properties(claude-box-gui PROPERTIES
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/packaging/Info.plist.in"
+)
+
+set(CLAUDE_BOX_ICNS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/claude-box-jail.svg"
+    CACHE FILEPATH "SVG to convert into the .app bundle icon (.icns)")
+set(ICNS_DIR  "${CMAKE_CURRENT_BINARY_DIR}/claude-box.iconset")
+set(ICNS_FILE "${CMAKE_CURRENT_BINARY_DIR}/claude-box.icns")
+
+# rsvg-convert and iconutil are needed only when the developer explicitly
+# runs `generate-icns`; a plain build skips this step so the prerequisite
+# tools are not required for everyone who just wants to build and run.
+find_program(RSVG_CONVERT rsvg-convert)
+find_program(ICONUTIL      iconutil)
+
+if(RSVG_CONVERT AND ICONUTIL)
+    # macOS requires these exact filenames inside the .iconset directory.
+    set(ICNS_SIZES 16 32 64 128 256 512)
+    set(icns_pngs)
+    foreach(sz IN LISTS ICNS_SIZES)
+        math(EXPR sz2 "${sz} * 2")
+        list(APPEND icns_pngs
+            "${ICNS_DIR}/icon_${sz}x${sz}.png"
+            "${ICNS_DIR}/icon_${sz}x${sz}@2x.png"
+        )
+        add_custom_command(
+            OUTPUT "${ICNS_DIR}/icon_${sz}x${sz}.png"
+                   "${ICNS_DIR}/icon_${sz}x${sz}@2x.png"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${ICNS_DIR}"
+            COMMAND ${RSVG_CONVERT} -w ${sz}  -h ${sz}  -o "${ICNS_DIR}/icon_${sz}x${sz}.png"   "${CLAUDE_BOX_ICNS_SOURCE}"
+            COMMAND ${RSVG_CONVERT} -w ${sz2} -h ${sz2} -o "${ICNS_DIR}/icon_${sz}x${sz}@2x.png" "${CLAUDE_BOX_ICNS_SOURCE}"
+            DEPENDS "${CLAUDE_BOX_ICNS_SOURCE}"
+            VERBATIM
+        )
+    endforeach()
+
+    add_custom_command(
+        OUTPUT  "${ICNS_FILE}"
+        COMMAND ${ICONUTIL} -c icns -o "${ICNS_FILE}" "${ICNS_DIR}"
+        DEPENDS ${icns_pngs}
+        VERBATIM
+    )
+    add_custom_target(generate-icns DEPENDS "${ICNS_FILE}")
+
+    # Copy the .icns into the bundle's Resources after the binary is built.
+    # The file must be present before the app is first launched or the dock
+    # shows a generic icon -- run `generate-icns` once after a clean checkout.
+    add_custom_command(TARGET claude-box-gui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:claude-box-gui>/Contents/Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ICNS_FILE}"
+                "$<TARGET_BUNDLE_DIR:claude-box-gui>/Contents/Resources/claude-box.icns"
+        COMMENT "Copying claude-box.icns into the app bundle"
+        VERBATIM
+    )
+else()
+    message(STATUS "rsvg-convert or iconutil not found -- skipping generate-icns target. "
+                   "Run `brew install librsvg` and ensure Xcode command-line tools are "
+                   "installed, then reconfigure to enable icon generation.")
+endif()
+
+# macdeployqt bundles the Qt frameworks into the .app so it is
+# self-contained.  Requires macdeployqt to be on PATH (it ships with Qt).
+find_program(MACDEPLOYQT macdeployqt
+    HINTS "${Qt6_DIR}/../../../bin"
+          "${Qt6_DIR}/../../../../bin"
+)
+if(MACDEPLOYQT)
+    add_custom_target(app-bundle
+        COMMAND ${MACDEPLOYQT} "$<TARGET_BUNDLE_DIR:claude-box-gui>"
+        DEPENDS claude-box-gui
+        COMMENT "Running macdeployqt to make the .app self-contained"
+        VERBATIM
+    )
+else()
+    message(STATUS "macdeployqt not found -- app-bundle target unavailable. "
+                   "Ensure the Qt bin directory is on PATH.")
+endif()
+
+endif() # APPLE
+
 target_compile_definitions(claude-box-gui
     PRIVATE
         CLAUDE_BOX_VERSION="${PROJECT_VERSION}"
