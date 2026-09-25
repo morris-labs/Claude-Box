@@ -99,4 +99,4 @@ The one real source patch, in `gui/third_party/libvterm/include/vterm.h` (marked
 
 ## Review history
 
-Last code review: 91c28d9 (2026-09-23)
+Last code review: 8ac28fb (2026-09-25)
