@@ -41,6 +41,7 @@
 #include <QTabWidget>
 #include <QProcess>
 #include <QScrollBar>
+#include <QStandardPaths>
 #include <QFileDialog>
 #include "UsageBarDelegate.h"
 #include <QTimer>
@@ -1725,10 +1726,19 @@ void MainWindow::onOpenExternal()
                          QStringLiteral("Could not launch a terminal.\n"
                          "Neither docker.exe nor wt.exe could be started."));
 #elif defined(Q_OS_DARWIN)
-    // The shell command to run inside the new terminal window.
+    // Resolve the docker binary with the same candidate paths used in
+    // PtySessionUnix.cpp, so the AppleScript command works regardless of
+    // whether Docker Desktop created a /usr/local/bin symlink.
+    QString dockerBin = QStandardPaths::findExecutable(
+        QStringLiteral("docker"),
+        {QStringLiteral("/usr/local/bin"),
+         QStringLiteral("/opt/homebrew/bin"),
+         QStringLiteral("/Applications/Docker.app/Contents/Resources/bin")});
+    if (dockerBin.isEmpty())
+        dockerBin = QStringLiteral("docker"); // fallback: let the shell find it
     const QString dockerCmd = QStringLiteral(
-        "docker exec -it %1 bash -c 'tmux attach 2>/dev/null || tmux'"
-    ).arg(info->name);
+        "%1 exec -it %2 bash -c 'tmux attach 2>/dev/null || tmux'"
+    ).arg(dockerBin, info->name);
 
     // Honor $TERMINAL if set -- covers kitty, alacritty, and similar
     // cross-platform terminals installed via Homebrew that accept `-e`.
