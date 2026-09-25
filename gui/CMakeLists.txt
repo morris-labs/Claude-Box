@@ -44,7 +44,11 @@ else()
     set(PTY_SESSION_SOURCE src/PtySessionUnix.cpp)
 endif()
 
-add_executable(claude-box-gui
+# WIN32: build as a Windows GUI subsystem executable (no console window on
+# launch). Qt6::Widgets links Qt6::EntryPoint, which provides the WinMain
+# shim that calls our regular int main(). On non-Windows platforms this flag
+# is ignored by CMake.
+add_executable(claude-box-gui WIN32
     src/main.cpp
     src/SingleInstanceGuard.cpp
     src/SingleInstanceGuard.h

@@ -2,14 +2,16 @@
 // See PtySession.h for the interface contract and PtySessionUnix.cpp for
 // the POSIX/forkpty sibling this mirrors.
 //
-// UNTESTED as written: this file was authored from Microsoft's documented
-// ConPTY sample (CreatePseudoConsole/ResizePseudoConsole/ClosePseudoConsole,
-// the STARTUPINFOEX + PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE spawn dance) and
-// cross-checked against the interface PtySessionUnix.cpp implements, but
-// has not been compiled or run -- there is no Windows toolchain in the
-// environment that wrote it. Treat every Win32 call here as needing a
-// first-compile pass and a real terminal session to confirm before
-// trusting it.
+// Validated on Windows (phase 4): builds clean with MSVC, and attach,
+// keyboard input, SGR color, alt-screen, and live resize have all been
+// confirmed against a real Docker Desktop (WSL2) container. The one
+// non-obvious fix required: STARTF_USESTDHANDLES must be set with null
+// handles so ConPTY can wire all three stdio streams to the pseudoconsole
+// -- without it, CreateProcessW inherits this (windowless) process's own
+// std-handle values, GetConsoleMode fails on them in the child, and
+// `docker attach` quits immediately with "cannot attach stdin to a
+// TTY-enabled container because stdin is not a terminal". See the comment
+// on startupInfo.StartupInfo.dwFlags below.
 
 #include "PtySession.h"
 

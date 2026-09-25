@@ -784,7 +784,7 @@ void MainWindow::onMoveWorkingDirectory()
     if (newParent.isEmpty())
         return;
 
-    const QString newPath = newParent + QDir::separator() + fi.fileName();
+    const QString newPath = newParent + "/" + fi.fileName();
     if (QDir(newPath) == QDir(currentDir))
         return;
 
