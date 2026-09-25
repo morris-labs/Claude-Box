@@ -1733,7 +1733,8 @@ void MainWindow::onOpenExternal()
         QStringLiteral("docker"),
         {QStringLiteral("/usr/local/bin"),
          QStringLiteral("/opt/homebrew/bin"),
-         QStringLiteral("/Applications/Docker.app/Contents/Resources/bin")});
+         QStringLiteral("/Applications/Docker.app/Contents/Resources/bin"),
+         QDir::homePath() + QStringLiteral("/.docker/bin")});
     if (dockerBin.isEmpty())
         dockerBin = QStringLiteral("docker"); // fallback: let the shell find it
     const QString dockerCmd = QStringLiteral(
