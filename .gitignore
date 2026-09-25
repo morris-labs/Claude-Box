@@ -11,6 +11,10 @@ gui/build/
 # Git credential store -- holds a live GitHub PAT, must never be committed.
 /.git-credentials
 
+# Per-platform release workspaces -- local working directories, not source.
+/Windows_Release/
+/Mac_Release/
+
 # Legacy bash launcher/manager -- kept on disk as a working fallback while
 # the C++/Qt6 app in gui/ is being built out, but not tracked here.
 /claude-box.bash
