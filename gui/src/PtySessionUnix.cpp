@@ -83,18 +83,26 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
             ::_exit(127); // better to fail visibly than exec in the wrong directory
 #ifdef __APPLE__
         // A .app bundle launched via `open` inherits only
-        // /usr/bin:/bin:/usr/sbin:/sbin. Prepend the three locations where
+        // /usr/bin:/bin:/usr/sbin:/sbin. Prepend known locations where
         // `docker` (and other tools) can live on macOS:
-        //   /usr/local/bin           -- Docker Desktop symlink on Intel Macs
-        //   /opt/homebrew/bin        -- Homebrew on Apple Silicon
-        //   .../Docker.app/.../bin   -- Docker Desktop bundle (no symlink case)
+        //   /usr/local/bin            -- Docker Desktop symlink on Intel Macs
+        //   /opt/homebrew/bin         -- Homebrew on Apple Silicon
+        //   .../Docker.app/.../bin    -- Docker Desktop bundle (no symlink case)
+        //   ~/.docker/bin             -- Docker Desktop CLI shim (newer versions)
         {
-            const char *cur = ::getenv("PATH");
+            const char *home = ::getenv("HOME");
+            const char *cur  = ::getenv("PATH");
+            char extra[512];
+            if (home && *home)
+                ::snprintf(extra, sizeof(extra),
+                    "/usr/local/bin:/opt/homebrew/bin"
+                    ":/Applications/Docker.app/Contents/Resources/bin"
+                    ":%s/.docker/bin", home);
+            else
+                ::snprintf(extra, sizeof(extra),
+                    "/usr/local/bin:/opt/homebrew/bin"
+                    ":/Applications/Docker.app/Contents/Resources/bin");
             char buf[4096];
-            const char *extra =
-                "/usr/local/bin"
-                ":/opt/homebrew/bin"
-                ":/Applications/Docker.app/Contents/Resources/bin";
             if (cur && *cur)
                 ::snprintf(buf, sizeof(buf), "%s:%s", extra, cur);
             else
