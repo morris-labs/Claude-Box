@@ -5,7 +5,7 @@
 #include "DockerBackend.h"
 
 // Read-only table model over a QList<BoxInfo> for the dashboard view.
-// Columns: Status, Name, Conversation, Directory, Details.
+// Columns: Status, Directory, Conversation, CPU%.
 class BoxTableModel : public QAbstractTableModel {
     Q_OBJECT
 public:

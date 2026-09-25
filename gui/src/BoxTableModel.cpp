@@ -4,16 +4,13 @@
 #include "Theme.h"
 
 #include <QBrush>
-#include <QFontDatabase>
 
 namespace {
-constexpr int ColStatus = 0;
-constexpr int ColName = 1;
+constexpr int ColStatus       = 0;
+constexpr int ColDirectory    = 1;
 constexpr int ColConversation = 2;
-constexpr int ColDirectory = 3;
-constexpr int ColDetails = 4;
-constexpr int ColUsage = 5;
-constexpr int ColumnCount = 6;
+constexpr int ColUsage        = 3;
+constexpr int ColumnCount     = 4;
 
 QString statusText(BoxInfo::Status s)
 {
@@ -104,14 +101,10 @@ QVariant BoxTableModel::data(const QModelIndex &index, int role) const
         switch (index.column()) {
         case ColStatus:
             return statusText(b.status);
-        case ColName:
-            return b.name;
-        case ColConversation:
-            return b.conversationName;
         case ColDirectory:
             return b.targetDir;
-        case ColDetails:
-            return b.detail;
+        case ColConversation:
+            return b.conversationName;
         case ColUsage:
             return QVariant(); // painted entirely by UsageBarDelegate
         default:
@@ -133,13 +126,11 @@ QVariant BoxTableModel::data(const QModelIndex &index, int role) const
     case Qt::ForegroundRole:
         if (index.column() == ColStatus)
             return QBrush(statusColor(b.status));
-        if (index.column() == ColDirectory || index.column() == ColDetails)
+        if (index.column() == ColDirectory)
             return QBrush(Theme::dimText());
         return QVariant();
 
     case Qt::FontRole:
-        if (index.column() == ColName)
-            return QFontDatabase::systemFont(QFontDatabase::FixedFont);
         return QVariant();
 
     case Qt::ToolTipRole:
@@ -166,14 +157,10 @@ QVariant BoxTableModel::headerData(int section, Qt::Orientation orientation, int
     switch (section) {
     case ColStatus:
         return QStringLiteral("Status");
-    case ColName:
-        return QStringLiteral("Name");
-    case ColConversation:
-        return QStringLiteral("Conversation");
     case ColDirectory:
         return QStringLiteral("Directory");
-    case ColDetails:
-        return QStringLiteral("Details");
+    case ColConversation:
+        return QStringLiteral("Conversation");
     case ColUsage:
         return QStringLiteral("CPU %");
     default:
@@ -195,7 +182,9 @@ void BoxTableModel::setBoxes(const QList<BoxInfo> &boxes)
             if (a.stats != b.stats || a.detail != b.detail
                 || a.cpuPct != b.cpuPct
                 || a.memUsedBytes != b.memUsedBytes
-                || a.memLimitBytes != b.memLimitBytes) {
+                || a.memLimitBytes != b.memLimitBytes
+                || a.diskReadBytes != b.diskReadBytes
+                || a.diskWriteBytes != b.diskWriteBytes) {
                 m_boxes[i] = b;
                 const QModelIndex left  = createIndex(i, 0);
                 const QModelIndex right = createIndex(i, ColumnCount - 1);

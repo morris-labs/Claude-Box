@@ -2,6 +2,7 @@
 
 #include "BoxRecord.h"
 #include "CollapsibleSection.h"
+#include "DockerBackend.h"
 #include "Icons.h"
 #include "Theme.h"
 
@@ -12,6 +13,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSizePolicy>
@@ -55,6 +57,47 @@ QString forwardLabel(const QString &value)
     const QString dirLabel = parts.at(0) == QLatin1String("R") ? QStringLiteral("remote") : QStringLiteral("local");
     const QString bindLabel = parts.at(1).isEmpty() ? parts.at(2) : (parts.at(1) + ":" + parts.at(2));
     return QStringLiteral("%1 %2 → %3:%4").arg(dirLabel, bindLabel, parts.at(3), parts.at(4));
+}
+
+// Rounded pill-style progress bar matching UsageView's look.
+QString statsBarStyle(const QString &chunkColor)
+{
+    return QStringLiteral(
+        "QProgressBar {"
+        "  border: none;"
+        "  background: %1;"
+        "  border-radius: 5px;"
+        "  text-align: center;"
+        "  color: white;"
+        "}"
+        "QProgressBar::chunk {"
+        "  background: %2;"
+        "  border-radius: 5px;"
+        "}")
+        .arg(Theme::panelBg().name(), chunkColor);
+}
+
+QString statsBarChunkColor(double fraction)
+{
+    const QColor green(45, 160, 80);
+    const QColor red(200, 80, 50);
+    if (fraction <= 0.6)
+        return green.name();
+    return QColor(int(green.red()   + (red.red()   - green.red())   * (fraction - 0.6) / 0.4),
+                  int(green.green() + (red.green() - green.green()) * (fraction - 0.6) / 0.4),
+                  int(green.blue()  + (red.blue()  - green.blue())  * (fraction - 0.6) / 0.4)).name();
+}
+
+QProgressBar *makeStatsBar(QWidget *parent)
+{
+    auto *bar = new QProgressBar(parent);
+    bar->setRange(0, 100);
+    bar->setValue(0);
+    bar->setStyleSheet(statsBarStyle(QColor(45, 160, 80).name()));
+    bar->setFixedHeight(20);
+    bar->setTextVisible(true);
+    bar->setFormat(QStringLiteral("—"));
+    return bar;
 }
 
 // QLayout::takeAt() hands back one QLayoutItem and does not touch anything
@@ -183,16 +226,35 @@ BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
 
     contentLayout->addWidget(m_fields);
 
-    // Collapsed by default, same as the rest of this app's collapsible
-    // sections -- cpu/mem is ambient info refreshed every poll, not
-    // usually what this panel gets opened to check.
+    // Collapsed by default -- cpu/mem is ambient info refreshed every poll,
+    // not usually what this panel gets opened to check.
     m_statsSection = new CollapsibleSection("Resource Usage", this);
     auto *statsLayout = new QVBoxLayout();
-    statsLayout->setContentsMargins(0, 2, 0, 0);
-    m_statsLabel = new QLabel(this);
-    m_statsLabel->setWordWrap(true);
-    m_statsLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    statsLayout->addWidget(m_statsLabel);
+    statsLayout->setContentsMargins(0, 4, 0, 0);
+    statsLayout->setSpacing(7);
+
+    auto addStatsRow = [&](const QString &label, QWidget *widget) {
+        auto *row = new QHBoxLayout();
+        row->setSpacing(8);
+        auto *lbl = new QLabel(label, this);
+        lbl->setFixedWidth(44);
+        lbl->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+        row->addWidget(lbl);
+        row->addWidget(widget, 1);
+        statsLayout->addLayout(row);
+    };
+
+    m_cpuBar = makeStatsBar(this);
+    addStatsRow(QStringLiteral("CPU"), m_cpuBar);
+
+    m_memBar = makeStatsBar(this);
+    m_memBar->setStyleSheet(statsBarStyle(QColor(80, 130, 200).name()));
+    addStatsRow(QStringLiteral("MEM"), m_memBar);
+
+    m_diskLabel = new QLabel(QStringLiteral("—"), this);
+    m_diskLabel->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::text().name()));
+    addStatsRow(QStringLiteral("Disk"), m_diskLabel);
+
     m_statsSection->setContentLayout(statsLayout);
     contentLayout->addWidget(m_statsSection);
 
@@ -288,9 +350,49 @@ void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshRemote> &sshRem
             : QStringLiteral("Pick the new location of this directory to update the record"));
 
     m_detail->setText(info->detail.isEmpty() ? kNone : info->detail);
-    // Separate from `detail` on purpose (see BoxInfo::stats) -- this is
-    // the field the "move cpu/etc to the sidebar" request was about.
-    m_statsLabel->setText(info->stats.isEmpty() ? kNone : info->stats);
+
+    // Resource usage bars -- populated from the numeric BoxInfo fields so
+    // they render as actual bars rather than just text.
+    if (info->cpuPct >= 0.0f) {
+        const double frac = qBound(0.0, double(info->cpuPct) / 100.0, 1.0);
+        const QString style = statsBarStyle(statsBarChunkColor(frac));
+        if (style != m_lastCpuStyle) {
+            m_cpuBar->setStyleSheet(style);
+            m_lastCpuStyle = style;
+        }
+        m_cpuBar->setValue(int(qBound(0.0f, info->cpuPct, 100.0f)));
+        m_cpuBar->setFormat(QStringLiteral("%1%").arg(int(info->cpuPct + 0.5f)));
+    } else {
+        m_cpuBar->setValue(0);
+        m_cpuBar->setFormat(QStringLiteral("—"));
+    }
+
+    if (info->memLimitBytes > 0) {
+        const double frac = qBound(0.0, double(info->memUsedBytes) / double(info->memLimitBytes), 1.0);
+        const QString style = statsBarStyle(statsBarChunkColor(frac));
+        if (style != m_lastMemStyle) {
+            m_memBar->setStyleSheet(style);
+            m_lastMemStyle = style;
+        }
+        const int memPct = int(frac * 100.0 + 0.5);
+        m_memBar->setValue(memPct);
+        m_memBar->setFormat(QStringLiteral("%1%  (%2 / %3)")
+            .arg(memPct)
+            .arg(DockerBackend::humanBytes(info->memUsedBytes),
+                 DockerBackend::humanBytes(info->memLimitBytes)));
+    } else {
+        m_memBar->setValue(0);
+        m_memBar->setFormat(QStringLiteral("—"));
+    }
+
+    if (info->diskReadBytes > 0 || info->diskWriteBytes > 0) {
+        m_diskLabel->setText(
+            QStringLiteral("R: %1  W: %2")
+                .arg(DockerBackend::humanBytes(info->diskReadBytes),
+                     DockerBackend::humanBytes(info->diskWriteBytes)));
+    } else {
+        m_diskLabel->setText(QStringLiteral("—"));
+    }
 
     // Record-backed fields. A box running outside this app has no record,
     // so these stay blank rather than showing another box's settings.

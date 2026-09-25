@@ -401,9 +401,25 @@ QString DockerBackend::statsDetail(const QString &id, BoxInfo &out) const
     const quint64 used = usage > inactiveFile ? usage - inactiveFile : usage;
     const quint64 limit = quint64(memory.value("limit").toDouble());
 
-    out.cpuPct        = float(cpuPctValue);
-    out.memUsedBytes  = used;
-    out.memLimitBytes = limit;
+    // Cumulative block I/O bytes (read and write separately).
+    const QJsonArray blkio = stats.value("blkio_stats").toObject()
+        .value("io_service_bytes_recursive").toArray();
+    quint64 blkRead = 0, blkWrite = 0;
+    for (const QJsonValue &entry : blkio) {
+        const QJsonObject e = entry.toObject();
+        const quint64 val = quint64(e.value("value").toDouble());
+        const QString op = e.value("op").toString();
+        if (op == QLatin1String("Read"))
+            blkRead += val;
+        else if (op == QLatin1String("Write"))
+            blkWrite += val;
+    }
+
+    out.cpuPct         = float(cpuPctValue);
+    out.memUsedBytes   = used;
+    out.memLimitBytes  = limit;
+    out.diskReadBytes  = blkRead;
+    out.diskWriteBytes = blkWrite;
 
     return cpuText + "mem " + humanBytes(used) + " / " + humanBytes(limit);
 }
