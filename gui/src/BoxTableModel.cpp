@@ -149,6 +149,8 @@ QVariant BoxTableModel::data(const QModelIndex &index, int role) const
     case SortRole:
         if (index.column() == ColStatus)
             return statusRank(b.status);
+        if (index.column() == ColUsage)
+            return b.cpuPct;
         return data(index, Qt::DisplayRole);
 
     default:

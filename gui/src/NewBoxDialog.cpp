@@ -270,7 +270,13 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     // with, and a placeholder makes you go and look that up elsewhere.
     // The flag is then always passed explicitly.
     m_modelCombo = new QComboBox(this);
-    m_modelCombo->setEditable(false);
+    // Editable: kModelIds is a list of convenient suggestions, not an
+    // exhaustive list -- --model also accepts a dated snapshot or any
+    // model released after this list was last updated, typed straight in.
+    // NoInsert keeps a typed value from also being appended as a permanent
+    // new dropdown item.
+    m_modelCombo->setEditable(true);
+    m_modelCombo->setInsertPolicy(QComboBox::NoInsert);
     for (const QString &id : kModelIds)
         m_modelCombo->addItem(id, id);
     form->addRow("Model:", m_modelCombo);
@@ -640,6 +646,7 @@ void NewBoxDialog::updateWorkspaceHint()
     auto restoreParentConversations = [this] {
         if (!m_folderMatchDir.isEmpty()) {
             m_folderMatchDir.clear();
+            m_folderMatchConvCount = 0;
             m_scannedDir.clear(); // force reloadForDirectory to rescan
             reloadForDirectory(); // also calls updateWorkspaceHint; m_folderMatchDir is now clear so no loop
         }
@@ -668,33 +675,24 @@ void NewBoxDialog::updateWorkspaceHint()
         return;
     }
 
-    // Folder exists. If this is a newly matched folder, rebuild the combo
-    // from the subfolder's conversations.
+    // Folder exists. If this is a newly matched folder, reset the combo to
+    // just "Start a new conversation" -- the subfolder's own conversations
+    // are deliberately not added as items (see m_folderMatchConvCount).
     if (m_folderMatchDir != path) {
         m_folderMatchDir = path;
         const QString absPath = QDir(path).absolutePath();
-        const QList<ConversationInfo> convs = ConversationCatalog::forDirectory(absPath);
+        // The container runs with -w <baseDir>, not the subfolder, so
+        // `claude --resume <uuid>` looks in the base directory's project dir
+        // and won't find transcripts stored under the subfolder's encoded
+        // path. Selecting one would take the resumeExisting path in
+        // createNew() with the wrong -w, so they are never made selectable --
+        // only their count is surfaced, in the hint text below.
+        m_folderMatchConvCount = ConversationCatalog::forDirectory(absPath).size();
 
         {
             QSignalBlocker blocker(m_sessionCombo);
             m_sessionCombo->clear();
             m_sessionCombo->addItem(QStringLiteral("Start a new conversation"), QString());
-            for (const ConversationInfo &c : convs) {
-                QString label = c.title;
-                if (!c.trackedBy.isEmpty())
-                    label += QStringLiteral("  [%1]").arg(c.trackedBy);
-                label += QStringLiteral("  ·  %1  ·  %2 turns")
-                             .arg(ConversationCatalog::relativeTime(c.lastActive))
-                             .arg(c.userTurns);
-                m_sessionCombo->addItem(label, c.sessionUuid);
-                m_sessionCombo->setItemData(m_sessionCombo->count() - 1, c.title, kTitleRole);
-                QString tip = c.sessionUuid;
-                if (!c.lastPrompt.isEmpty())
-                    tip += QStringLiteral("\n\nLast prompt: ") + c.lastPrompt;
-                if (!c.trackedBy.isEmpty())
-                    tip += QStringLiteral("\n\nAlready tracked by box ") + c.trackedBy;
-                m_sessionCombo->setItemData(m_sessionCombo->count() - 1, tip, Qt::ToolTipRole);
-            }
         }
 
         // Clear m_sessionHint: it may still describe a conversation from the
@@ -706,18 +704,12 @@ void NewBoxDialog::updateWorkspaceHint()
         // the current name field, not whatever a prior selection set.
         m_autoFilledName = m_nameEdit->text();
 
-        if (!convs.isEmpty()) {
-            // The container runs with -w <baseDir>, not the subfolder, so
-            // `claude --resume <uuid>` looks in the base directory's project
-            // dir and won't find transcripts stored under the subfolder's
-            // encoded path. Show them in the combo for visibility but warn
-            // that selecting one won't resume correctly from this box.
+        if (m_folderMatchConvCount > 0) {
             m_workspaceHint->setText(QStringLiteral(
-                "%1/ already exists (%2 conversation(s) shown above). "
-                "Note: these transcripts are from the subfolder's project directory "
-                "and cannot be resumed from this box — the container runs in the "
+                "%1/ already exists (%2 conversation(s) found there). "
+                "They cannot be resumed from this box — the container runs in the "
                 "base directory. Start a new conversation instead.")
-                .arg(slug).arg(convs.size()));
+                .arg(slug).arg(m_folderMatchConvCount));
         } else {
             m_workspaceHint->setText(
                 QStringLiteral("%1/ already exists — it will be reused as-is.").arg(slug));
@@ -725,14 +717,13 @@ void NewBoxDialog::updateWorkspaceHint()
         return;
     }
 
-    // Already showing this folder's conversations -- just refresh the hint.
-    const int nConvs = m_sessionCombo->count() - 1; // subtract "Start a new conversation"
-    if (nConvs > 0)
+    // Already matching this folder -- just refresh the hint.
+    if (m_folderMatchConvCount > 0)
         m_workspaceHint->setText(QStringLiteral(
-            "%1/ already exists (%2 conversation(s) shown above). "
-            "Note: these transcripts cannot be resumed from this box — "
-            "the container runs in the base directory. Start a new conversation.")
-            .arg(slug).arg(nConvs));
+            "%1/ already exists (%2 conversation(s) found there). "
+            "They cannot be resumed from this box — the container runs in the "
+            "base directory. Start a new conversation instead.")
+            .arg(slug).arg(m_folderMatchConvCount));
     else
         m_workspaceHint->setText(
             QStringLiteral("%1/ already exists — it will be reused as-is.").arg(slug));

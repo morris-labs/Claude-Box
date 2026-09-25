@@ -38,6 +38,11 @@ private:
 
     QProgressBar *m_totalCpuBar  = nullptr;
     QProgressBar *m_totalMemBar  = nullptr;
+    // Mirrors RowWidgets::lastCpuStyle/lastMemStyle for the totals bars, so
+    // updateTotals() only calls setStyleSheet() when the color actually
+    // changes rather than on every refresh tick.
+    QString       m_lastTotalCpuStyle;
+    QString       m_lastTotalMemStyle;
     QWidget      *m_rowsWidget   = nullptr;
     QVBoxLayout  *m_rowsLayout   = nullptr;
 

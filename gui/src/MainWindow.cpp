@@ -491,24 +491,46 @@ QString MainWindow::currentSelectedName() const
     return info ? info->name : QString();
 }
 
+QStringList MainWindow::currentSelectedNames() const
+{
+    QStringList names;
+    for (const BoxInfo *info : selectedBoxInfos())
+        names << info->name;
+    return names;
+}
+
 void MainWindow::reselectByName(const QString &name)
 {
     if (name.isEmpty())
         return;
+    reselectByNames({name});
+}
+
+void MainWindow::reselectByNames(const QStringList &names)
+{
+    if (names.isEmpty() || !m_table->selectionModel())
+        return;
+    const QSet<QString> wanted(names.begin(), names.end());
+    // Build the whole selection before applying it, and use selectionModel()
+    // directly instead of selectRow() per row, so Qt does not call scrollTo()
+    // and fight the user's scroll position, and so an ExtendedSelection of
+    // several rows survives a refresh tick instead of collapsing to one.
+    QItemSelection combined;
+    QModelIndex firstMatch;
     for (int i = 0; i < m_proxy->rowCount(); ++i) {
-        const BoxInfo *info = m_model->boxAt(m_proxy->mapToSource(m_proxy->index(i, 0)).row());
-        if (info && info->name == name) {
-            // Use selectionModel() directly instead of selectRow() so Qt does
-            // not call scrollTo() and fight the user's scroll position.
-            const QModelIndex first = m_proxy->index(i, 0);
-            const QModelIndex last  = m_proxy->index(i, m_model->columnCount() - 1);
-            m_table->selectionModel()->select(QItemSelection(first, last),
-                                              QItemSelectionModel::ClearAndSelect);
-            m_table->selectionModel()->setCurrentIndex(first,
-                                                       QItemSelectionModel::NoUpdate);
-            return;
+        const QModelIndex idx0 = m_proxy->index(i, 0);
+        const BoxInfo *info = m_model->boxAt(m_proxy->mapToSource(idx0).row());
+        if (info && wanted.contains(info->name)) {
+            const QModelIndex last = m_proxy->index(i, m_model->columnCount() - 1);
+            combined.select(idx0, last);
+            if (!firstMatch.isValid())
+                firstMatch = idx0;
         }
     }
+    if (combined.isEmpty())
+        return;
+    m_table->selectionModel()->select(combined, QItemSelectionModel::ClearAndSelect);
+    m_table->selectionModel()->setCurrentIndex(firstMatch, QItemSelectionModel::NoUpdate);
 }
 
 // --- refresh ------------------------------------------------------------
@@ -536,33 +558,65 @@ void MainWindow::onBoxesLoaded()
     const bool wasFirstLoad = !m_hasLoadedOnce;
     m_hasLoadedOnce = true;
 
-    const QString selected = currentSelectedName();
+    const QStringList selected = currentSelectedNames();
     // setBoxes calls beginResetModel/endResetModel, which resets the view's
     // scroll position. Save and restore it so the table doesn't jump on every
     // refresh tick while the user is browsing away from the selected row.
     const int scrollPos = m_table->verticalScrollBar()->value();
-    const QList<BoxInfo> freshBoxes = m_refreshWatcher->result();
+    QList<BoxInfo> freshBoxes = m_refreshWatcher->result();
 
     // Detect boxes that stopped externally (no terminal tab was open to fire
     // onTerminalSessionFinished) and clear their wasRunning flag so they are
-    // not offered for restart-after-reboot on the next launch.
+    // not offered for restart-after-reboot on the next launch. freshBoxes'
+    // own wasRunning came from the on-disk record as of listBoxes(), before
+    // this clears it, so it's updated in place here too -- otherwise
+    // updateActionStates() would see the stale true for one more tick.
     QSet<QString> prevRunning;
     for (int i = 0; i < m_model->rowCount(); ++i) {
         if (const BoxInfo *b = m_model->boxAt(i); b && b->status == BoxInfo::Status::Running)
             prevRunning.insert(b->name);
     }
+
+    // A live Docker Engine restart (Docker Desktop update, WSL2 restart)
+    // while the GUI stays open drops the entire running fleet from
+    // `docker ps` in one tick, same as an isolated box exiting -- but
+    // clearing wasRunning for all of them here would erase the very
+    // recovery signal offerResumeAfterReboot() needs, and that only runs
+    // on this app's own startup, not on an Engine-level event. Distinguish
+    // the two: an isolated single-box exit still clears normally below; a
+    // majority of a non-trivial previously-running fleet disappearing at
+    // once is treated as a likely Engine event and left alone for this
+    // tick (an isolated mass crash that isn't an Engine restart just means
+    // the boxes stay offered for resume, which is a stale-but-harmless
+    // prompt rather than a lost one).
+    QSet<QString> stillRunning;
     for (const BoxInfo &b : freshBoxes) {
-        if (b.status != BoxInfo::Status::Running && prevRunning.contains(b.name)) {
-            BoxRecord rec = BoxRecord::load(b.name);
-            if (rec.isValid() && rec.wasRunning) {
-                rec.wasRunning = false;
-                rec.save();
+        if (b.status == BoxInfo::Status::Running)
+            stillRunning.insert(b.name);
+    }
+    int droppedCount = 0;
+    for (const QString &name : prevRunning) {
+        if (!stillRunning.contains(name))
+            ++droppedCount;
+    }
+    const bool likelyEngineRestart =
+        prevRunning.size() >= 2 && droppedCount * 2 >= prevRunning.size();
+
+    if (!likelyEngineRestart) {
+        for (BoxInfo &b : freshBoxes) {
+            if (b.status != BoxInfo::Status::Running && prevRunning.contains(b.name)) {
+                BoxRecord rec = BoxRecord::load(b.name);
+                if (rec.isValid() && rec.wasRunning) {
+                    rec.wasRunning = false;
+                    rec.save();
+                }
+                b.wasRunning = false;
             }
         }
     }
 
     m_model->setBoxes(freshBoxes);
-    reselectByName(selected);
+    reselectByNames(selected);
     m_table->verticalScrollBar()->setValue(scrollPos);
     m_usageView->setBoxes(freshBoxes);
     syncTunnels();
@@ -654,8 +708,7 @@ void MainWindow::updateActionStates()
         const BoxInfo *row = m_model->boxAt(i);
         if (!row || row->status != BoxInfo::Status::Stopped)
             continue;
-        const BoxRecord rec = BoxRecord::load(row->name);
-        if (rec.isValid() && rec.wasRunning) {
+        if (row->wasRunning) {
             anyResumable = true;
             break;
         }
@@ -692,6 +745,16 @@ void MainWindow::onMoveWorkingDirectory()
     const QString currentDir = info->targetDir;
     if (currentDir.isEmpty())
         return;
+
+    // Move renames the directory and repoints every sibling BoxRecord that
+    // shares it, not just the selected box -- refuse if any of them is
+    // currently running with the old path bind-mounted.
+    const QString runningName = runningBoxForDir(currentDir);
+    if (!runningName.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Move"),
+            runningName + QStringLiteral(" is running against this directory -- close it first."));
+        return;
+    }
 
     const QFileInfo fi(currentDir);
     const QString newParent = QFileDialog::getExistingDirectory(
@@ -1283,7 +1346,7 @@ void MainWindow::offerResumeAfterReboot()
         return;
 
     for (const QString &name : resumable)
-        startBox(name);
+        startBox(name, /*syncTranscriptTitle=*/false);
 }
 
 void MainWindow::onNew()
@@ -1446,7 +1509,7 @@ void MainWindow::onFork()
     openTerminalTab(rec.name, rec.conversationName);
 }
 
-void MainWindow::startBox(const QString &name)
+void MainWindow::startBox(const QString &name, bool syncTranscriptTitle)
 {
     BoxRecord rec = BoxRecord::load(name);
     if (!rec.isValid()) {
@@ -1455,16 +1518,28 @@ void MainWindow::startBox(const QString &name)
         return;
     }
 
-    // Sync the conversation name from the transcript before reopening.
-    // Claude may have auto-generated a title since the record was created
-    // (or a different account may have renamed it). This keeps --name in
-    // sync with what the transcript actually says, which is what the user
-    // expects to see inside the Claude TUI.
-    if (!rec.sessionUuid.isEmpty() && !rec.targetDir.isEmpty()) {
+    // Sync the conversation name from the transcript before reopening, but
+    // only when the record still matches what was last written into that
+    // transcript (rec.transcriptSyncedName) -- reopen() never passes
+    // --name, so an Edit-dialog rename changes conversationName without
+    // updating transcriptSyncedName, and diverges the two. Syncing
+    // unconditionally in that case would silently revert the user's
+    // rename back to the transcript's stale title on every Start.
+    //
+    // titleForUuid() reads the whole transcript (it can't safely stop
+    // early: a custom-title/ai-title can appear at any point in the file,
+    // and transcripts run to tens of MB), so syncTranscriptTitle lets a
+    // caller starting several boxes at once (onOpen with a multi-selection,
+    // onOpenAll, offerResumeAfterReboot) skip it and avoid a stall that's
+    // proportional to transcript size times box count -- a single
+    // interactive Start (the default) still gets the sync.
+    if (syncTranscriptTitle && !rec.sessionUuid.isEmpty() && !rec.targetDir.isEmpty()
+        && rec.conversationName == rec.transcriptSyncedName) {
         const QString transcriptTitle =
             ConversationCatalog::titleForUuid(rec.targetDir, rec.sessionUuid);
         if (!transcriptTitle.isEmpty() && transcriptTitle != rec.conversationName) {
             rec.conversationName = transcriptTitle;
+            rec.transcriptSyncedName = transcriptTitle;
             rec.save();
         }
     }
@@ -1489,8 +1564,12 @@ void MainWindow::onOpen()
                 r << info->name;
         return r;
     }();
+    // syncTranscriptTitle=false: multi-select means this can be several
+    // boxes at once (see startBox()'s comment on why that matters); a
+    // single-box selection still gets the correctness benefit via
+    // onRowDoubleClicked's default-true call instead.
     for (const QString &name : names)
-        startBox(name);
+        startBox(name, /*syncTranscriptTitle=*/false);
 }
 
 void MainWindow::onClose()
@@ -1502,11 +1581,12 @@ void MainWindow::onClose()
                 r << info->name;
         return r;
     }();
+    QHash<QString, QString> errors;
+    m_docker.stopMany(names, &errors);
     for (const QString &name : names) {
-        QString error;
-        if (!m_docker.stop(name, &error))
+        if (errors.contains(name))
             QMessageBox::warning(this, QStringLiteral("Stop"),
-                                 name + QStringLiteral(": ") + error);
+                                 name + QStringLiteral(": ") + errors.value(name));
         else {
             closeTabForBox(name);
             stopTunnelsForBox(name);
@@ -1533,11 +1613,12 @@ void MainWindow::onStopAll()
         != QMessageBox::Yes)
         return;
 
+    QHash<QString, QString> errors;
+    m_docker.stopMany(names, &errors);
     for (const QString &name : names) {
-        QString error;
-        if (!m_docker.stop(name, &error))
+        if (errors.contains(name))
             QMessageBox::warning(this, QStringLiteral("Stop All"),
-                                 name + QStringLiteral(": ") + error);
+                                 name + QStringLiteral(": ") + errors.value(name));
         else {
             closeTabForBox(name);
             stopTunnelsForBox(name);
@@ -1561,7 +1642,7 @@ void MainWindow::onOpenAll()
         return;
 
     for (const QString &name : names)
-        startBox(name);
+        startBox(name, /*syncTranscriptTitle=*/false);
 }
 
 void MainWindow::onOpenExternal()
@@ -1570,6 +1651,29 @@ void MainWindow::onOpenExternal()
     if (!info || info->status != BoxInfo::Status::Running)
         return;
 
+#ifdef Q_OS_WIN
+    // Untested on Windows -- see this repo's CLAUDE.md on cross-platform
+    // parity; needs a Windows-side check before this is considered
+    // confirmed, the way the ConPTY/PtySessionWin work was. The docker CLI
+    // is a native Windows binary talking to the daemon over a named pipe
+    // (see DockerApi::socketPath()), so it runs directly from cmd.exe --
+    // no WSL or bash-on-the-host dependency, unlike the container's own
+    // `tmux attach`, which runs *inside* the Linux container and is
+    // unaffected by the host shell either way.
+    const QString dockerCmd = QStringLiteral(
+        "docker exec -it %1 bash -c \"tmux attach 2>/dev/null || tmux\"").arg(info->name);
+
+    // Windows Terminal first (wt.exe, ships with modern Windows and the
+    // Store), falling back to a plain cmd.exe console window.
+    if (QProcess::startDetached(QStringLiteral("wt.exe"), {"cmd", "/k", dockerCmd}))
+        return;
+    if (QProcess::startDetached(QStringLiteral("cmd.exe"), {"/k", dockerCmd}))
+        return;
+
+    QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
+                         QStringLiteral("Could not launch a terminal.\n"
+                         "Neither wt.exe nor cmd.exe could be started."));
+#else
     // Attach to the container and attach or start a tmux session.
     const QStringList innerCmd = {
         "bash", "-c",
@@ -1602,6 +1706,7 @@ void MainWindow::onOpenExternal()
     QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
                          QStringLiteral("No terminal emulator found.\n"
                          "Set $TERMINAL, or install xterm or gnome-terminal."));
+#endif
 }
 
 void MainWindow::onRemove()
@@ -1631,6 +1736,19 @@ void MainWindow::onRemove()
     refreshBoxes();
 }
 
+QString MainWindow::runningBoxForDir(const QString &dir) const
+{
+    // Deliberately walks the *source* model, not the proxy: a filtered-out
+    // running box is still a running box, and this check must not depend
+    // on what the user happens to have typed in the filter field.
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        const BoxInfo *row = m_model->boxAt(i);
+        if (row && row->status == BoxInfo::Status::Running && row->targetDir == dir)
+            return row->name;
+    }
+    return QString();
+}
+
 void MainWindow::onPurge()
 {
     const BoxInfo *info = selectedBoxInfo();
@@ -1639,16 +1757,11 @@ void MainWindow::onPurge()
     const QString dir = info->targetDir;
 
     // Refuse while any box for this directory is currently running.
-    // Deliberately walks the *source* model, not the proxy: a filtered-out
-    // running box is still a running box, and this check must not depend
-    // on what the user happens to have typed in the filter field.
-    for (int i = 0; i < m_model->rowCount(); ++i) {
-        const BoxInfo *row = m_model->boxAt(i);
-        if (row && row->status == BoxInfo::Status::Running && row->targetDir == dir) {
-            QMessageBox::warning(this, QStringLiteral("Purge"),
-                                 row->name + QStringLiteral(" is running against this directory -- close it first."));
-            return;
-        }
+    const QString runningName = runningBoxForDir(dir);
+    if (!runningName.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Purge"),
+                             runningName + QStringLiteral(" is running against this directory -- close it first."));
+        return;
     }
 
     // Claude's own path encoding, not a naive slash swap: it collapses

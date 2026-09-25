@@ -24,6 +24,12 @@ struct BoxInfo {
     QString conversationName;
     QString targetDir;
     QString detail; // human-readable status text for the Details column
+    // Mirrors BoxRecord::wasRunning for Stopped boxes -- set once here by
+    // listBoxes(), which already loads the record for every Stopped row, so
+    // updateActionStates() can compute "any resumable" from the model
+    // instead of re-reading every BoxRecord from disk on each refresh tick.
+    // Meaningless (false) for Running/Exited boxes.
+    bool wasRunning = false;
     // "cpu N% · mem A / B" for a Running box, empty otherwise -- kept
     // separate from `detail` so the table's Details column can stay pure
     // docker status while BoxDetailsPanel shows this in its own
@@ -45,7 +51,7 @@ struct BoxInfo {
         // check and cause a full model reset every refresh. setBoxes()
         // handles volatile field changes with targeted dataChanged instead.
         return status == o.status && name == o.name && conversationName == o.conversationName
-            && targetDir == o.targetDir;
+            && targetDir == o.targetDir && wasRunning == o.wasRunning;
     }
     bool operator!=(const BoxInfo &o) const { return !(*this == o); }
 };
@@ -64,6 +70,11 @@ public:
     // significant digits): "1.234 MiB", "987.6 KiB". Used here and by
     // UsageView so they format memory identically.
     static QString humanBytes(quint64 bytes);
+    // Username inside the container, derived from the host at runtime. Used
+    // both to launch boxes and by SetupWizard's image build, which must bake
+    // in the same username via --build-arg USER_NAME for `docker run --user`
+    // to find a matching passwd entry.
+    static QString containerUsername();
     // Running + stopped-but-not-removed + known-but-not-running boxes,
     // merged with ~/.claude-box/known/ records. Running entries carry a
     // cached `docker stats` snapshot in detail.
@@ -118,6 +129,15 @@ public:
     bool stop(const QString &name, QString *errorOut) const;
     bool remove(const QString &name, QString *errorOut) const; // docker rm
 
+    // Stops every box in `names`. Unlike calling stop() in a loop, this
+    // issues every stop request up front and waits for all of them to be
+    // removed from docker with ONE shared poll loop, rather than a full
+    // stop-then-wait-up-to-5s per box in sequence -- a multi-box Stop or
+    // Stop All would otherwise be able to freeze the UI for up to
+    // names.size() * 5s. Failures are reported per name via errorsOut
+    // (keyed by name; a name with no entry stopped successfully).
+    void stopMany(const QStringList &names, QHash<QString, QString> *errorsOut) const;
+
 private:
     // Everything here has two implementations: the Engine API (see
     // DockerApi -- fast, portable to Windows, and the only way to get a
@@ -135,6 +155,18 @@ private:
     // interval between ticks as soon as a second box existed. The API path
     // needs neither trick -- see statsDetail().
     mutable QHash<QString, QString> m_statsCache;
+    // Numeric breakdown of the same `docker stats` line, for the CLI path's
+    // usage bars -- see UsageView/UsageBarDelegate, which read BoxInfo's
+    // cpuPct/memUsedBytes/memLimitBytes the same way the API path fills
+    // them via statsDetail(). Unlike the API path, docker stats already
+    // reports a ready-made CPU percentage, so no previous-sample delta is
+    // needed here.
+    struct CliStats {
+        float   cpuPct        = -1.0f;
+        quint64 memUsedBytes  = 0;
+        quint64 memLimitBytes = 0;
+    };
+    mutable QHash<QString, CliStats> m_statsNumericCache;
     mutable QElapsedTimer m_statsAge;
     mutable bool m_statsSampled = false;
     void refreshStatsCache() const;
@@ -157,6 +189,10 @@ private:
     // wait here or they'll get "name already in use". Returns true when gone,
     // false on timeout (5 s).
     bool waitForRemoval(const QString &name) const;
+    // Same polling logic, shared across an arbitrary set of names in one
+    // event loop -- see stopMany(). Returns the subset still not confirmed
+    // gone when the 5s timeout is hit (empty means all of them are gone).
+    QStringList waitForRemovalMany(const QStringList &names) const;
     bool runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const;
     // The API half of runContainer(): POST /containers/create + /start.
     // Returns false (without having created anything) when the API isn't

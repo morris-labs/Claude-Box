@@ -57,6 +57,8 @@ BoxRecord BoxRecord::load(const QString &name)
             rec.sessionUuid = value;
         else if (key == "conversation_name")
             rec.conversationName = value;
+        else if (key == "transcript_synced_name")
+            rec.transcriptSyncedName = value;
         else if (key == "yolo")
             rec.skipPermissions = (value == "1");
         else if (key == "model")
@@ -116,6 +118,7 @@ bool BoxRecord::save() const
     out << "target_dir=" << targetDir << '\n';
     out << "session_uuid=" << sessionUuid << '\n';
     out << "conversation_name=" << conversationName << '\n';
+    out << "transcript_synced_name=" << transcriptSyncedName << '\n';
     out << "yolo=" << (skipPermissions ? "1" : "0") << '\n';
     if (!model.isEmpty())
         out << "model=" << model << '\n';

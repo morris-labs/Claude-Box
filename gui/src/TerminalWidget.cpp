@@ -285,6 +285,11 @@ void TerminalWidget::updateGridSize()
 void TerminalWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
+    // A selection is a set of (row, col) cells in the old grid; once
+    // updateGridSize() reflows rows/cols there is no cell mapping that keeps
+    // it meaningful, so drop it rather than paint an overlay outside the new
+    // grid's bounds.
+    clearSelection();
     updateGridSize();
 }
 
@@ -372,6 +377,10 @@ QString TerminalWidget::selectedText() const
 
 void TerminalWidget::clearSelection()
 {
+    // Also cancels an in-progress drag: a resize mid-drag would otherwise
+    // leave m_selecting true with anchors reset to -1, and the next
+    // mouseMoveEvent would build a selection rect out of that sentinel.
+    m_selecting = false;
     if (m_selAnchorRow < 0)
         return;
     const int r0 = qMin(m_selAnchorRow, m_selEndRow);

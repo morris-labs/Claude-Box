@@ -156,13 +156,24 @@ private:
     const BoxInfo *selectedBoxInfo() const;      // first selected row, or null
     QList<const BoxInfo *> selectedBoxInfos() const; // all selected rows
     QString currentSelectedName() const;
+    QStringList currentSelectedNames() const;    // every selected row's name
     void reselectByName(const QString &name);
+    void reselectByNames(const QStringList &names);
+    // Name of a currently-Running box targeting `dir`, or empty if none.
+    // Walks the *source* model, not the proxy, so a filtered-out running box
+    // still counts. Shared by onPurge and onMoveWorkingDirectory, both of
+    // which act on every BoxRecord that shares a directory, not just the
+    // selected one.
+    QString runningBoxForDir(const QString &dir) const;
 
     // False if the conversation the user picked in the New Box dialog
     // can't (or shouldn't) be adopted -- see the definition.
     bool confirmConversationAdoption(const QString &sessionUuid);
 
-    void startBox(const QString &name);
+    // syncTranscriptTitle: see the definition -- pass false when starting
+    // several boxes in one loop to avoid a stall proportional to
+    // transcript size times box count.
+    void startBox(const QString &name, bool syncTranscriptTitle = true);
     void openTerminalTab(const QString &name, const QString &title);
     void closeTabForBox(const QString &name);
     int tabIndexForBox(const QString &name) const;

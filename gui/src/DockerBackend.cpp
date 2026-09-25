@@ -75,28 +75,34 @@ QString containerName(const QJsonObject &container)
 
 // Builds the sentence added to the opening prompt when a new box has mapped
 // ports, so the agent knows which ports it can use for services that need to
-// be reached on the host via localhost. Container-side port numbers are used
-// (what the agent binds to); because auto-allocated ports are the same on
-// both sides, those numbers are also the localhost port the host dials.
+// be reached on the host via localhost. rec.ports entries are "HOST:CONTAINER"
+// -- the agent must bind the container-side number, and host and container
+// numbers only coincide for auto-allocated ports, not a manually entered
+// mapping like 9000:3000, so an asymmetric pair spells out both sides.
 QString portHint(const QStringList &ports)
 {
-    QStringList nums;
+    QStringList mappings;
     for (const QString &p : ports) {
         const int colon = p.indexOf(':');
-        const QString containerPort = colon >= 0 ? p.mid(colon + 1) : p;
-        if (!containerPort.isEmpty())
-            nums << containerPort;
+        if (colon < 0)
+            continue;
+        const QString hostPort = p.left(colon);
+        const QString containerPort = p.mid(colon + 1);
+        if (hostPort.isEmpty() || containerPort.isEmpty())
+            continue;
+        mappings << (hostPort == containerPort
+                         ? containerPort
+                         : QStringLiteral("%1 (reachable on the host at localhost:%2)")
+                               .arg(containerPort, hostPort));
     }
-    if (nums.isEmpty())
+    if (mappings.isEmpty())
         return QString();
 
     return QStringLiteral(
-        "The following container ports are mapped to the same port numbers on the "
-        "host: %1. A service you start on one of these ports inside this container "
-        "is reachable at localhost:PORT from the host. Use one of these ports for "
-        "any web server, API, or other network service that the host needs to reach "
-        "via localhost or 127.0.0.1.")
-        .arg(nums.join(QStringLiteral(", ")));
+        "The following container ports are mapped to the host: %1. Bind any web "
+        "server, API, or other network service the host needs to reach to one of "
+        "these container-side ports.")
+        .arg(mappings.join(QStringLiteral(", ")));
 }
 
 } // namespace
@@ -167,6 +173,32 @@ namespace {
 // on purpose -- cpu/mem readouts are ambient information, and paying a
 // second of worker time for them on every tick is not worth it.
 constexpr qint64 kStatsMaxAgeMs = 10000;
+
+// Parses one side of docker stats' MemUsage column, e.g. "123.4MiB" or
+// "512B", into a byte count. Returns 0 if the token isn't in that format.
+quint64 parseDockerStatsBytes(const QString &token)
+{
+    static const QRegularExpression re(QStringLiteral("^([0-9.]+)\\s*([KMGTP]?i?B)$"));
+    const QRegularExpressionMatch m = re.match(token.trimmed());
+    if (!m.hasMatch())
+        return 0;
+
+    quint64 multiplier = 1;
+    const QString unit = m.captured(2);
+    if (unit == QStringLiteral("KiB"))
+        multiplier = 1024ULL;
+    else if (unit == QStringLiteral("MiB"))
+        multiplier = 1024ULL * 1024;
+    else if (unit == QStringLiteral("GiB"))
+        multiplier = 1024ULL * 1024 * 1024;
+    else if (unit == QStringLiteral("TiB"))
+        multiplier = 1024ULL * 1024 * 1024 * 1024;
+    else if (unit == QStringLiteral("PiB"))
+        multiplier = 1024ULL * 1024 * 1024 * 1024 * 1024;
+    // "B" alone leaves multiplier at 1.
+
+    return quint64(m.captured(1).toDouble() * double(multiplier));
+}
 }
 
 void DockerBackend::invalidateStats()
@@ -181,14 +213,34 @@ void DockerBackend::refreshStatsCache() const
 
     QString out, err;
     m_statsCache.clear();
+    m_statsNumericCache.clear();
     // One call for every running container, rather than one call each.
     if (runDocker({"stats", "--no-stream", "--format", "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"},
                    &out, &err, 30000)) {
         const QStringList lines = out.split('\n', Qt::SkipEmptyParts);
         for (const QString &line : lines) {
             const QStringList parts = line.split('\t');
-            if (parts.size() == 3)
-                m_statsCache.insert(parts.at(0), QString("cpu %1 · mem %2").arg(parts.at(1), parts.at(2)));
+            if (parts.size() != 3)
+                continue;
+            const QString &name = parts.at(0);
+            const QString &cpuText = parts.at(1);
+            const QString &memText = parts.at(2);
+            m_statsCache.insert(name, QString("cpu %1 · mem %2").arg(cpuText, memText));
+
+            // MemUsage looks like "123.4MiB / 1.951GiB".
+            const QStringList memParts = memText.split(QStringLiteral(" / "));
+            if (memParts.size() == 2) {
+                CliStats stats;
+                QString cpuDigits = cpuText;
+                cpuDigits.remove('%');
+                bool cpuOk = false;
+                const double cpuValue = cpuDigits.trimmed().toDouble(&cpuOk);
+                if (cpuOk)
+                    stats.cpuPct = float(cpuValue);
+                stats.memUsedBytes  = parseDockerStatsBytes(memParts.at(0));
+                stats.memLimitBytes = parseDockerStatsBytes(memParts.at(1));
+                m_statsNumericCache.insert(name, stats);
+            }
         }
     }
 
@@ -219,6 +271,7 @@ QList<BoxInfo> DockerBackend::listBoxes(bool sampleStats) const
         info.conversationName = rec.conversationName;
         info.targetDir = rec.targetDir;
         info.detail = "not running";
+        info.wasRunning = rec.wasRunning;
         result.append(info);
         seen.insert(rec.name);
     }
@@ -378,6 +431,12 @@ void DockerBackend::listViaCli(QList<BoxInfo> &result, QSet<QString> &seen, bool
             }
 
             info.stats = m_statsCache.value(info.name);
+            if (const auto it = m_statsNumericCache.constFind(info.name);
+                it != m_statsNumericCache.constEnd()) {
+                info.cpuPct        = it->cpuPct;
+                info.memUsedBytes  = it->memUsedBytes;
+                info.memLimitBytes = it->memLimitBytes;
+            }
 
             result.append(info);
             seen.insert(info.name);
@@ -423,7 +482,7 @@ bool DockerBackend::isRunning(const QString &name) const
 // image can be built with any USER_NAME and still match what the host expects.
 // Falls back to "user" if none of $USER (Linux/macOS), $LOGNAME (POSIX),
 // or $USERNAME (Windows) is set -- in practice one of them is always present.
-static QString containerUsername()
+QString DockerBackend::containerUsername()
 {
     QString u = qEnvironmentVariable("USER");
     if (u.isEmpty())
@@ -439,7 +498,7 @@ static QString containerUsername()
     // must pass through unchanged. $USERNAME on Windows may contain spaces --
     // that's the case we guard against here.
     static const QRegularExpression kBadChars(QStringLiteral("[\\s:/]"));
-    if (u.isEmpty() || kBadChars.match(u).hasMatch()) {
+    if (kBadChars.match(u).hasMatch()) {
         qWarning("containerUsername: '%s' contains invalid characters; falling back to 'user'",
                  qUtf8Printable(u));
         u = QStringLiteral("user");
@@ -754,8 +813,10 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
     // named conversation -- the old launcher always forwarded it, and only
     // the folder provisioning was conditional. The opening prompt is the
     // part that depends on there being a workspace to point at.
-    if (!rec.conversationName.isEmpty())
+    if (!rec.conversationName.isEmpty()) {
         claudeArgs << "--name" << rec.conversationName;
+        rec.transcriptSyncedName = rec.conversationName;
+    }
     if (!openingPrompt.isEmpty())
         claudeArgs << openingPrompt;
     if (!forkFromUuid.isEmpty())
@@ -810,77 +871,126 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
 
 bool DockerBackend::stop(const QString &name, QString *errorOut) const
 {
-    bool ok = false;
-    if (DockerApi::isAvailable()) {
+    QHash<QString, QString> errors;
+    stopMany({name}, &errors);
+    if (errors.contains(name)) {
+        if (errorOut)
+            *errorOut = errors.value(name);
+        return false;
+    }
+    return true;
+}
+
+void DockerBackend::stopMany(const QStringList &names, QHash<QString, QString> *errorsOut) const
+{
+    // Issue every stop request first, then wait for the whole batch to be
+    // removed with one shared poll loop -- see the declaration comment for
+    // why (a full stop-then-wait-up-to-5s per box in sequence would let a
+    // multi-box Stop freeze the UI for up to names.size() * 5s).
+    QStringList stopped;
+    for (const QString &name : names) {
+        bool ok = false;
         QString error;
-        DockerApi::post(QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + name + "/stop",
-                        {}, &error, 20000);
-        if (error.isEmpty())
-            ok = true;
-        else {
-            if (errorOut)
-                *errorOut = error;
-            return false;
+        if (DockerApi::isAvailable()) {
+            DockerApi::post(QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + name + "/stop",
+                            {}, &error, 20000);
+            ok = error.isEmpty();
+        } else {
+            ok = runDocker({"stop", name}, nullptr, &error, 15000);
         }
-    } else {
-        ok = runDocker({"stop", name}, nullptr, errorOut, 15000);
+
+        if (ok) {
+            BoxRecord rec = BoxRecord::load(name);
+            if (rec.isValid()) {
+                rec.wasRunning = false;
+                rec.save();
+            }
+            stopped << name;
+        } else if (errorsOut) {
+            errorsOut->insert(name, error);
+        }
     }
 
-    if (ok) {
-        BoxRecord rec = BoxRecord::load(name);
-        if (rec.isValid()) {
-            rec.wasRunning = false;
-            rec.save();
-        }
-        // With --rm, the daemon removes the container asynchronously after it
-        // exits. waitForRemoval() blocks until the name is gone from docker ps
-        // -a so that an immediate reopen() doesn't collide with the old name.
-        waitForRemoval(name);
-    }
-    return ok;
+    // With --rm, the daemon removes each container asynchronously after it
+    // exits. waitForRemovalMany() blocks until every stopped name is gone
+    // from docker ps -a so that an immediate reopen() doesn't collide with
+    // the old name.
+    waitForRemovalMany(stopped);
 }
 
 bool DockerBackend::waitForRemoval(const QString &name) const
 {
-    constexpr int kPollMs   = 100;
+    return waitForRemovalMany({name}).isEmpty();
+}
+
+QStringList DockerBackend::waitForRemovalMany(const QStringList &names) const
+{
+    constexpr int kPollMs    = 100;
     constexpr int kTimeoutMs = 5000;
 
-    // Use a dedicated QEventLoop driven by a QTimer rather than pumping the
-    // application event loop directly. processEvents(ExcludeUserInputEvents)
-    // still lets timers fire and can deliver re-entrant signals (the 3s refresh
-    // watcher, onTerminalSessionFinished) onto the GUI stack while stop() is
-    // still on it. A nested QEventLoop only exits on its own quit() signal, so
-    // nothing unrelated can be delivered during the wait.
-    bool gone = false;
+    if (names.isEmpty())
+        return {};
+
+    // stop()/stopMany() run synchronously on the GUI thread, so this
+    // loop.exec() is itself a re-entrant nested event loop -- it does not
+    // prevent re-entrancy, it only narrows what can trigger it. Passing
+    // ExcludeUserInputEvents keeps the user from clicking Stop/Edit/Purge or
+    // opening a menu while the wait is in progress, but timers and posted
+    // events (the 3s refresh watcher's `finished` signal,
+    // onTerminalSessionFinished) are not user input and can still be
+    // delivered here.
+    QSet<QString> remaining(names.begin(), names.end());
     QEventLoop loop;
     QTimer poller;
     QTimer timeout;
 
     QObject::connect(&poller, &QTimer::timeout, [&]() {
-        bool exists = false;
-        if (DockerApi::isAvailable()) {
-            QString error;
-            DockerApi::get(QStringLiteral("/") + DockerApi::kApiVersion
-                           + "/containers/" + name + "/json", &error);
-            exists = error.isEmpty();
-        } else {
-            QString out, err;
-            if (runDocker({"ps", "-a", "--filter", "name=^" + name + "$",
-                           "--format", "{{.Names}}"}, &out, &err, 2000))
-                exists = (out.trimmed() == name);
+        for (auto it = remaining.begin(); it != remaining.end();) {
+            const QString &name = *it;
+            // Only a definitive answer -- confirmed gone, or confirmed still
+            // present -- settles `exists`. A transient failure (socket hiccup,
+            // docker CLI timeout) must not be read as "removed": that would
+            // exit the wait early and risk reopen() colliding with the still-
+            // live name.
+            bool exists = true;
+            bool determined = false;
+            if (DockerApi::isAvailable()) {
+                QString error;
+                DockerApi::get(QStringLiteral("/") + DockerApi::kApiVersion
+                               + "/containers/" + name + "/json", &error);
+                if (error.isEmpty()) {
+                    exists = true;
+                    determined = true;
+                } else if (error.startsWith(QStringLiteral("HTTP 404"))) {
+                    exists = false;
+                    determined = true;
+                }
+                // Any other error (connection issue, timeout) is transient;
+                // determined stays false and this name is simply retried.
+            } else {
+                QString out, err;
+                if (runDocker({"ps", "-a", "--filter", "name=^" + name + "$",
+                               "--format", "{{.Names}}"}, &out, &err, 2000)) {
+                    exists = (out.trimmed() == name);
+                    determined = true;
+                }
+                // runDocker failure is transient for the same reason.
+            }
+            if (determined && !exists)
+                it = remaining.erase(it);
+            else
+                ++it;
         }
-        if (!exists) {
-            gone = true;
+        if (remaining.isEmpty())
             loop.quit();
-        }
     });
 
     QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
     timeout.setSingleShot(true);
     timeout.start(kTimeoutMs);
     poller.start(kPollMs);
-    loop.exec();
-    return gone;
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    return remaining.values();
 }
 
 bool DockerBackend::remove(const QString &name, QString *errorOut) const
