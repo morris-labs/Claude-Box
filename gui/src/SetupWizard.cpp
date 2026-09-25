@@ -2,6 +2,7 @@
 
 #include "CommandTerminalDialog.h"
 #include "DockerApi.h"
+#include "DockerBackend.h"
 #include "Icons.h"
 #include "Theme.h"
 
@@ -283,18 +284,26 @@ void SetupWizard::buildDockerImage()
 #else
     const QString repoDir;
 #endif
+    const QString userName = DockerBackend::containerUsername();
     if (repoDir.isEmpty() || !QFileInfo::exists(repoDir + "/Dockerfile")) {
         QMessageBox::information(this, "Build Image",
             "This build of claude-box-gui doesn't know where its own Dockerfile is (it wasn't "
             "built from a source checkout, or the checkout has since moved) -- build it "
-            "yourself:\n\ndocker build -t claude-code <path to the claude-box repo>");
+            "yourself:\n\ndocker build -t claude-code --build-arg USER_NAME=" + userName +
+            " <path to the claude-box repo>");
         return;
     }
 
+    // --build-arg USER_NAME must match what DockerBackend::launchSpec() later
+    // passes to `docker run --user`: the image's uid-1000 account is renamed
+    // to this value at build time, and a run with a different --user finds no
+    // matching passwd entry.
     auto *dlg = new CommandTerminalDialog(QStringLiteral("Building claude-code image"),
                                           QStringLiteral("docker"),
                                           {QStringLiteral("build"), QStringLiteral("-t"),
-                                           QStringLiteral("claude-code"), repoDir},
+                                           QStringLiteral("claude-code"),
+                                           QStringLiteral("--build-arg"),
+                                           QStringLiteral("USER_NAME=") + userName, repoDir},
                                           this);
     dlg->exec();
     dlg->deleteLater();

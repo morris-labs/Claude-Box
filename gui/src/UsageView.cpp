@@ -153,7 +153,11 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
         m_totalCpuBar->setRange(0, 100 * qMax(cpuSampled, 1));
         m_totalCpuBar->setValue(cpuDisplay);
         const double frac = double(cpuDisplay) / double(100 * qMax(cpuSampled, 1));
-        m_totalCpuBar->setStyleSheet(progressBarStyle(barChunkColor(frac)));
+        const QString cpuStyle = progressBarStyle(barChunkColor(frac));
+        if (cpuStyle != m_lastTotalCpuStyle) {
+            m_totalCpuBar->setStyleSheet(cpuStyle);
+            m_lastTotalCpuStyle = cpuStyle;
+        }
         m_totalCpuBar->setFormat(QStringLiteral("%1%").arg(int(totalCpu + 0.5)));
     } else {
         m_totalCpuBar->setRange(0, 100);
@@ -165,7 +169,11 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
         const int memPct = int(double(totalMemUsed) / double(totalMemLimit) * 100.0 + 0.5);
         m_totalMemBar->setValue(qBound(0, memPct, 100));
         const double frac = qBound(0.0, double(totalMemUsed) / double(totalMemLimit), 1.0);
-        m_totalMemBar->setStyleSheet(progressBarStyle(barChunkColor(frac)));
+        const QString memStyle = progressBarStyle(barChunkColor(frac));
+        if (memStyle != m_lastTotalMemStyle) {
+            m_totalMemBar->setStyleSheet(memStyle);
+            m_lastTotalMemStyle = memStyle;
+        }
         m_totalMemBar->setFormat(QStringLiteral("%1  (%2 / %3)")
             .arg(memPct).arg(DockerBackend::humanBytes(totalMemUsed),
                              DockerBackend::humanBytes(totalMemLimit)));

@@ -1,9 +1,33 @@
 #include "PortAllocator.h"
 
+#include <QDir>
+#include <QLockFile>
 #include <QSettings>
 
 namespace {
 const char *kNextBaseKey = "portAllocator/nextBase";
+
+// Guards read/write access to kNextBaseKey across concurrent instances of
+// the app -- nothing else stops two instances from both reading the same
+// nextBase() and each committing an overlapping port block. A short
+// tryLock: if it can't be acquired quickly (another instance is mid-
+// allocation, or a stale lock was left behind by a crash -- staleLockTime
+// covers that case), proceed without it rather than freezing the UI. A
+// missed lock only risks two instances picking overlapping ports, which
+// surfaces as an ordinary "port already in use" error from docker, not
+// data loss, so failing open here is the right tradeoff.
+class NextBaseLock {
+public:
+    NextBaseLock()
+        : m_lock(QDir::temp().filePath(QStringLiteral("claude-box-gui-port-allocator.lock")))
+    {
+        m_lock.setStaleLockTime(5000);
+        m_lock.tryLock(500);
+    }
+
+private:
+    QLockFile m_lock;
+};
 }
 
 QSet<int> PortAllocator::reservedPorts(const QList<BoxRecord> &existing)
@@ -23,6 +47,7 @@ QSet<int> PortAllocator::reservedPorts(const QList<BoxRecord> &existing)
 
 int PortAllocator::nextBase()
 {
+    NextBaseLock lock;
     QSettings s;
     const int stored = s.value(kNextBaseKey, kRangeStart).toInt();
     // Clamp in case a previous build used a different range.
@@ -31,6 +56,7 @@ int PortAllocator::nextBase()
 
 void PortAllocator::setNextBase(int port)
 {
+    NextBaseLock lock;
     QSettings s;
     s.setValue(kNextBaseKey, port);
 }

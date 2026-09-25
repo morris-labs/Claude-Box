@@ -17,7 +17,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     # core utilities
     git wget unzip sudo tmux jq \
     # GitHub CLI + git extras
@@ -53,14 +53,41 @@ RUN npm install -g @anthropic-ai/claude-code
 
 USER ${USER_NAME}
 
-# nvm + Node.js LTS (user-level; the system Node.js above is only for the claude-code
-# global install -- project work inside the container should use nvm-managed versions)
+# nvm + Node.js (user-level; the system Node.js above is only for the
+# claude-code global install -- project work inside the container should use
+# the nvm-managed version). Pinned to a concrete release, not --lts, so two
+# builds of this Dockerfile from the same commit produce the same image;
+# bump NODE_VERSION here by hand rather than tracking whatever LTS is
+# current at build time.
+ENV NODE_VERSION=22.13.0
 RUN curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && \
-    bash -c '. "$HOME/.nvm/nvm.sh" && nvm install --lts && nvm alias default lts/*'
+    bash -c '. "$HOME/.nvm/nvm.sh" && nvm install '"${NODE_VERSION}"' && nvm alias default '"${NODE_VERSION}"
 
-# SDKMAN + Gradle (user-level install; SDKMAN requires an interactive-style shell init)
-RUN curl -fsSL https://get.sdkman.io | bash && \
-    bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install gradle'
+# SDKMAN + Gradle (user-level install; SDKMAN requires an interactive-style
+# shell init). Gradle is pinned for the same reproducibility reason as
+# Node above. get.sdkman.io has no versioned URL the way nvm's tagged
+# install.sh does -- it always serves whatever the current stable installer
+# is -- so the script is pinned by checksum instead: the build fails loudly
+# if SDKMAN changes what it serves, rather than silently installing a
+# different SDKMAN CLI version. Bump SDKMAN_INSTALL_SHA256 by hand (fetch
+# https://get.sdkman.io and sha256sum it) for a deliberate upgrade.
+ENV GRADLE_VERSION=8.10.2
+ENV SDKMAN_INSTALL_SHA256=b6f4fb257b420c7291c35549ae714af6d5af290bb8d57c219918f1f3d3d3e052
+RUN curl -fsSL https://get.sdkman.io -o /tmp/sdkman-install.sh && \
+    echo "${SDKMAN_INSTALL_SHA256}  /tmp/sdkman-install.sh" | sha256sum -c - && \
+    bash /tmp/sdkman-install.sh && \
+    rm /tmp/sdkman-install.sh && \
+    bash -c 'source "$HOME/.sdkman/bin/sdkman-init.sh" && sdk install gradle '"${GRADLE_VERSION}"
+
+# nvm and SDKMAN only wire their PATH/init lines into ~/.bashrc, which a
+# non-interactive `bash -c` -- how this image's entrypoint actually invokes
+# claude -- never sources. Expose both toolchains via PATH directly so
+# gradle and the nvm-managed node/npm resolve regardless of how the shell
+# is invoked. The gradle path relies on SDKMAN's "current" symlink, which
+# `sdk install` maintains on disk and needs no shell init to read.
+ENV NVM_DIR=/home/${USER_NAME}/.nvm
+ENV SDKMAN_DIR=/home/${USER_NAME}/.sdkman
+ENV PATH=${NVM_DIR}/versions/node/v${NODE_VERSION}/bin:${SDKMAN_DIR}/candidates/gradle/current/bin:${PATH}
 
 # The directory is handled dynamically by the orchestration script
 WORKDIR /home/${USER_NAME}/workspace

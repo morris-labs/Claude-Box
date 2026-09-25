@@ -5,6 +5,8 @@
 #include <QLocalSocket>
 #include <QProcessEnvironment>
 
+#include <atomic>
+
 namespace {
 
 // Reads until the socket closes or the deadline passes. The requests here
@@ -87,9 +89,11 @@ bool DockerApi::isAvailable()
 {
     // Re-checked only until it first succeeds: a daemon that is there
     // stays there, and a missing socket is worth retrying in case docker
-    // gets started while the app is open.
-    static bool known = false;
-    if (known)
+    // gets started while the app is open. Called from both the GUI thread
+    // and the worker thread listBoxes() runs on, so this needs to be an
+    // atomic rather than a plain bool.
+    static std::atomic<bool> known{false};
+    if (known.load(std::memory_order_relaxed))
         return true;
 
     const QString path = socketPath();
@@ -102,9 +106,11 @@ bool DockerApi::isAvailable()
 
     QLocalSocket socket;
     socket.connectToServer(path);
-    known = socket.waitForConnected(1000);
+    const bool connected = socket.waitForConnected(1000);
     socket.abort();
-    return known;
+    if (connected)
+        known.store(true, std::memory_order_relaxed);
+    return connected;
 }
 
 namespace {

@@ -40,6 +40,16 @@ struct BoxRecord {
     QString targetDir;
     QString sessionUuid;
     QString conversationName;
+    // conversationName as of the last time it was written into the
+    // transcript via `claude --name` (creation, adoption, or fork -- see
+    // DockerBackend::createNew()). reopen() never passes --name, so an
+    // Edit-dialog rename changes conversationName without changing this
+    // field; MainWindow::startBox() compares the two to tell "the record
+    // still matches what's in the transcript" from "the user renamed it
+    // through the app since," and only pulls a transcript-side title
+    // change into conversationName in the first case -- otherwise a
+    // deliberate rename would get silently reverted on the next Start.
+    QString transcriptSyncedName;
     // `claude --dangerously-skip-permissions`. Still stored under the old
     // `yolo=` key so existing records keep working; only the name here
     // and in the UI changed, to say what the flag actually does.
