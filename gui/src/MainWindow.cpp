@@ -163,10 +163,15 @@ void MainWindow::buildActions()
     m_openAllAction->setStatusTip(QStringLiteral("Start every stopped box that was running before the last reboot or crash"));
     connect(m_openAllAction, &QAction::triggered, this, &MainWindow::onOpenAll);
 
-    m_openExternalAction = new QAction(QStringLiteral("Open in &Terminal (tmux)"), this);
+    m_openExternalAction = new QAction(QStringLiteral("Open &Shell in Terminal"), this);
     m_openExternalAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+T")));
-    m_openExternalAction->setStatusTip(QStringLiteral("Open this container in an external terminal with tmux"));
+    m_openExternalAction->setStatusTip(QStringLiteral("Open a bash shell in this container in an external terminal"));
     connect(m_openExternalAction, &QAction::triggered, this, &MainWindow::onOpenExternal);
+
+    m_openExternalClaudeAction = new QAction(QStringLiteral("Open &Claude in Terminal"), this);
+    m_openExternalClaudeAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Y")));
+    m_openExternalClaudeAction->setStatusTip(QStringLiteral("Attach to this container's Claude session in an external terminal"));
+    connect(m_openExternalClaudeAction, &QAction::triggered, this, &MainWindow::onOpenExternalClaude);
 
     m_removeAction = new QAction(Icons::removeBox(), QStringLiteral("&Remove"), this);
     m_removeAction->setStatusTip(QStringLiteral("docker rm this stopped container"));
@@ -409,6 +414,7 @@ void MainWindow::buildMenus()
     boxMenu->addAction(m_closeAction);
     boxMenu->addAction(m_stopAllAction);
     boxMenu->addAction(m_openAllAction);
+    boxMenu->addAction(m_openExternalClaudeAction);
     boxMenu->addAction(m_openExternalAction);
     boxMenu->addSeparator();
     boxMenu->addAction(m_moveWorkDirAction);
@@ -453,6 +459,7 @@ void MainWindow::buildToolBar()
     toolbar->addAction(m_editAction);
     toolbar->addAction(m_forkAction);
     toolbar->addAction(m_closeAction);
+    toolbar->addAction(m_openExternalClaudeAction);
     toolbar->addAction(m_openExternalAction);
     toolbar->addSeparator();
     toolbar->addAction(m_removeAction);
@@ -709,6 +716,7 @@ void MainWindow::updateActionStates()
     m_changeWorkDirAction->setEnabled(single && single->status != BoxInfo::Status::Running
                                       && rec.isValid());
     m_openExternalAction->setEnabled(single && single->status == BoxInfo::Status::Running);
+    m_openExternalClaudeAction->setEnabled(single && single->status == BoxInfo::Status::Running);
 
     // Multi-item actions: any matching selection is enough.
     m_openAction->setEnabled(anyStopped);
@@ -885,6 +893,7 @@ void MainWindow::showTableContextMenu(const QPoint &pos)
     menu.addAction(m_forkAction);
     menu.addSeparator();
     menu.addAction(m_closeAction);
+    menu.addAction(m_openExternalClaudeAction);
     menu.addAction(m_openExternalAction);
     menu.addSeparator();
     menu.addAction(m_moveWorkDirAction);
@@ -1668,6 +1677,60 @@ void MainWindow::onOpenAll()
 
     for (const QString &name : names)
         startBox(name, /*syncTranscriptTitle=*/false);
+}
+
+void MainWindow::onOpenExternalClaude()
+{
+    const BoxInfo *info = selectedBoxInfo();
+    if (!info || info->status != BoxInfo::Status::Running)
+        return;
+
+#ifdef Q_OS_WIN
+    const QStringList dockerArgs = {
+        "attach", "--detach-keys=ctrl-q", info->name
+    };
+    if (QProcess::startDetached(QStringLiteral("docker.exe"), dockerArgs))
+        return;
+    QStringList wtArgs = {"--", "docker.exe"};
+    wtArgs += dockerArgs;
+    if (QProcess::startDetached(QStringLiteral("wt.exe"), wtArgs))
+        return;
+    QMessageBox::warning(this, QStringLiteral("Open Claude in Terminal"),
+                         QStringLiteral("Could not launch a terminal.\n"
+                         "Neither docker.exe nor wt.exe could be started."));
+#else
+    // docker attach connects directly to the Claude session (PID 1 in the
+    // container). --detach-keys=ctrl-q overrides docker's default ctrl-p
+    // ctrl-q so ctrl-p reaches Claude instead.
+    const QStringList innerCmd = {
+        "bash", "-c",
+        QStringLiteral("docker attach --detach-keys=ctrl-q %1").arg(info->name)
+    };
+
+    struct Spec { QString term; bool gnomeStyle; };
+    const QList<Spec> candidates = {
+        {qEnvironmentVariable("TERMINAL"), false},
+        {QStringLiteral("x-terminal-emulator"), false},
+        {QStringLiteral("gnome-terminal"),      true},
+        {QStringLiteral("xterm"),               false},
+        {QStringLiteral("kitty"),               false},
+        {QStringLiteral("alacritty"),           false},
+    };
+
+    for (const Spec &s : candidates) {
+        if (s.term.trimmed().isEmpty())
+            continue;
+        const QStringList args = s.gnomeStyle
+            ? QStringList{"--"} + innerCmd
+            : QStringList{"-e"} + innerCmd;
+        if (QProcess::startDetached(s.term, args))
+            return;
+    }
+
+    QMessageBox::warning(this, QStringLiteral("Open Claude in Terminal"),
+                         QStringLiteral("No terminal emulator found.\n"
+                         "Set $TERMINAL, or install xterm or gnome-terminal."));
+#endif
 }
 
 void MainWindow::onOpenExternal()
