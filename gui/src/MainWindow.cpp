@@ -1679,6 +1679,26 @@ void MainWindow::onOpenAll()
         startBox(name, /*syncTranscriptTitle=*/false);
 }
 
+#ifdef Q_OS_WIN
+// Launch docker.exe in an external terminal window. Direct
+// QProcess::startDetached("docker.exe") is NOT used: a GUI app has no
+// console, so the child inherits none either and docker's -it / attach
+// fails silently. Route through wt.exe (Windows Terminal) first;
+// conhost.exe (always present since Windows 10) as fallback.
+static bool launchInWindowsTerminal(const QStringList &dockerArgs)
+{
+    QStringList wtArgs = {QStringLiteral("--"), QStringLiteral("docker.exe")};
+    wtArgs += dockerArgs;
+    if (QProcess::startDetached(QStringLiteral("wt.exe"), wtArgs))
+        return true;
+    QStringList conhostArgs = {QStringLiteral("--"), QStringLiteral("docker.exe")};
+    conhostArgs += dockerArgs;
+    if (QProcess::startDetached(QStringLiteral("conhost.exe"), conhostArgs))
+        return true;
+    return false;
+}
+#endif
+
 void MainWindow::onOpenExternalClaude()
 {
     const BoxInfo *info = selectedBoxInfo();
@@ -1686,18 +1706,17 @@ void MainWindow::onOpenExternalClaude()
         return;
 
 #ifdef Q_OS_WIN
+    // --detach-keys=ctrl-q,q: two-key sequence so a stray Ctrl+Q alone
+    // doesn't accidentally detach (ctrl-q overrides docker's default
+    // ctrl-p ctrl-q, keeping Ctrl+P available inside claude).
     const QStringList dockerArgs = {
-        "attach", "--detach-keys=ctrl-q", info->name
+        "attach", "--detach-keys=ctrl-q,q", info->name
     };
-    if (QProcess::startDetached(QStringLiteral("docker.exe"), dockerArgs))
-        return;
-    QStringList wtArgs = {"--", "docker.exe"};
-    wtArgs += dockerArgs;
-    if (QProcess::startDetached(QStringLiteral("wt.exe"), wtArgs))
+    if (launchInWindowsTerminal(dockerArgs))
         return;
     QMessageBox::warning(this, QStringLiteral("Open Claude in Terminal"),
                          QStringLiteral("Could not launch a terminal.\n"
-                         "Neither docker.exe nor wt.exe could be started."));
+                         "Neither wt.exe nor conhost.exe could be started."));
 #else
     // docker attach connects directly to the Claude session (PID 1 in the
     // container). --detach-keys=ctrl-q overrides docker's default ctrl-p
@@ -1740,58 +1759,19 @@ void MainWindow::onOpenExternal()
         return;
 
 #ifdef Q_OS_WIN
-    // Untested on Windows -- see this repo's CLAUDE.md on cross-platform
-    // parity; needs a Windows-side check before this is considered
-    // confirmed, the way the ConPTY/PtySessionWin work was. The docker CLI
-    // is a native Windows binary talking to the daemon over a named pipe
-    // (see DockerApi::socketPath()), so it runs directly -- no WSL or
-    // bash-on-the-host dependency, unlike the container's own `tmux
-    // attach`, which runs *inside* the Linux container and is unaffected
-    // by the host shell either way.
-    //
-    // Deliberately not routed through `cmd /k "<command string>"`: /K
-    // re-parses its argument as a fresh command line, and this command
-    // contains cmd.exe metacharacters (`|`, `>`) that cmd would then try
-    // to interpret itself (as its own pipe/redirect operators) rather than
-    // pass through to bash -- cmd's own quote-preservation rule only
-    // applies when no such characters appear between the quotes, so it
-    // strips them and misparses the line. Passing an argv list straight to
-    // docker.exe instead means Qt builds the Win32 command line and no
-    // shell ever re-tokenizes it: bash -c receives the script as one
-    // literal argument, exactly as intended.
+    // Confirmed working (phase 4 follow-up): docker exec -it bash runs
+    // inside the Linux container; the host CLI talks to the daemon over
+    // a named pipe and is unaffected by the host shell. Routed through
+    // launchInWindowsTerminal() (wt.exe/conhost.exe) rather than direct
+    // docker.exe because a GUI app has no console -- see that helper.
     const QStringList dockerArgs = {
-        "exec", "-it", info->name, "bash", "-c",
-        QStringLiteral("tmux attach 2>/dev/null || tmux")
+        "exec", "-it", info->name, "bash"
     };
-
-    // docker.exe launched directly, with no shell wrapper at all, is
-    // tried first: it's the one path with no re-tokenizing step of any
-    // kind between Qt's argv and the child process, so it's the most
-    // trustworthy. A detached console-subsystem process started from
-    // this console-less GUI app gets its own new console window
-    // automatically, so this still opens a visible terminal; it just
-    // won't stay open once the process exits the way `cmd /k` would
-    // have (worth noting if `docker exec` fails immediately -- the
-    // window can close before an error is readable).
-    if (QProcess::startDetached(QStringLiteral("docker.exe"), dockerArgs))
+    if (launchInWindowsTerminal(dockerArgs))
         return;
-
-    // Windows Terminal as a fallback, launching docker.exe via `--` (its
-    // direct-command syntax, which also bypasses cmd.exe parsing). Tried
-    // second rather than first: wt.exe's own positional-argument handling
-    // has documented cases of not preserving a multi-word quoted argument
-    // intact when rebuilding the child's command line, which could
-    // word-split the bash -c script rather than pass it through whole --
-    // a different, subtler failure than the cmd.exe bug this whole
-    // rewrite exists to avoid.
-    QStringList wtArgs = {"--", "docker.exe"};
-    wtArgs += dockerArgs;
-    if (QProcess::startDetached(QStringLiteral("wt.exe"), wtArgs))
-        return;
-
     QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
                          QStringLiteral("Could not launch a terminal.\n"
-                         "Neither docker.exe nor wt.exe could be started."));
+                         "Neither wt.exe nor conhost.exe could be started."));
 #else
     // Attach to the container and attach or start a tmux session.
     const QStringList innerCmd = {
