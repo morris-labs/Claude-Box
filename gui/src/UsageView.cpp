@@ -12,43 +12,12 @@
 
 namespace {
 
-// Rounded pill-style bar: no border, subtle track, filled chunk with
-// rounded ends. Less blocky than the previous bordered rectangle.
-QString progressBarStyle(const QString &chunkColor)
-{
-    return QStringLiteral(
-        "QProgressBar {"
-        "  border: none;"
-        "  background: %1;"
-        "  border-radius: 5px;"
-        "  text-align: center;"
-        "  color: white;"
-        "}"
-        "QProgressBar::chunk {"
-        "  background: %2;"
-        "  border-radius: 5px;"
-        "}")
-        .arg(Theme::panelBg().name(), chunkColor);
-}
-
-// Color shifts from green at low load to red at high load.
-QString barChunkColor(double fraction)
-{
-    const QColor green(45, 160, 80);
-    const QColor red(200, 80, 50);
-    QColor c = fraction <= 0.6 ? green
-               : QColor(int(green.red()   + (red.red()   - green.red())   * (fraction - 0.6) / 0.4),
-                        int(green.green() + (red.green() - green.green()) * (fraction - 0.6) / 0.4),
-                        int(green.blue()  + (red.blue()  - green.blue())  * (fraction - 0.6) / 0.4));
-    return c.name();
-}
-
 QProgressBar *makeBar(const QString &chunkColor, QWidget *parent)
 {
     auto *bar = new QProgressBar(parent);
     bar->setRange(0, 100);
     bar->setValue(0);
-    bar->setStyleSheet(progressBarStyle(chunkColor));
+    bar->setStyleSheet(Theme::progressBarStyle(chunkColor));
     bar->setFixedHeight(20);
     bar->setTextVisible(true);
     return bar;
@@ -175,7 +144,7 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
         m_totalCpuBar->setRange(0, 100 * qMax(cpuSampled, 1));
         m_totalCpuBar->setValue(cpuDisplay);
         const double frac = double(cpuDisplay) / double(100 * qMax(cpuSampled, 1));
-        const QString cpuStyle = progressBarStyle(barChunkColor(frac));
+        const QString cpuStyle = Theme::progressBarStyle(Theme::barChunkColor(frac));
         if (cpuStyle != m_lastTotalCpuStyle) {
             m_totalCpuBar->setStyleSheet(cpuStyle);
             m_lastTotalCpuStyle = cpuStyle;
@@ -191,7 +160,7 @@ void UsageView::updateTotals(const QList<BoxInfo> &boxes)
         const int memPct = int(double(totalMemUsed) / double(totalMemLimit) * 100.0 + 0.5);
         m_totalMemBar->setValue(qBound(0, memPct, 100));
         const double frac = qBound(0.0, double(totalMemUsed) / double(totalMemLimit), 1.0);
-        const QString memStyle = progressBarStyle(barChunkColor(frac));
+        const QString memStyle = Theme::progressBarStyle(Theme::barChunkColor(frac));
         if (memStyle != m_lastTotalMemStyle) {
             m_totalMemBar->setStyleSheet(memStyle);
             m_lastTotalMemStyle = memStyle;
@@ -229,7 +198,7 @@ void UsageView::updateRow(const QString &name, const BoxInfo &b)
     }
 
     if (b.cpuPct >= 0.0f) {
-        const QString cpuStyle = progressBarStyle(barChunkColor(b.cpuPct / 100.0));
+        const QString cpuStyle = Theme::progressBarStyle(Theme::barChunkColor(b.cpuPct / 100.0));
         if (cpuStyle != rw.lastCpuStyle) {
             rw.cpuBar->setStyleSheet(cpuStyle);
             rw.lastCpuStyle = cpuStyle;
@@ -244,7 +213,7 @@ void UsageView::updateRow(const QString &name, const BoxInfo &b)
     const double memFrac = b.memLimitBytes > 0
         ? qBound(0.0, double(b.memUsedBytes) / double(b.memLimitBytes), 1.0)
         : 0.0;
-    const QString memStyle = progressBarStyle(barChunkColor(memFrac));
+    const QString memStyle = Theme::progressBarStyle(Theme::barChunkColor(memFrac));
     if (memStyle != rw.lastMemStyle) {
         rw.memBar->setStyleSheet(memStyle);
         rw.lastMemStyle = memStyle;
@@ -322,7 +291,7 @@ void UsageView::rebuild(const QList<BoxInfo> &boxes)
             auto *memRow = new QHBoxLayout();
             memRow->setSpacing(8);
             memRow->addWidget(makeBarLabel(QStringLiteral("MEM"), card));
-            auto *memBar = makeBar(barChunkColor(0.0), card);
+            auto *memBar = makeBar(Theme::barChunkColor(0.0), card);
             memRow->addWidget(memBar, 1);
             cardLayout->addLayout(memRow);
 

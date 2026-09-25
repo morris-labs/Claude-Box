@@ -33,4 +33,12 @@ QColor terminalFg();
 
 void apply(QApplication &app);
 
+// Shared progress-bar helpers, used by UsageView and BoxDetailsPanel.
+// Returns a QSS string for a rounded pill-style QProgressBar in the
+// app's dark theme with the given chunk fill color.
+QString progressBarStyle(const QString &chunkColor);
+// Maps a 0..1 fraction to a chunk color: green at low load, shifting
+// to red above 60%. Matches the green used in UsageView/BoxDetailsPanel.
+QString barChunkColor(double fraction);
+
 } // namespace Theme

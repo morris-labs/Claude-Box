@@ -59,41 +59,13 @@ QString forwardLabel(const QString &value)
     return QStringLiteral("%1 %2 → %3:%4").arg(dirLabel, bindLabel, parts.at(3), parts.at(4));
 }
 
-// Rounded pill-style progress bar matching UsageView's look.
-QString statsBarStyle(const QString &chunkColor)
-{
-    return QStringLiteral(
-        "QProgressBar {"
-        "  border: none;"
-        "  background: %1;"
-        "  border-radius: 5px;"
-        "  text-align: center;"
-        "  color: white;"
-        "}"
-        "QProgressBar::chunk {"
-        "  background: %2;"
-        "  border-radius: 5px;"
-        "}")
-        .arg(Theme::panelBg().name(), chunkColor);
-}
-
-QString statsBarChunkColor(double fraction)
-{
-    const QColor green(45, 160, 80);
-    const QColor red(200, 80, 50);
-    if (fraction <= 0.6)
-        return green.name();
-    return QColor(int(green.red()   + (red.red()   - green.red())   * (fraction - 0.6) / 0.4),
-                  int(green.green() + (red.green() - green.green()) * (fraction - 0.6) / 0.4),
-                  int(green.blue()  + (red.blue()  - green.blue())  * (fraction - 0.6) / 0.4)).name();
-}
 
 QProgressBar *makeStatsBar(QWidget *parent)
 {
     auto *bar = new QProgressBar(parent);
     bar->setRange(0, 100);
     bar->setValue(0);
-    bar->setStyleSheet(statsBarStyle(QColor(45, 160, 80).name()));
+    bar->setStyleSheet(Theme::progressBarStyle(QColor(45, 160, 80).name()));
     bar->setFixedHeight(20);
     bar->setTextVisible(true);
     bar->setFormat(QStringLiteral("—"));
@@ -248,7 +220,7 @@ BoxDetailsPanel::BoxDetailsPanel(QWidget *parent)
     addStatsRow(QStringLiteral("CPU"), m_cpuBar);
 
     m_memBar = makeStatsBar(this);
-    m_memBar->setStyleSheet(statsBarStyle(QColor(80, 130, 200).name()));
+    m_memBar->setStyleSheet(Theme::progressBarStyle(QColor(80, 130, 200).name()));
     addStatsRow(QStringLiteral("MEM"), m_memBar);
 
     m_diskLabel = new QLabel(QStringLiteral("—"), this);
@@ -355,7 +327,7 @@ void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshRemote> &sshRem
     // they render as actual bars rather than just text.
     if (info->cpuPct >= 0.0f) {
         const double frac = qBound(0.0, double(info->cpuPct) / 100.0, 1.0);
-        const QString style = statsBarStyle(statsBarChunkColor(frac));
+        const QString style = Theme::progressBarStyle(Theme::barChunkColor(frac));
         if (style != m_lastCpuStyle) {
             m_cpuBar->setStyleSheet(style);
             m_lastCpuStyle = style;
@@ -369,7 +341,7 @@ void BoxDetailsPanel::setBox(const BoxInfo *info, const QList<SshRemote> &sshRem
 
     if (info->memLimitBytes > 0) {
         const double frac = qBound(0.0, double(info->memUsedBytes) / double(info->memLimitBytes), 1.0);
-        const QString style = statsBarStyle(statsBarChunkColor(frac));
+        const QString style = Theme::progressBarStyle(Theme::barChunkColor(frac));
         if (style != m_lastMemStyle) {
             m_memBar->setStyleSheet(style);
             m_lastMemStyle = style;
