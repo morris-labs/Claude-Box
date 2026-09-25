@@ -227,7 +227,8 @@ void SetupWizard::refreshChecks()
     }
     setRowStatus(m_imageRow, imageOk,
         imageOk ? "Built." : "Not built yet -- boxes can't start without it.");
-    m_buildImageButton->setEnabled(!imageOk);
+    m_buildImageButton->setText(imageOk ? "Rebuild Image" : "Build Image");
+    m_buildImageButton->setEnabled(true);
 
     // SSH client.
     const QString sshPath = QStandardPaths::findExecutable(QStringLiteral("ssh"));
