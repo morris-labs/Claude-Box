@@ -9,8 +9,7 @@ namespace {
 constexpr int ColStatus       = 0;
 constexpr int ColDirectory    = 1;
 constexpr int ColConversation = 2;
-constexpr int ColUsage        = 3;
-constexpr int ColumnCount     = 4;
+constexpr int ColumnCount     = 3;
 
 QString statusText(BoxInfo::Status s)
 {
@@ -105,15 +104,11 @@ QVariant BoxTableModel::data(const QModelIndex &index, int role) const
             return b.targetDir;
         case ColConversation:
             return b.conversationName;
-        case ColUsage:
-            return QVariant(); // painted entirely by UsageBarDelegate
         default:
             return QVariant();
         }
 
     case BoxTableModel::StatsRole:
-        if (index.column() == ColUsage)
-            return QVariant(b.cpuPct);
         return QVariant();
 
     case Qt::DecorationRole:
@@ -140,8 +135,6 @@ QVariant BoxTableModel::data(const QModelIndex &index, int role) const
     case SortRole:
         if (index.column() == ColStatus)
             return statusRank(b.status);
-        if (index.column() == ColUsage)
-            return b.cpuPct;
         return data(index, Qt::DisplayRole);
 
     default:
@@ -161,8 +154,6 @@ QVariant BoxTableModel::headerData(int section, Qt::Orientation orientation, int
         return QStringLiteral("Directory");
     case ColConversation:
         return QStringLiteral("Conversation");
-    case ColUsage:
-        return QStringLiteral("CPU %");
     default:
         return QVariant();
     }
