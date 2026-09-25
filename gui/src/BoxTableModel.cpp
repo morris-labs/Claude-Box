@@ -108,9 +108,6 @@ QVariant BoxTableModel::data(const QModelIndex &index, int role) const
             return QVariant();
         }
 
-    case BoxTableModel::StatsRole:
-        return QVariant();
-
     case Qt::DecorationRole:
         // Colored dot beside the status word: scanning a dozen rows for
         // "which of these is alive" is a color job, not a reading job.
@@ -181,10 +178,10 @@ void BoxTableModel::setBoxes(const QList<BoxInfo> &boxes)
                 const QModelIndex right = createIndex(i, ColumnCount - 1);
                 // Include SortRole: QSortFilterProxyModel only re-sorts on a
                 // dataChanged whose roles include its configured sort role, so
-                // omitting it here would silently freeze row order under a
-                // CPU%/Details sort even as the values keep changing.
+                // omitting it here would silently freeze row order while a
+                // sort column's values keep changing.
                 emit dataChanged(left, right,
-                                  {Qt::DisplayRole, Qt::ToolTipRole, StatsRole, SortRole});
+                                  {Qt::DisplayRole, Qt::ToolTipRole, SortRole});
             }
         }
         return;

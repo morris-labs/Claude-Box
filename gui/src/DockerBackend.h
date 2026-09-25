@@ -178,7 +178,7 @@ private:
     // needs neither trick -- see statsDetail().
     mutable QHash<QString, QString> m_statsCache;
     // Numeric breakdown of the same `docker stats` line, for the CLI path's
-    // usage bars -- see UsageView/UsageBarDelegate, which read BoxInfo's
+    // usage bars -- see UsageView/BoxDetailsPanel, which read BoxInfo's
     // cpuPct/memUsedBytes/memLimitBytes the same way the API path fills
     // them via statsDetail(). Unlike the API path, docker stats already
     // reports a ready-made CPU percentage, so no previous-sample delta is

@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QPalette>
+#include <QString>
 #include <QStyleFactory>
 
 namespace {
@@ -44,6 +45,34 @@ QColor Theme::stopped()     { return kStopped; }
 QColor Theme::known()       { return kKnown; }
 QColor Theme::terminalBg()  { return kTermBg; }
 QColor Theme::terminalFg()  { return kTermFg; }
+
+QString Theme::progressBarStyle(const QString &chunkColor)
+{
+    return QStringLiteral(
+        "QProgressBar {"
+        "  border: none;"
+        "  background: %1;"
+        "  border-radius: 5px;"
+        "  text-align: center;"
+        "  color: white;"
+        "}"
+        "QProgressBar::chunk {"
+        "  background: %2;"
+        "  border-radius: 5px;"
+        "}")
+        .arg(kPanelBg.name(), chunkColor);
+}
+
+QString Theme::barChunkColor(double fraction)
+{
+    const QColor green(45, 160, 80);
+    const QColor red(200, 80, 50);
+    if (fraction <= 0.6)
+        return green.name();
+    return QColor(int(green.red()   + (red.red()   - green.red())   * (fraction - 0.6) / 0.4),
+                  int(green.green() + (red.green() - green.green()) * (fraction - 0.6) / 0.4),
+                  int(green.blue()  + (red.blue()  - green.blue())  * (fraction - 0.6) / 0.4)).name();
+}
 
 void Theme::apply(QApplication &app)
 {

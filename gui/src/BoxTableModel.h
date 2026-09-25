@@ -13,9 +13,6 @@ public:
     // orders by urgency (Running, then Stopped, then Exited) instead of
     // alphabetically, which would bury running boxes under "Stopped".
     static constexpr int SortRole  = Qt::UserRole + 1;
-    // Float cpuPct (0-100, or -1 if no sample yet). Reserved for future
-    // use; the table's Usage column was moved to the Usage tab.
-    static constexpr int StatsRole = Qt::UserRole + 10;
 
     explicit BoxTableModel(QObject *parent = nullptr);
 
