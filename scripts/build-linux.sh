@@ -67,15 +67,7 @@ cmake -B "$GUI_DIR/build" "$GUI_DIR"
 info "Building"
 cmake --build "$GUI_DIR/build" --parallel "$(nproc)"
 
-# ---------------------------------------------------------------------------
-# Desktop integration (icon + .desktop entry in ~/.local/share)
-# ---------------------------------------------------------------------------
-info "Installing desktop entry"
-if cmake --build "$GUI_DIR/build" --target desktop-install 2>/dev/null; then
-    ok "Desktop entry installed (~/.local/share/applications/claude-box-gui.desktop)"
-else
-    warn "desktop-install target unavailable -- skipping"
-    warn "Run manually: cmake --build $GUI_DIR/build --target desktop-install"
-fi
-
 ok "Done: $GUI_DIR/build/claude-box-gui"
+echo ""
+echo "To register the desktop entry and dock icon, run:"
+echo "  cmake --build $GUI_DIR/build --target desktop-install"
