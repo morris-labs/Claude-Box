@@ -1750,16 +1750,6 @@ void MainWindow::onOpenExternal()
         "%1 exec -it %2 bash"
     ).arg(dockerBin, info->name);
 
-    // Honor $TERMINAL if set -- covers kitty, alacritty, and similar
-    // cross-platform terminals installed via Homebrew that accept `-e`.
-    {
-        const QString envTerm = qEnvironmentVariable("TERMINAL").trimmed();
-        if (!envTerm.isEmpty()) {
-            if (QProcess::startDetached(envTerm, {"-e", "bash", "-c", dockerCmd}))
-                return;
-        }
-    }
-
     // iTerm2 -- check common install locations before attempting the
     // AppleScript, so osascript doesn't report a "can't find application"
     // error if iTerm2 isn't installed.
@@ -1852,8 +1842,13 @@ void MainWindow::onAttachClaude()
         return;
 
 #ifdef Q_OS_WIN
+    // Wait for the tmux session to appear before attaching: the container
+    // may still be running git-config + claude startup when this action fires.
     const QStringList dockerArgs = {
-        "exec", "-it", info->name, "tmux", "attach", "-t", "main"
+        "exec", "-it", info->name,
+        "bash", "-c",
+        QStringLiteral("until tmux has-session -t main 2>/dev/null; "
+                       "do sleep 0.5; done; exec tmux attach -t main")
     };
     if (QProcess::startDetached(QStringLiteral("docker.exe"), dockerArgs))
         return;
@@ -1873,17 +1868,13 @@ void MainWindow::onAttachClaude()
          QDir::homePath() + QStringLiteral("/.docker/bin")});
     if (dockerBin.isEmpty())
         dockerBin = QStringLiteral("docker");
+    // Wait for the tmux session to appear: the container may still be running
+    // git-config + claude startup when this action fires.
     const QString dockerCmd = QStringLiteral(
-        "%1 exec -it %2 tmux attach -t main"
+        "%1 exec -it %2 bash -c "
+        "'until tmux has-session -t main 2>/dev/null; "
+        "do sleep 0.5; done; exec tmux attach -t main'"
     ).arg(dockerBin, info->name);
-
-    {
-        const QString envTerm = qEnvironmentVariable("TERMINAL").trimmed();
-        if (!envTerm.isEmpty()) {
-            if (QProcess::startDetached(envTerm, {"-e", "bash", "-c", dockerCmd}))
-                return;
-        }
-    }
 
     const QStringList iterm2Paths = {
         QStringLiteral("/Applications/iTerm.app"),
@@ -1925,9 +1916,13 @@ void MainWindow::onAttachClaude()
                          QStringLiteral("Could not open an external terminal.\n"
                          "Failed to write or open the launcher script."));
 #else
+    // Wait for the tmux session to appear before attaching.
     const QStringList innerCmd = {
         "bash", "-c",
-        QStringLiteral("docker exec -it %1 tmux attach -t main").arg(info->name)
+        QStringLiteral("docker exec -it %1 bash -c "
+                       "'until tmux has-session -t main 2>/dev/null; "
+                       "do sleep 0.5; done; exec tmux attach -t main'")
+            .arg(info->name)
     };
 
     struct Spec { QString term; bool gnomeStyle; };
