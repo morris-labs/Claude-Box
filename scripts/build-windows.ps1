@@ -179,7 +179,9 @@ Info "Creating installer"
 & $IsccExe "$GuiDir\packaging\claude-box-gui.iss"
 
 # Locate the produced installer without pinning the version number.
-$Installer = Get-ChildItem "$GuiDir\installer" -Filter "claude-box-setup-*.exe" -ErrorAction SilentlyContinue |
+# The .iss OutputDir is ..\..\installer relative to gui\packaging\, which
+# resolves to the repo root's installer\ directory.
+$Installer = Get-ChildItem "$RepoDir\installer" -Filter "claude-box-setup-*.exe" -ErrorAction SilentlyContinue |
              Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
 if ($Installer) {
     Ok "Done: $Installer"
