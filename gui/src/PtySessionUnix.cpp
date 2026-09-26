@@ -35,8 +35,15 @@ PtySession::~PtySession()
         m_masterFd = -1;
     }
     if (m_childPid > 0) {
-        int status = 0;
-        ::waitpid(m_childPid, &status, 0);
+        // SIGTERM was sent above; the master fd close also delivered SIGHUP to
+        // the slave. Give the child one non-blocking check, then SIGKILL it so
+        // waitpid returns promptly. `docker exec` cleaning up a container
+        // attachment can take arbitrarily long on SIGTERM alone, which blocks
+        // the GUI on every close when any terminal tab is open.
+        if (::waitpid(m_childPid, nullptr, WNOHANG) == 0) {
+            ::kill(m_childPid, SIGKILL);
+            ::waitpid(m_childPid, nullptr, 0);
+        }
         m_childPid = -1;
     }
     // m_notifier is a QObject child of `this`; Qt destroys it automatically.

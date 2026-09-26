@@ -52,10 +52,23 @@ static QString buildContainerCmd(const QString &gitSetup, const QStringList &cla
     // gitSetup uses $1 (the container dir, passed as the positional arg after "_").
     // claudeArgs are embedded in claudeCmd rather than passed via "$@" to
     // avoid tmux's re-shelling mangling them.
-    return gitSetup
+    //
+    // TSTART / LAUNCH_OK / RUNTIME: if the session ends within 15 seconds of
+    // the tmux session being created, append a note to $1/.claude-box.log
+    // (which is in the bind-mounted workspace and persists after --rm removes
+    // the container). This is the only trace a fast startup failure leaves,
+    // since --rm discards the container's own log on exit.
+    return QStringLiteral("TSTART=$SECONDS; ")
+         + gitSetup
          + QStringLiteral(" && tmux new-session -d -s main -- ") + claudeCmd
-         + QStringLiteral(" && while tmux has-session -t main 2>/dev/null;"
-                          " do sleep 1; done");
+         + QStringLiteral(" && LAUNCH_OK=1;"
+                          " while tmux has-session -t main 2>/dev/null; do sleep 1; done;"
+                          " RUNTIME=$((SECONDS-TSTART));"
+                          " [ \"${LAUNCH_OK:-0}\" -eq 1 ] && [ \"$RUNTIME\" -le 15 ]"
+                          " && echo \"[$(date -u '+%Y-%m-%dT%H:%M:%SZ')]"
+                          " claude-box: session ended after ${RUNTIME}s --"
+                          " check API key and model settings\" >> \"$1/.claude-box.log\";"
+                          " true");
 }
 
 // Mirrors the old claude-box.bash box-name sanitizer:
