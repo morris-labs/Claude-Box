@@ -1800,8 +1800,13 @@ void MainWindow::onOpenExternalClaude()
                 return;
             }
             if (QProcess::startDetached(QStringLiteral("open"),
-                    {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath}))
+                    {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath})) {
+                // Terminal.app reads the script before exec-ing it; remove
+                // after a short delay so the file is gone once it is no longer
+                // needed rather than accumulating across invocations.
+                QTimer::singleShot(8000, [tmpPath] { QFile::remove(tmpPath); });
                 return;
+            }
         }
     }
 
@@ -1934,8 +1939,10 @@ void MainWindow::onOpenExternal()
                 return;
             }
             if (QProcess::startDetached(QStringLiteral("open"),
-                    {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath}))
+                    {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath})) {
+                QTimer::singleShot(8000, [tmpPath] { QFile::remove(tmpPath); });
                 return;
+            }
         }
     }
 
