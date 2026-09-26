@@ -5,7 +5,7 @@
 # Run:   ./build/claude-box-gui
 
 cmake_minimum_required(VERSION 3.16)
-project(claude-box-gui VERSION 2.2.0 LANGUAGES CXX)
+project(claude-box-gui VERSION 3.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
