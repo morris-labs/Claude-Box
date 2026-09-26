@@ -81,7 +81,9 @@ ARCH="$(uname -m)"
 mkdir -p "$TOOLS_DIR"
 
 download_tool() {
-    local name="$1" url="$2" dest="$TOOLS_DIR/$name"
+    local name="$1"
+    local url="$2"
+    local dest="$TOOLS_DIR/$name"
     if [[ ! -x "$dest" ]]; then
         info "Downloading $name"
         curl -fL --progress-bar -o "$dest" "$url"
