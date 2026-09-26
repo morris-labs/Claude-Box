@@ -184,6 +184,59 @@ add_custom_target(desktop-install
     VERBATIM
 )
 
+# --- Linux packaging (AppImage / .deb / .rpm) ----------------------------
+#
+# install() rules are consumed by CPack (run `cpack -G DEB` or `cpack -G RPM`
+# in the build directory after a normal cmake --build) and by linuxdeploy when
+# building an AppImage (the build script points --appdir at a staging tree it
+# populates using cmake --install).
+#
+# The desktop file installed into packages uses Exec=claude-box-gui (plain
+# binary name) rather than the absolute build-tree path the desktop-install
+# target writes into the per-user XDG location.
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/claude-box-gui-packaged.desktop"
+"[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Claude Box
+GenericName=Claude Code Sandbox Manager
+Comment=Manage sandboxed Claude Code containers and their embedded terminals
+Exec=claude-box-gui
+Icon=claude-box
+Terminal=false
+Categories=Development;
+Keywords=claude;code;docker;container;sandbox;agent;terminal;
+StartupNotify=false
+StartupWMClass=claude-box-gui
+")
+
+install(TARGETS claude-box-gui RUNTIME DESTINATION bin)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/claude-box-gui-packaged.desktop"
+    DESTINATION share/applications
+    RENAME "claude-box-gui.desktop"
+    PERMISSIONS
+        OWNER_READ OWNER_WRITE OWNER_EXECUTE
+        GROUP_READ GROUP_EXECUTE
+        WORLD_READ WORLD_EXECUTE
+)
+install(FILES "${CLAUDE_BOX_ICON_SOURCE}"
+    DESTINATION share/icons/hicolor/scalable/apps
+    RENAME "${CLAUDE_BOX_ICON}.svg"
+)
+
+set(CPACK_PACKAGE_NAME             "claude-box")
+set(CPACK_PACKAGE_VERSION          "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_CONTACT          "Claude Box contributors")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Manage sandboxed Claude Code containers and their embedded terminals")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS
+    "libqt6widgets6 | libqt6widgets6t64, libvterm0")
+set(CPACK_DEBIAN_PACKAGE_SECTION   "devel")
+set(CPACK_RPM_PACKAGE_REQUIRES     "qt6-qtbase, libvterm")
+set(CPACK_RPM_PACKAGE_GROUP        "Development/Tools")
+include(CPack)
+
 endif() # UNIX AND NOT APPLE
 
 # --- macOS .app bundle ---------------------------------------------------
