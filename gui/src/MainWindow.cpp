@@ -1720,7 +1720,7 @@ void MainWindow::onOpenExternalClaude()
         QStringLiteral("count=0; "
             "until tmux has-session -t main 2>/dev/null; do "
               "sleep 0.5; count=$((count+1)); "
-              "[ \"$count\" -ge 60 ] && exit 1; "
+              "[ $count -ge 60 ] && exit 1; "
             "done; "
             "exec tmux attach -t main")
     };
@@ -1745,12 +1745,16 @@ void MainWindow::onOpenExternalClaude()
         + QString(dockerBin).replace(QLatin1Char('\''), QStringLiteral("'\\''"))
         + QLatin1Char('\'');
     // Wait for the tmux session before attaching; 60 * 0.5 s = 30-second timeout.
+    // count is always an integer the script itself produced, so no quoting needed.
+    // Unquoted $count also keeps this string free of double-quote characters,
+    // which is required for safe interpolation into the AppleScript
+    // `write text "%1"` string used by the iTerm2 path below.
     const QString dockerCmd = QStringLiteral(
         "%1 exec -it %2 bash -c "
         "'count=0; "
         "until tmux has-session -t main 2>/dev/null; do "
           "sleep 0.5; count=$((count+1)); "
-          "[ \"$count\" -ge 60 ] && exit 1; "
+          "[ $count -ge 60 ] && exit 1; "
         "done; "
         "exec tmux attach -t main'"
     ).arg(quotedDockerBin, info->name);
@@ -1812,7 +1816,7 @@ void MainWindow::onOpenExternalClaude()
                        "'count=0; "
                        "until tmux has-session -t main 2>/dev/null; do "
                          "sleep 0.5; count=$((count+1)); "
-                         "[ \"$count\" -ge 60 ] && exit 1; "
+                         "[ $count -ge 60 ] && exit 1; "
                        "done; "
                        "exec tmux attach -t main'")
             .arg(info->name)
