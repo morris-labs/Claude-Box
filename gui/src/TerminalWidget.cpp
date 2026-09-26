@@ -135,16 +135,22 @@ bool TerminalWidget::attachToContainer(const QString &containerName)
     // tmux session exists (git-config + claude startup takes a moment).
     // 60 iterations * 0.5 s = 30-second timeout; exits 1 if tmux never
     // appears, which shows "Session ended (exit 1)" in the tab.
+    // --detach-keys: docker's default Ctrl+P Ctrl+Q chord is still active
+    // on `docker exec` and causes the same buffering problem as on
+    // `docker attach` -- Ctrl+P arrives late or triggers a detach instead
+    // of reaching the app. Move it onto a chord nothing in here types.
+    // -d: detach any stale prior client so window geometry stays correct.
     return m_pty->start(QStringLiteral("docker"),
                         {QStringLiteral("exec"), QStringLiteral("-it"),
+                         QStringLiteral("--detach-keys=ctrl-],ctrl-]"),
                          containerName,
                          QStringLiteral("bash"), QStringLiteral("-c"),
                          QStringLiteral("count=0; "
                              "until tmux has-session -t main 2>/dev/null; do "
                                "sleep 0.5; count=$((count+1)); "
-                               "[ \"$count\" -ge 60 ] && exit 1; "
+                               "[ $count -ge 60 ] && exit 1; "
                              "done; "
-                             "exec tmux attach -t main")});
+                             "exec tmux attach -d -t main")});
 }
 
 bool TerminalWidget::attachToCommand(const QString &program, const QStringList &args,
