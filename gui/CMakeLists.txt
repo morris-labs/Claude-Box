@@ -5,7 +5,7 @@
 # Run:   ./build/claude-box-gui
 
 cmake_minimum_required(VERSION 3.16)
-project(claude-box-gui VERSION 3.1.0 LANGUAGES CXX)
+project(claude-box-gui VERSION 3.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,6 +84,10 @@ add_executable(claude-box-gui WIN32
     src/ManageSshRemotesDialog.h
     src/SetupWizard.cpp
     src/SetupWizard.h
+    src/PromptTemplates.cpp
+    src/PromptTemplates.h
+    src/PromptsDialog.cpp
+    src/PromptsDialog.h
     src/CommandTerminalDialog.cpp
     src/CommandTerminalDialog.h
     src/CollapsibleSection.cpp
@@ -96,6 +100,10 @@ add_executable(claude-box-gui WIN32
     src/Theme.h
     src/Icons.cpp
     src/Icons.h
+    src/UpdateChecker.cpp
+    src/UpdateChecker.h
+    src/UpdateBar.cpp
+    src/UpdateBar.h
 )
 
 # --- desktop entry -------------------------------------------------------
