@@ -57,7 +57,11 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
     // fork() and exec() in a process that may have Qt/other background
     // threads -- QString/QByteArray allocation is not guaranteed safe
     // there, so none of it happens after forkpty() below.
-    const QByteArray progBytes = program.toLocal8Bit();
+    //
+    // progBytes is non-const so the macOS path-resolution block below can
+    // update it. argv[0] is set after that block so it never holds a
+    // pointer into a freed QByteArray.
+    QByteArray progBytes = program.toLocal8Bit();
     std::vector<QByteArray> argBytesStorage;
     argBytesStorage.reserve(static_cast<size_t>(args.size()));
     for (const QString &a : args)
@@ -65,7 +69,7 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
 
     std::vector<char *> argv;
     argv.reserve(argBytesStorage.size() + 2);
-    argv.push_back(const_cast<char *>(progBytes.constData()));
+    argv.push_back(nullptr); // argv[0]: set after macOS path resolution below
     for (auto &b : argBytesStorage)
         argv.push_back(b.data());
     argv.push_back(nullptr);
@@ -88,16 +92,17 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
         const char *home = ::getenv("HOME");
         const char *cur  = ::getenv("PATH");
 
-        char extra[512];
-        if (home && *home)
-            ::snprintf(extra, sizeof(extra),
-                "/usr/local/bin:/opt/homebrew/bin"
-                ":/Applications/Docker.app/Contents/Resources/bin"
-                ":%s/.docker/bin", home);
-        else
-            ::snprintf(extra, sizeof(extra),
-                "/usr/local/bin:/opt/homebrew/bin"
-                ":/Applications/Docker.app/Contents/Resources/bin");
+        // Build the extra-dirs prefix using QByteArray so long HOME values
+        // are not silently truncated (a fixed-size snprintf buffer would do
+        // that without any indication).
+        QByteArray extra =
+            "/usr/local/bin:/opt/homebrew/bin"
+            ":/Applications/Docker.app/Contents/Resources/bin";
+        if (home && *home) {
+            extra += ':';
+            extra += home;
+            extra += "/.docker/bin";
+        }
 
         QByteArray newPath = "PATH=";
         newPath += extra;
@@ -138,11 +143,17 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
         QString found = QStandardPaths::findExecutable(program, extraDirs);
         if (found.isEmpty())
             found = QStandardPaths::findExecutable(program);
-        if (!found.isEmpty()) {
+        if (!found.isEmpty())
             progBytes = found.toLocal8Bit();
-            argv[0] = const_cast<char *>(progBytes.constData());
-        }
+        // If still not found, execve will return ENOENT and the child exits
+        // 127 -- the terminal widget shows "Session ended (exit 127)".
     }
+    // Set argv[0] here, after progBytes has its final value. Setting it
+    // earlier and then reassigning progBytes would leave argv[0] dangling.
+    argv[0] = const_cast<char *>(progBytes.constData());
+#else
+    // Non-Apple: set argv[0] now (no path resolution needed here).
+    argv[0] = const_cast<char *>(progBytes.constData());
 #endif
 
     int master = -1;

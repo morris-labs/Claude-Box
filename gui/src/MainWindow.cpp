@@ -1711,23 +1711,24 @@ void MainWindow::onOpenExternalClaude()
         return;
 
 #ifdef Q_OS_WIN
-    // Wait for the tmux session to appear before attaching: the container
-    // may still be running git-config + claude startup when this action fires.
+    // Route through wt.exe/conhost.exe -- direct docker.exe is NOT used because
+    // a GUI app has no console and docker's -it attach fails silently without one.
+    // See the launchInWindowsTerminal() comment above.
     const QStringList dockerArgs = {
         "exec", "-it", info->name,
         "bash", "-c",
-        QStringLiteral("until tmux has-session -t main 2>/dev/null; "
-                       "do sleep 0.5; done; exec tmux attach -t main")
+        QStringLiteral("count=0; "
+            "until tmux has-session -t main 2>/dev/null; do "
+              "sleep 0.5; count=$((count+1)); "
+              "[ \"$count\" -ge 60 ] && exit 1; "
+            "done; "
+            "exec tmux attach -t main")
     };
-    if (QProcess::startDetached(QStringLiteral("docker.exe"), dockerArgs))
-        return;
-    QStringList wtArgs = {"--", "docker.exe"};
-    wtArgs += dockerArgs;
-    if (QProcess::startDetached(QStringLiteral("wt.exe"), wtArgs))
+    if (launchInWindowsTerminal(dockerArgs))
         return;
     QMessageBox::warning(this, QStringLiteral("Attach to Claude Session"),
                          QStringLiteral("Could not launch a terminal.\n"
-                         "Neither docker.exe nor wt.exe could be started."));
+                         "Neither wt.exe nor conhost.exe could be started."));
 #elif defined(Q_OS_DARWIN)
     QString dockerBin = QStandardPaths::findExecutable(
         QStringLiteral("docker"),
@@ -1737,13 +1738,22 @@ void MainWindow::onOpenExternalClaude()
          QDir::homePath() + QStringLiteral("/.docker/bin")});
     if (dockerBin.isEmpty())
         dockerBin = QStringLiteral("docker");
-    // Wait for the tmux session to appear: the container may still be running
-    // git-config + claude startup when this action fires.
+    // Shell-quote the binary path so spaces in the path (e.g. a home
+    // directory path containing a space) do not break the shell script or
+    // the AppleScript write-text command.
+    const QString quotedDockerBin = QLatin1Char('\'')
+        + QString(dockerBin).replace(QLatin1Char('\''), QStringLiteral("'\\''"))
+        + QLatin1Char('\'');
+    // Wait for the tmux session before attaching; 60 * 0.5 s = 30-second timeout.
     const QString dockerCmd = QStringLiteral(
         "%1 exec -it %2 bash -c "
-        "'until tmux has-session -t main 2>/dev/null; "
-        "do sleep 0.5; done; exec tmux attach -t main'"
-    ).arg(dockerBin, info->name);
+        "'count=0; "
+        "until tmux has-session -t main 2>/dev/null; do "
+          "sleep 0.5; count=$((count+1)); "
+          "[ \"$count\" -ge 60 ] && exit 1; "
+        "done; "
+        "exec tmux attach -t main'"
+    ).arg(quotedDockerBin, info->name);
 
     const QStringList iterm2Paths = {
         QStringLiteral("/Applications/iTerm.app"),
@@ -1765,16 +1775,26 @@ void MainWindow::onOpenExternalClaude()
     }
 
     {
+        // Unique filename per container avoids a race where two rapid
+        // invocations for different containers overwrite the same script
+        // before Terminal.app has read the first one.
         const QString tmpPath = QDir::tempPath()
-            + QStringLiteral("/claude-box-attach.sh");
+            + QStringLiteral("/claude-box-attach-%1.sh").arg(info->name);
         QFile f(tmpPath);
         if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream s(&f);
-            s << "#!/bin/sh\nexec " << dockerCmd << "\n";
+            // Do not use `exec`: if docker exits immediately (container just
+            // stopped, daemon unreachable) `exec` replaces sh as the sole
+            // process, so the window closes before the user reads the error.
+            s << "#!/bin/sh\n" << dockerCmd << "\necho 'Session ended.'; read -r _\n";
             f.close();
-            f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
-                           | QFile::ReadGroup  | QFile::ExeGroup
-                           | QFile::ReadOther  | QFile::ExeOther);
+            if (!f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+                                | QFile::ReadGroup  | QFile::ExeGroup
+                                | QFile::ReadOther  | QFile::ExeOther)) {
+                QMessageBox::warning(this, QStringLiteral("Attach to Claude Session"),
+                                     QStringLiteral("Could not mark launcher script executable."));
+                return;
+            }
             if (QProcess::startDetached(QStringLiteral("open"),
                     {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath}))
                 return;
@@ -1785,12 +1805,16 @@ void MainWindow::onOpenExternalClaude()
                          QStringLiteral("Could not open an external terminal.\n"
                          "Failed to write or open the launcher script."));
 #else
-    // Wait for the tmux session to appear before attaching.
+    // Wait for the tmux session to appear before attaching; 60 * 0.5 s = 30-second timeout.
     const QStringList innerCmd = {
         "bash", "-c",
         QStringLiteral("docker exec -it %1 bash -c "
-                       "'until tmux has-session -t main 2>/dev/null; "
-                       "do sleep 0.5; done; exec tmux attach -t main'")
+                       "'count=0; "
+                       "until tmux has-session -t main 2>/dev/null; do "
+                         "sleep 0.5; count=$((count+1)); "
+                         "[ \"$count\" -ge 60 ] && exit 1; "
+                       "done; "
+                       "exec tmux attach -t main'")
             .arg(info->name)
     };
 
@@ -1852,15 +1876,17 @@ void MainWindow::onOpenExternal()
          QDir::homePath() + QStringLiteral("/.docker/bin")});
     if (dockerBin.isEmpty())
         dockerBin = QStringLiteral("docker"); // fallback: let the shell find it
-    const QString dockerCmd = QStringLiteral(
-        "%1 exec -it %2 bash"
-    ).arg(dockerBin, info->name);
+    // Shell-quote the binary path so spaces in the path do not break the
+    // shell script or the AppleScript write-text command.
+    const QString quotedDockerBin = QLatin1Char('\'')
+        + QString(dockerBin).replace(QLatin1Char('\''), QStringLiteral("'\\''"))
+        + QLatin1Char('\'');
+    const QString dockerCmd = QStringLiteral("%1 exec -it %2 bash")
+        .arg(quotedDockerBin, info->name);
 
     // iTerm2 -- check common install locations before attempting the
     // AppleScript, so osascript doesn't report a "can't find application"
     // error if iTerm2 isn't installed.
-    // dockerCmd contains only single quotes so it embeds safely inside
-    // the AppleScript double-quoted string without further escaping.
     const QStringList iterm2Paths = {
         QStringLiteral("/Applications/iTerm.app"),
         QDir::homePath() + QStringLiteral("/Applications/iTerm.app"),
@@ -1880,23 +1906,29 @@ void MainWindow::onOpenExternal()
         }
     }
 
-    // Terminal.app: write the command to a fixed temp script and open it.
+    // Terminal.app: write the command to a per-container temp script and open it.
     // `open -a Terminal script.sh` always opens in a new window. AppleScript's
-    // `do script "cmd"` is unreliable — without an explicit target it injects
-    // into the frontmost existing tab regardless of the two-step new-tab trick,
-    // which just confused the user's own shell history.
-    // Fixed name means no temp-file accumulation: each open overwrites the last.
+    // `do script "cmd"` is unreliable -- without an explicit target it injects
+    // into the frontmost existing tab regardless of the two-step new-tab trick.
+    // Per-container name avoids a race where two rapid invocations overwrite
+    // the same script before Terminal.app has read the first one.
     {
         const QString tmpPath = QDir::tempPath()
-            + QStringLiteral("/claude-box-open.sh");
+            + QStringLiteral("/claude-box-open-%1.sh").arg(info->name);
         QFile f(tmpPath);
         if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream s(&f);
-            s << "#!/bin/sh\nexec " << dockerCmd << "\n";
+            // Do not use `exec`: if docker exits immediately the terminal
+            // window would close before the user can read the error message.
+            s << "#!/bin/sh\n" << dockerCmd << "\necho 'Session ended.'; read -r _\n";
             f.close();
-            f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
-                           | QFile::ReadGroup  | QFile::ExeGroup
-                           | QFile::ReadOther  | QFile::ExeOther);
+            if (!f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+                                | QFile::ReadGroup  | QFile::ExeGroup
+                                | QFile::ReadOther  | QFile::ExeOther)) {
+                QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
+                                     QStringLiteral("Could not mark launcher script executable."));
+                return;
+            }
             if (QProcess::startDetached(QStringLiteral("open"),
                     {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath}))
                 return;

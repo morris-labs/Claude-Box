@@ -20,6 +20,44 @@
 
 namespace {
 
+// Shell-quote a single token for embedding in a bash -c string.
+// Uses single-quoting, which is safe for any byte value (handles
+// spaces, special chars, unicode). The only character that must be
+// escaped inside single quotes is a single quote itself.
+static QString shellQuote(const QString &s)
+{
+    return QLatin1Char('\'')
+         + QString(s).replace(QLatin1Char('\''), QStringLiteral("'\\''"))
+         + QLatin1Char('\'');
+}
+
+// Build the tmux container entrypoint command. claudeArgs are shell-quoted
+// and embedded inline so tmux's re-shelling (it joins tokens after -- and
+// runs $SHELL -c on the result) cannot word-split multi-word arguments.
+//
+// The keeper-loop pattern makes bash the container's PID 1 rather than the
+// tmux client. Ctrl+B D in any attached terminal detaches that client
+// (exits the docker-exec session) without killing PID 1, so the container
+// stays alive. The loop exits when claude's tmux session ends (tmux's
+// exit-empty is on by default), which is the normal shutdown path.
+static QString buildContainerCmd(const QString &gitSetup, const QStringList &claudeArgs)
+{
+    QStringList quotedParts;
+    quotedParts.reserve(claudeArgs.size() + 1);
+    quotedParts << QStringLiteral("claude");
+    for (const QString &a : claudeArgs)
+        quotedParts << shellQuote(a);
+    const QString claudeCmd = quotedParts.join(QLatin1Char(' '));
+
+    // gitSetup uses $1 (the container dir, passed as the positional arg after "_").
+    // claudeArgs are embedded in claudeCmd rather than passed via "$@" to
+    // avoid tmux's re-shelling mangling them.
+    return gitSetup
+         + QStringLiteral(" && tmux new-session -d -s main -- ") + claudeCmd
+         + QStringLiteral(" && while tmux has-session -t main 2>/dev/null;"
+                          " do sleep 1; done");
+}
+
 // Mirrors the old claude-box.bash box-name sanitizer:
 //   tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_.-' '-'
 // ASCII-only on purpose, to match tr's behavior exactly rather than
@@ -586,10 +624,8 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
         spec.binds << (hostAbs + ":" + containerPath);
     }
 
-    spec.cmd << "bash" << "-c"
-             << (gitSetup + " && shift && exec tmux new-session -s main -- claude \"$@\"")
+    spec.cmd << "bash" << "-c" << buildContainerCmd(gitSetup, claudeArgs)
              << "_" << containerDir;
-    spec.cmd += claudeArgs;
     return spec;
 }
 
@@ -646,9 +682,8 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
     }
 
     args << "claude-code" << "bash" << "-c"
-         << (gitSetup + " && shift && exec tmux new-session -s main -- claude \"$@\"")
+         << buildContainerCmd(gitSetup, claudeArgs)
          << "_" << containerDir;
-    args += claudeArgs;
 
     return runDocker(args, nullptr, errorOut, 30000);
 }
