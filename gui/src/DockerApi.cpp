@@ -225,25 +225,3 @@ bool DockerApi::del(const QString &path, QString *errorOut, int timeoutMs)
     return true;
 }
 
-QString DockerApi::imageLabel(const QString &image, const QString &label,
-                              QString *errorOut)
-{
-    const QString path = QStringLiteral("/%1/images/%2/json")
-                             .arg(QLatin1String(kApiVersion), image);
-    QString err;
-    const QJsonDocument doc = get(path, &err);
-    if (!err.isEmpty()) {
-        if (errorOut)
-            *errorOut = err;
-        return {};
-    }
-    if (!doc.isObject())
-        return {};
-
-    const QJsonObject labels =
-        doc.object()
-           .value(QStringLiteral("Config")).toObject()
-           .value(QStringLiteral("Labels")).toObject();
-
-    return labels.value(label).toString();
-}
