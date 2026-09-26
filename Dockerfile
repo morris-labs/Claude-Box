@@ -54,7 +54,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code && \
+    npm list -g --depth=0 --json @anthropic-ai/claude-code \
+    | python3 -c "import sys,json; \
+        deps=json.load(sys.stdin).get('dependencies',{}); \
+        print(list(deps.values())[0]['version'] if deps else 'unknown')" \
+    > /etc/claude-code-version
 
 USER ${USER_NAME}
 

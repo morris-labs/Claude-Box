@@ -109,6 +109,19 @@ public:
 
     bool isRunning(const QString &name) const;
 
+    // Returns the @anthropic-ai/claude-code version baked into the
+    // claude-code image (written to /etc/claude-code-version at build time),
+    // or an empty string if the file is absent (a pre-label image), docker
+    // is unavailable, or the image does not exist.
+    // An empty string means "unknown / treat as out of date".
+    // Result is cached 24 hours; call invalidateClaudeCodeVersionCache()
+    // after rebuilding the image so the next read reflects the new build.
+    QString claudeCodeImageVersion() const;
+
+    // Clears the 24-hour cached claude-code version so the next call to
+    // claudeCodeImageVersion() re-reads from the freshly built image.
+    static void invalidateClaudeCodeVersionCache();
+
     // Creates a box. `rec` must have targetDir/conversationName/
     // skipPermissions/model/effort/ports/dirs set; on success this fills in rec.name, saves the
     // record, and starts the container detached

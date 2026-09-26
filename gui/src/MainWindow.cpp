@@ -4,6 +4,7 @@
 
 #include "BoxDetailsPanel.h"
 #include "BoxRecord.h"
+#include "ClaudeCodeUpdateChecker.h"
 #include "Icons.h"
 #include "ConversationCatalog.h"
 #include "ManageSshRemotesDialog.h"
@@ -122,13 +123,30 @@ MainWindow::MainWindow(QWidget *parent)
     if (!SetupWizard::hasCompletedSetup())
         QTimer::singleShot(0, this, &MainWindow::onSetupWizard);
 
-    // Delay the update check a few seconds so the main window fully renders
-    // and the first box-list poll completes before the network request fires.
+    // Delay update checks a few seconds so the main window fully renders
+    // and the first box-list poll completes before any network request fires.
     m_nam = new QNetworkAccessManager(this);
+
     m_updateChecker = new UpdateChecker(m_nam, this);
     connect(m_updateChecker, &UpdateChecker::updateAvailable,
             m_updateBar, &UpdateBar::notify);
     QTimer::singleShot(3000, m_updateChecker, &UpdateChecker::checkInBackground);
+
+    m_claudeCodeChecker = new ClaudeCodeUpdateChecker(&m_docker, m_nam, this);
+    connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::updateAvailable,
+            this, [this](const QString &installed, const QString &latest) {
+        const QString message = installed.isEmpty()
+            ? QStringLiteral(
+                "Claude Code %1 is available. The claude-code image needs a rebuild.").arg(latest)
+            : QStringLiteral(
+                "Claude Code %1 is available (image has %2).").arg(latest, installed);
+        m_updateBar->notifyWithAction(message, QStringLiteral("Rebuild image"),
+                                     [this] { onSetupWizard(); });
+    });
+    connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::upToDate,
+            m_updateBar, &UpdateBar::hide);
+    QTimer::singleShot(4000, m_claudeCodeChecker,
+                       &ClaudeCodeUpdateChecker::checkInBackground);
 }
 
 // --- construction -------------------------------------------------------
@@ -388,7 +406,7 @@ void MainWindow::buildUi()
     m_outerSplitter->setSizes({440, 360});
 
     // The update bar sits above the splitter. It's hidden by default and
-    // only made visible when UpdateChecker signals an available release.
+    // only made visible when an update checker signals an available release.
     m_updateBar = new UpdateBar(this);
     auto *centralContainer = new QWidget(this);
     auto *centralLayout = new QVBoxLayout(centralContainer);
@@ -472,6 +490,8 @@ void MainWindow::buildMenus()
 
     QMenu *helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
     helpMenu->addAction(QStringLiteral("&Check for Updates"), this, &MainWindow::onCheckForUpdates);
+    helpMenu->addAction(QStringLiteral("Check for &Claude Code Update"), this,
+                        &MainWindow::onCheckClaudeCodeUpdate);
     helpMenu->addSeparator();
     helpMenu->addAction(QStringLiteral("&About claude-box"), this, &MainWindow::onAbout);
 }
@@ -2176,6 +2196,19 @@ void MainWindow::onCheckForUpdates()
         }, Qt::SingleShotConnection));
 
     m_updateChecker->checkNow();
+}
+
+void MainWindow::onCheckClaudeCodeUpdate()
+{
+    connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::upToDate, this, [this] {
+        statusBar()->showMessage(QStringLiteral("Claude Code is up to date."), 4000);
+    }, Qt::SingleShotConnection);
+    connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::checkFailed, this,
+            [this](const QString &reason) {
+        statusBar()->showMessage(
+            QStringLiteral("Claude Code update check failed: %1").arg(reason), 5000);
+    }, Qt::SingleShotConnection);
+    m_claudeCodeChecker->checkNow();
 }
 
 // --- settings -----------------------------------------------------------

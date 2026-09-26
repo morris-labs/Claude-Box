@@ -313,6 +313,9 @@ void SetupWizard::buildDockerImage()
                                           this);
     dlg->exec();
     dlg->deleteLater();
+    // A freshly built image has a new claude-code version; clear the cache so
+    // ClaudeCodeUpdateChecker picks up the actual new version on its next run.
+    DockerBackend::invalidateClaudeCodeVersionCache();
     refreshChecks();
 }
 
