@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QFuture>
 #include <QObject>
 #include <QString>
 
@@ -30,6 +31,10 @@ public:
     // Checks unconditionally. Emits upToDate() if the image is current.
     void checkNow();
 
+    // Blocks until any in-flight docker thread-pool job finishes. Call
+    // from MainWindow::~MainWindow() before m_docker is destroyed.
+    void cancelAndWait();
+
 signals:
     // `installed` may be empty when the image has no version file.
     void updateAvailable(const QString &installed, const QString &latest);
@@ -38,7 +43,10 @@ signals:
 
 private:
     void doCheck(bool emitUpToDate);
+    void proceedWithNpmCheck(const QString &installed, bool emitUpToDate);
 
     const DockerBackend *m_docker;
     QNetworkAccessManager *m_nam;
+    QFuture<QString> m_pendingFuture;
+    bool m_checkInProgress = false;
 };

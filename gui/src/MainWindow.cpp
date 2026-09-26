@@ -89,6 +89,16 @@ const QString kDetailsKey     = QStringLiteral("ui/detailsVisible");
 const QString kTableHeaderKey = QStringLiteral("ui/tableHeader");
 }
 
+MainWindow::~MainWindow()
+{
+    // m_docker is a value member of MainWindow, destroyed after this destructor
+    // body. Any in-flight thread-pool job in m_claudeCodeChecker holds a raw
+    // pointer to m_docker; block here until that job finishes so the pointer
+    // is never accessed after m_docker's destructor runs.
+    if (m_claudeCodeChecker)
+        m_claudeCodeChecker->cancelAndWait();
+}
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
@@ -2139,6 +2149,11 @@ void MainWindow::onSetupWizard()
 {
     SetupWizard dlg(this);
     dlg.exec();
+    // If the wizard rebuilt the image, the version cache was invalidated by
+    // SetupWizard; re-check now so the update bar reflects the new state
+    // immediately rather than waiting for the next 24-hour cooldown cycle.
+    if (m_claudeCodeChecker)
+        m_claudeCodeChecker->checkNow();
 }
 
 void MainWindow::onManageSshRemotes()

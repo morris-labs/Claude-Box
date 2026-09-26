@@ -5,7 +5,6 @@
 #include "PromptTemplates.h"
 
 #include <QCoreApplication>
-#include <QDateTime>
 #include <QSettings>
 #include <QDir>
 #include <QEventLoop>
@@ -562,19 +561,14 @@ bool DockerBackend::isRunning(const QString &name) const
 
 QString DockerBackend::claudeCodeImageVersion() const
 {
-    // Cached so the one-shot container launch (docker run --rm) only happens
-    // once per 24 hours. The cache is invalidated when the image is rebuilt
-    // (SetupWizard calls invalidateClaudeCodeVersionCache() after a build).
-    QSettings s;
-    const qint64 cachedAt = s.value(QStringLiteral("claudeCode/versionCachedAt"), 0LL).toLongLong();
-    const qint64 now = QDateTime::currentSecsSinceEpoch();
-    constexpr qint64 kTtl = 24 * 60 * 60;
-    if (now - cachedAt < kTtl)
-        return s.value(QStringLiteral("claudeCode/version")).toString();
-
-    // Read the version file written into the image at build time. An image
-    // built before this file existed returns a non-zero exit, which leaves
-    // out empty -- the caller treats that as "unknown / out of date".
+    // Reads the version file written into the image at build time. An image
+    // built before this file existed returns a non-zero exit code, leaving
+    // the output empty -- the caller treats that as "unknown / out of date".
+    //
+    // This method is intentionally free of QSettings: it runs on a thread-
+    // pool thread (called from ClaudeCodeUpdateChecker), and QSettings is not
+    // thread-safe. The caller caches the result and writes to QSettings on the
+    // GUI thread.
     QString out, err;
     const bool ok = runDocker(
         {QStringLiteral("run"), QStringLiteral("--rm"),
@@ -582,11 +576,7 @@ QString DockerBackend::claudeCodeImageVersion() const
          QStringLiteral("claude-code"),
          QStringLiteral("cat"), QStringLiteral("/etc/claude-code-version")},
         &out, &err, 15000);
-
-    const QString version = ok ? out.trimmed() : QString();
-    s.setValue(QStringLiteral("claudeCode/version"), version);
-    s.setValue(QStringLiteral("claudeCode/versionCachedAt"), now);
-    return version;
+    return ok ? out.trimmed() : QString();
 }
 
 void DockerBackend::invalidateClaudeCodeVersionCache()
