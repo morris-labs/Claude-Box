@@ -24,7 +24,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 info "Checking Xcode command-line tools"
 if ! xcode-select -p >/dev/null 2>&1; then
     info "Installing Xcode command-line tools (follow the popup)"
-    xcode-select --install
+    xcode-select --install || true
     echo "Re-run this script once the Xcode tools installation completes."
     exit 0
 fi
@@ -83,7 +83,7 @@ find_qt_prefix() {
             for sub in macos clang_64; do
                 [[ -x "$ver_dir/$sub/bin/qmake" ]] && echo "$ver_dir/$sub" && return 0
             done
-        done < <(find "$root" -maxdepth 1 -name "[0-9]*.[0-9]*.[0-9]*" -type d 2>/dev/null | sort -Vr)
+        done < <(find "$root" -maxdepth 1 -name "[0-9]*.[0-9]*.[0-9]*" -type d 2>/dev/null | sort -t. -k1,1rn -k2,2rn -k3,3rn)
     done
     return 1
 }
@@ -114,9 +114,11 @@ ok "libvterm pkgconfig at $VTERM_PC"
 # Build
 # ---------------------------------------------------------------------------
 info "Configuring"
+# PKG_CONFIG_PATH must be an environment variable, not a CMake -D flag, for
+# cmake's pkg_check_modules() to honour it when locating libvterm.
+PKG_CONFIG_PATH="$VTERM_PC${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
 cmake -B "$GUI_DIR/build" "$GUI_DIR" \
-    -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
-    -DPKG_CONFIG_PATH="$VTERM_PC"
+    -DCMAKE_PREFIX_PATH="$QT_PREFIX"
 
 info "Building"
 cmake --build "$GUI_DIR/build" --parallel "$(sysctl -n hw.logicalcpu)"
@@ -138,7 +140,7 @@ info "Creating DMG"
 cmake --build "$GUI_DIR/build" --target dmg
 
 # Locate the DMG by glob so the name doesn't have to be hardcoded here.
-DMG="$(find "$GUI_DIR/build" -maxdepth 1 -name "*.dmg" | sort -Vr | head -1)"
+DMG="$(find "$GUI_DIR/build" -maxdepth 1 -name "*.dmg" | sort -r | head -1)"
 if [[ -f "$DMG" ]]; then
     ok "Done: $DMG"
 else

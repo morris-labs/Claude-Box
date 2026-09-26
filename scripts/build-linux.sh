@@ -31,7 +31,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 if have apt-get; then
     PKG_MANAGER=apt
     BUILD_PKGS=(cmake build-essential pkg-config qt6-base-dev libvterm-dev)
-    installed() { dpkg -s "$1" >/dev/null 2>&1; }
+    installed() { dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed'; }
     install_pkgs() { sudo apt-get install -y "$@"; }
 elif have dnf; then
     PKG_MANAGER=dnf
@@ -107,9 +107,10 @@ rm -rf "$APPDIR"
 cmake --install "$BUILD_DIR" --prefix "$APPDIR/usr"
 
 # linuxdeploy needs qmake on PATH to run the Qt plugin.
-QT_BIN="$(dirname "$(command -v qmake 2>/dev/null || true)")"
-if [[ -z "$QT_BIN" ]]; then
-    # Try pkg-config as a fallback to locate the Qt bin directory.
+# `dirname ""` returns "." not "", so test for qmake first before running dirname.
+if have qmake; then
+    QT_BIN="$(dirname "$(command -v qmake)")"
+else
     QT_BIN="$(pkg-config --variable=bindir Qt6Core 2>/dev/null || true)"
 fi
 [[ -n "$QT_BIN" ]] && export PATH="$QT_BIN:$PATH"
