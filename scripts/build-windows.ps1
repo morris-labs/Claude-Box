@@ -125,18 +125,37 @@ $env:PATH = "$QtDir\bin;$env:PATH"
 # Inno Setup
 # ---------------------------------------------------------------------------
 Info "Checking Inno Setup"
-$IsccPaths = @(
-    "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe",
-    "${env:ProgramFiles}\Inno Setup 6\iscc.exe"
-)
-$IsccExe = $IsccPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+function Find-Iscc {
+    # 1. Already on PATH.
+    $onPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    # 2. Fixed well-known locations.
+    $fixed = @(
+        "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe",
+        "${env:ProgramFiles}\Inno Setup 6\iscc.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 5\iscc.exe",
+        "${env:ProgramFiles}\Inno Setup 5\iscc.exe"
+    )
+    $hit = $fixed | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($hit) { return $hit }
+    # 3. Broad search under both Program Files trees.
+    foreach ($root in @("${env:ProgramFiles(x86)}", "${env:ProgramFiles}")) {
+        $hit = Get-ChildItem $root -Recurse -Filter "iscc.exe" -ErrorAction SilentlyContinue |
+               Select-Object -First 1 -ExpandProperty FullName
+        if ($hit) { return $hit }
+    }
+    return $null
+}
+
+$IsccExe = Find-Iscc
 if (-not $IsccExe) {
     Info "Installing Inno Setup"
     winget install --id JRSoftware.InnoSetup --silent `
         --accept-package-agreements --accept-source-agreements
-    $IsccExe = $IsccPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $IsccExe = Find-Iscc
     if (-not $IsccExe) {
-        Fail "Inno Setup installed but iscc.exe not found at expected path"
+        Fail "Inno Setup installed but iscc.exe not found -- add its directory to PATH and re-run"
     }
 }
 Ok "iscc at $IsccExe"
