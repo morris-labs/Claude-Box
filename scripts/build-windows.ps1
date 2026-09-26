@@ -7,7 +7,7 @@
 # for the Visual Studio Build Tools and Qt installs; a normal session is
 # enough if all prerequisites are already present.
 param(
-    [string]$QtVersion = "6.7.3"  # adjust if a newer release is preferred
+    [string]$QtVersion = ""  # leave blank to auto-detect; set to e.g. "6.8.3" to pin
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -76,42 +76,47 @@ if (-not $HaveMsvc) {
 # Qt 6
 # ---------------------------------------------------------------------------
 Info "Checking Qt 6"
-# Qt installs macdeployqt/windeployqt alongside qmake in its bin directory.
-$QtBasePaths = @(
-    "C:\Qt\$QtVersion\msvc2022_64",
-    "C:\Qt\$QtVersion\msvc2019_64",
-    "${env:LOCALAPPDATA}\Qt\$QtVersion\msvc2022_64",
-    "${env:LOCALAPPDATA}\Qt\$QtVersion\msvc2019_64"
-)
-$QtDir = $QtBasePaths | Where-Object { Test-Path (Join-Path $_ "bin\qmake.exe") } | Select-Object -First 1
 
+function Find-QtDir {
+    param([string]$Version)
+    $roots = @("C:\Qt", "${env:LOCALAPPDATA}\Qt", "C:\Program Files\Qt")
+    $compilers = @("msvc2022_64", "msvc2019_64")
+    foreach ($root in $roots) {
+        if (-not (Test-Path $root)) { continue }
+        if ($Version) {
+            # Exact version specified: check known compiler subdirs.
+            foreach ($comp in $compilers) {
+                $candidate = Join-Path $root "$Version\$comp"
+                if (Test-Path (Join-Path $candidate "bin\qmake.exe")) { return $candidate }
+            }
+        } else {
+            # Auto-detect: find the highest 6.x version present.
+            $found = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^6\.\d+\.\d+$' } |
+                Sort-Object { [Version]$_.Name } -Descending |
+                ForEach-Object {
+                    foreach ($comp in $compilers) {
+                        $candidate = Join-Path $_.FullName $comp
+                        if (Test-Path (Join-Path $candidate "bin\qmake.exe")) { return $candidate }
+                    }
+                } | Select-Object -First 1
+            if ($found) { return $found }
+        }
+    }
+    return $null
+}
+
+$QtDir = Find-QtDir -Version $QtVersion
 if (-not $QtDir) {
-    Info "Qt $QtVersion not found in default locations"
-    Info "Attempting winget install (Qt.Qt.$($QtVersion -replace '\.','_') or similar)"
-    # winget package IDs for Qt vary by release; try the most likely ones.
-    $Installed = $false
-    foreach ($id in @("Qt.Qt.6", "io.qt.qtcreator")) {
-        try {
-            winget install --id $id --silent `
-                --accept-package-agreements --accept-source-agreements 2>$null
-            $Installed = $true
-            break
-        } catch { }
-    }
-    if (-not $Installed) {
-        Write-Host ""
-        Write-Host "Automatic Qt install failed. Install Qt manually:" -ForegroundColor Yellow
-        Write-Host "  1. Download the Qt Online Installer from https://www.qt.io/download-qt-installer"
-        Write-Host "  2. Select Qt $QtVersion > MSVC 2022 64-bit"
-        Write-Host "  3. Re-run this script"
-        Fail "Qt $QtVersion not installed"
-    }
-    # Re-probe after install.
-    $QtDir = $QtBasePaths | Where-Object { Test-Path (Join-Path $_ "bin\qmake.exe") } | Select-Object -First 1
-    if (-not $QtDir) {
-        Fail ("Qt installed but not found at expected path. Set -QtVersion to the installed version`n" +
-              "or pass -DCMAKE_PREFIX_PATH to cmake manually.")
-    }
+    $label = if ($QtVersion) { "Qt $QtVersion" } else { "Qt 6.x" }
+    Info "$label not found in C:\Qt or %LOCALAPPDATA%\Qt"
+    Write-Host ""
+    Write-Host "Install Qt manually, then re-run this script:" -ForegroundColor Yellow
+    Write-Host "  1. Download the Qt Online Installer: https://www.qt.io/download-qt-installer"
+    Write-Host "  2. Select Qt 6.x > MSVC 2022 64-bit"
+    Write-Host "  3. Run: powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1"
+    Write-Host ""
+    Fail "$label not installed"
 }
 Ok "Qt at $QtDir"
 $env:PATH = "$QtDir\bin;$env:PATH"
