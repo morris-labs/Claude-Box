@@ -1,8 +1,13 @@
 #include "PtySession.h"
 
 #include <QSocketNotifier>
+#ifdef __APPLE__
+#  include <QDir>
+#  include <QStandardPaths>
+#endif
 
 #include <cerrno>
+#include <cstring>
 #include <vector>
 
 #include <fcntl.h>
@@ -71,6 +76,75 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
     ws.ws_row = 24;
     ws.ws_col = 80;
 
+#ifdef __APPLE__
+    // A .app bundle launched via `open` inherits only /usr/bin:/bin:/usr/sbin:/sbin.
+    // setenv() is not async-signal-safe (it may call malloc and deadlock in the
+    // child of a multithreaded process). Build the modified environment and
+    // resolve the program path here in the parent instead, then pass them via
+    // execve() in the child.
+    std::vector<QByteArray> childEnvStorage;
+    std::vector<char *> childEnvp;
+    {
+        const char *home = ::getenv("HOME");
+        const char *cur  = ::getenv("PATH");
+
+        char extra[512];
+        if (home && *home)
+            ::snprintf(extra, sizeof(extra),
+                "/usr/local/bin:/opt/homebrew/bin"
+                ":/Applications/Docker.app/Contents/Resources/bin"
+                ":%s/.docker/bin", home);
+        else
+            ::snprintf(extra, sizeof(extra),
+                "/usr/local/bin:/opt/homebrew/bin"
+                ":/Applications/Docker.app/Contents/Resources/bin");
+
+        QByteArray newPath = "PATH=";
+        newPath += extra;
+        if (cur && *cur) {
+            newPath += ':';
+            newPath += cur;
+        }
+
+        bool pathReplaced = false;
+        for (char **ep = ::environ; *ep; ++ep) {
+            if (::strncmp(*ep, "PATH=", 5) == 0) {
+                childEnvStorage.push_back(newPath);
+                pathReplaced = true;
+            } else {
+                childEnvStorage.push_back(QByteArray(*ep));
+            }
+        }
+        if (!pathReplaced)
+            childEnvStorage.push_back(newPath);
+
+        // Build the pointer array after all push_backs so no reallocation
+        // can invalidate the pointers before we hand them to execve().
+        childEnvp.reserve(childEnvStorage.size() + 1);
+        for (auto &b : childEnvStorage)
+            childEnvp.push_back(b.data());
+        childEnvp.push_back(nullptr);
+    }
+
+    // execve() does not search PATH, so a bare program name needs a full path.
+    // Resolve it here in the parent against the same extended directory set.
+    if (!progBytes.contains('/')) {
+        const QStringList extraDirs = {
+            QStringLiteral("/usr/local/bin"),
+            QStringLiteral("/opt/homebrew/bin"),
+            QStringLiteral("/Applications/Docker.app/Contents/Resources/bin"),
+            QDir::homePath() + QStringLiteral("/.docker/bin"),
+        };
+        QString found = QStandardPaths::findExecutable(program, extraDirs);
+        if (found.isEmpty())
+            found = QStandardPaths::findExecutable(program);
+        if (!found.isEmpty()) {
+            progBytes = found.toLocal8Bit();
+            argv[0] = const_cast<char *>(progBytes.constData());
+        }
+    }
+#endif
+
     int master = -1;
     const pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
     if (pid < 0)
@@ -82,35 +156,12 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
         if (!workingDirBytes.isEmpty() && ::chdir(workingDirBytes.constData()) != 0)
             ::_exit(127); // better to fail visibly than exec in the wrong directory
 #ifdef __APPLE__
-        // A .app bundle launched via `open` inherits only
-        // /usr/bin:/bin:/usr/sbin:/sbin. Prepend known locations where
-        // `docker` (and other tools) can live on macOS:
-        //   /usr/local/bin            -- Docker Desktop symlink on Intel Macs
-        //   /opt/homebrew/bin         -- Homebrew on Apple Silicon
-        //   .../Docker.app/.../bin    -- Docker Desktop bundle (no symlink case)
-        //   ~/.docker/bin             -- Docker Desktop CLI shim (newer versions)
-        {
-            const char *home = ::getenv("HOME");
-            const char *cur  = ::getenv("PATH");
-            char extra[512];
-            if (home && *home)
-                ::snprintf(extra, sizeof(extra),
-                    "/usr/local/bin:/opt/homebrew/bin"
-                    ":/Applications/Docker.app/Contents/Resources/bin"
-                    ":%s/.docker/bin", home);
-            else
-                ::snprintf(extra, sizeof(extra),
-                    "/usr/local/bin:/opt/homebrew/bin"
-                    ":/Applications/Docker.app/Contents/Resources/bin");
-            char buf[4096];
-            if (cur && *cur)
-                ::snprintf(buf, sizeof(buf), "%s:%s", extra, cur);
-            else
-                ::snprintf(buf, sizeof(buf), "%s", extra);
-            ::setenv("PATH", buf, 1);
-        }
-#endif
+        // childEnvp and the resolved argv[0] were built in the parent; use
+        // execve() so no PATH search or environment mutation happens here.
+        ::execve(argv[0], argv.data(), childEnvp.data());
+#else
         ::execvp(argv[0], argv.data());
+#endif
         ::_exit(127); // only reached if exec failed
     }
 
