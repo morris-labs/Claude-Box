@@ -14,6 +14,7 @@
 #include "UsageView.h"
 
 class BoxDetailsPanel;
+class ClaudeCodeUpdateChecker;
 class SshTunnelSession;
 class UpdateBar;
 class UpdateChecker;
@@ -69,6 +70,7 @@ private slots:
     void onPurge();
     void onAbout();
     void onCheckForUpdates();
+    void onCheckClaudeCodeUpdate();
 
     void onFilterChanged(const QString &text);
     void onCloseCurrentTab();
@@ -103,6 +105,7 @@ private:
 
     QNetworkAccessManager *m_nam = nullptr;
     UpdateChecker *m_updateChecker = nullptr;
+    ClaudeCodeUpdateChecker *m_claudeCodeChecker = nullptr;
     UpdateBar *m_updateBar = nullptr;
 
     // Docker polling runs on a worker thread: `docker stats` alone costs

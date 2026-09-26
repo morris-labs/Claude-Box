@@ -60,4 +60,10 @@ QJsonDocument post(const QString &path, const QJsonObject &body, QString *errorO
 // DELETEs path. Returns false with errorOut set on failure.
 bool del(const QString &path, QString *errorOut = nullptr, int timeoutMs = 15000);
 
+// Returns the value of a named label on a local image, or an empty string
+// if the label is absent, the image doesn't exist, or the API is
+// unreachable. Set errorOut to receive a human-readable failure reason.
+QString imageLabel(const QString &image, const QString &label,
+                   QString *errorOut = nullptr);
+
 } // namespace DockerApi

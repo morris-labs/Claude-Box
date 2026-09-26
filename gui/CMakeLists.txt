@@ -104,6 +104,8 @@ add_executable(claude-box-gui WIN32
     src/UpdateChecker.h
     src/UpdateBar.cpp
     src/UpdateBar.h
+    src/ClaudeCodeUpdateChecker.cpp
+    src/ClaudeCodeUpdateChecker.h
 )
 
 # --- desktop entry -------------------------------------------------------
