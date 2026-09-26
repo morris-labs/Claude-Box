@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QMainWindow>
 #include <QModelIndex>
+#include <QNetworkAccessManager>
 #include <QPoint>
 #include <QString>
 
@@ -14,6 +15,8 @@
 
 class BoxDetailsPanel;
 class SshTunnelSession;
+class UpdateBar;
+class UpdateChecker;
 class QAction;
 class QLabel;
 class QLineEdit;
@@ -65,6 +68,7 @@ private slots:
     void onRemove();
     void onPurge();
     void onAbout();
+    void onCheckForUpdates();
 
     void onFilterChanged(const QString &text);
     void onCloseCurrentTab();
@@ -96,6 +100,10 @@ private:
     UsageView *m_usageView = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
+
+    QNetworkAccessManager *m_nam = nullptr;
+    UpdateChecker *m_updateChecker = nullptr;
+    UpdateBar *m_updateBar = nullptr;
 
     // Docker polling runs on a worker thread: `docker stats` alone costs
     // 1-2 seconds per call, which froze the GUI for most of every refresh
