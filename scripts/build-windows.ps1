@@ -24,8 +24,17 @@ function Have { param([string]$cmd) return ($null -ne (Get-Command $cmd -ErrorAc
 # Reload both Machine and User PATH into the current session (needed after
 # any winget install so newly installed tools are visible without reopening).
 function Reload-Path {
-    $env:PATH = ([System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
-                 [System.Environment]::GetEnvironmentVariable("PATH", "User")) -replace ";;", ";"
+    param([string[]]$Prepend = @())
+    $base = ([System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
+             [System.Environment]::GetEnvironmentVariable("PATH", "User")) -replace ";;", ";"
+    $env:PATH = if ($Prepend.Count -gt 0) { ($Prepend -join ";") + ";" + $base } else { $base }
+}
+
+# ---------------------------------------------------------------------------
+# Parameter validation
+# ---------------------------------------------------------------------------
+if ($QtVersion -and $QtVersion -notmatch '^\d+\.\d+\.\d+$') {
+    Fail "QtVersion must be in X.Y.Z format (e.g. '6.8.3'); got '$QtVersion'"
 }
 
 # ---------------------------------------------------------------------------
@@ -45,6 +54,7 @@ Info "Checking Git"
 if (-not (Have "git")) {
     Info "Installing Git"
     winget install --id Git.Git --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { Fail "winget failed to install Git (exit $LASTEXITCODE)" }
     Reload-Path
 }
 Ok "git $(git --version)"
@@ -56,6 +66,7 @@ Info "Checking CMake"
 if (-not (Have "cmake")) {
     Info "Installing CMake"
     winget install --id Kitware.CMake --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { Fail "winget failed to install CMake (exit $LASTEXITCODE)" }
     Reload-Path
 }
 Ok "cmake $(cmake --version | Select-String '\d+\.\d+\.\d+' | ForEach-Object { $_.Matches[0].Value })"
@@ -71,7 +82,10 @@ if (-not $HaveMsvc) {
     winget install --id Microsoft.VisualStudio.2022.BuildTools --silent `
         --accept-package-agreements --accept-source-agreements `
         --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-    Ok "Visual Studio Build Tools installed -- you may need to reopen this terminal"
+    if ($LASTEXITCODE -ne 0) { Fail "winget failed to install Visual Studio Build Tools (exit $LASTEXITCODE)" }
+    $HaveMsvc = (Test-Path $VsWhere) -and (& $VsWhere -latest -products * -requires Microsoft.VisualCpp.Tools.HostX64.TargetX64 2>$null | Select-String "installationPath")
+    if (-not $HaveMsvc) { Fail "Visual Studio Build Tools installed but C++ workload not found -- check the VS installer log" }
+    Ok "Visual Studio Build Tools installed"
 } else {
     Ok "MSVC present"
 }
@@ -156,7 +170,8 @@ if (-not $IsccExe) {
     Info "Installing Inno Setup"
     winget install --id JRSoftware.InnoSetup --silent `
         --accept-package-agreements --accept-source-agreements
-    Reload-Path
+    if ($LASTEXITCODE -ne 0) { Fail "winget failed to install Inno Setup (exit $LASTEXITCODE)" }
+    Reload-Path -Prepend @("$QtDir\bin")
     $IsccExe = Find-Iscc
     if (-not $IsccExe) {
         Fail "Inno Setup installed but iscc.exe not found -- add its directory to PATH and re-run"
@@ -171,12 +186,15 @@ Info "Configuring"
 cmake -B "$GuiDir\build" "$GuiDir" `
     -DCMAKE_PREFIX_PATH="$QtDir" `
     -DCMAKE_BUILD_TYPE=Release
+if ($LASTEXITCODE -ne 0) { Fail "CMake configuration failed" }
 
 Info "Building (Release)"
 cmake --build "$GuiDir\build" --config Release --parallel
+if ($LASTEXITCODE -ne 0) { Fail "CMake build failed" }
 
 Info "Creating installer"
 & $IsccExe "$GuiDir\packaging\claude-box-gui.iss"
+if ($LASTEXITCODE -ne 0) { Fail "Inno Setup compilation failed" }
 
 # Locate the produced installer without pinning the version number.
 # The .iss OutputDir is ..\..\installer relative to gui\packaging\, which
