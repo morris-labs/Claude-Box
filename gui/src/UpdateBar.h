@@ -36,4 +36,5 @@ private:
     QLabel *m_actionLink   = nullptr;
     std::function<void()> m_action;
     QUrl m_releaseUrl;
+    QString m_dismissedVersion;
 };

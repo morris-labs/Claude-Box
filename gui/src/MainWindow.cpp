@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 
+#include <memory>
+
 #include "BoxDetailsPanel.h"
 #include "BoxRecord.h"
 #include "Icons.h"
@@ -2147,16 +2149,32 @@ void MainWindow::onAbout()
 
 void MainWindow::onCheckForUpdates()
 {
-    // checkNow() bypasses the 24-hour cooldown and emits upToDate() when
-    // already on the latest version, so the user gets feedback either way.
-    connect(m_updateChecker, &UpdateChecker::upToDate, this, [this] {
-        statusBar()->showMessage(QStringLiteral("claude-box is up to date."), 4000);
-    }, Qt::SingleShotConnection);
-    connect(m_updateChecker, &UpdateChecker::checkFailed, this,
-            [this](const QString &reason) {
-        statusBar()->showMessage(
-            QStringLiteral("Update check failed: %1").arg(reason), 5000);
-    }, Qt::SingleShotConnection);
+    // checkNow() bypasses the 24-hour cooldown and emits one of three signals.
+    // All three connections are installed as a group so that whichever signal
+    // fires first cleans up the other two -- without this, the upToDate and
+    // checkFailed connections accumulate when updateAvailable fires instead.
+    auto handles = std::make_shared<QList<QMetaObject::Connection>>();
+    auto cleanup = [handles] {
+        for (const auto &c : *handles)
+            QObject::disconnect(c);
+        handles->clear();
+    };
+
+    handles->append(connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
+        [cleanup](const QString &, const QUrl &) { cleanup(); },
+        Qt::SingleShotConnection));
+    handles->append(connect(m_updateChecker, &UpdateChecker::upToDate, this,
+        [this, cleanup] {
+            statusBar()->showMessage(QStringLiteral("claude-box is up to date."), 4000);
+            cleanup();
+        }, Qt::SingleShotConnection));
+    handles->append(connect(m_updateChecker, &UpdateChecker::checkFailed, this,
+        [this, cleanup](const QString &reason) {
+            statusBar()->showMessage(
+                QStringLiteral("Update check failed: %1").arg(reason), 5000);
+            cleanup();
+        }, Qt::SingleShotConnection));
+
     m_updateChecker->checkNow();
 }
 
