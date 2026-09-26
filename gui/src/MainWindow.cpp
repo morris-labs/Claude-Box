@@ -20,6 +20,7 @@
 #include <QtConcurrent>
 #include <QDir>
 #include <QFile>
+#include <QTextStream>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -41,6 +42,7 @@
 #include <QTabWidget>
 #include <QProcess>
 #include <QScrollBar>
+#include <QStandardPaths>
 #include <QFileDialog>
 #include <QTimer>
 #include <QToolBar>
@@ -163,14 +165,14 @@ void MainWindow::buildActions()
     m_openAllAction->setStatusTip(QStringLiteral("Start every stopped box that was running before the last reboot or crash"));
     connect(m_openAllAction, &QAction::triggered, this, &MainWindow::onOpenAll);
 
-    m_openExternalAction = new QAction(QStringLiteral("Open &Shell in Terminal"), this);
+    m_openExternalAction = new QAction(QStringLiteral("Open Shell in &Container"), this);
     m_openExternalAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+T")));
-    m_openExternalAction->setStatusTip(QStringLiteral("Open a bash shell in this container in an external terminal"));
+    m_openExternalAction->setStatusTip(QStringLiteral("Open an interactive shell inside this container in an external terminal"));
     connect(m_openExternalAction, &QAction::triggered, this, &MainWindow::onOpenExternal);
 
-    m_openExternalClaudeAction = new QAction(QStringLiteral("Open &Claude in Terminal"), this);
-    m_openExternalClaudeAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Y")));
-    m_openExternalClaudeAction->setStatusTip(QStringLiteral("Attach to this container's Claude session in an external terminal"));
+    m_openExternalClaudeAction = new QAction(QStringLiteral("&Attach to Claude Session"), this);
+    m_openExternalClaudeAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")));
+    m_openExternalClaudeAction->setStatusTip(QStringLiteral("Attach to the running Claude session in this container via tmux"));
     connect(m_openExternalClaudeAction, &QAction::triggered, this, &MainWindow::onOpenExternalClaude);
 
     m_removeAction = new QAction(Icons::removeBox(), QStringLiteral("&Remove"), this);
@@ -1709,27 +1711,87 @@ void MainWindow::onOpenExternalClaude()
         return;
 
 #ifdef Q_OS_WIN
-    // --detach-keys=ctrl-q,q: two-key sequence so a stray Ctrl+Q alone
-    // doesn't accidentally detach (ctrl-q overrides docker's default
-    // ctrl-p ctrl-q, keeping Ctrl+P available inside claude).
+    // Wait for the tmux session to appear before attaching: the container
+    // may still be running git-config + claude startup when this action fires.
     const QStringList dockerArgs = {
-        "attach", "--detach-keys=ctrl-q,q", info->name
+        "exec", "-it", info->name,
+        "bash", "-c",
+        QStringLiteral("until tmux has-session -t main 2>/dev/null; "
+                       "do sleep 0.5; done; exec tmux attach -t main")
     };
-    if (launchInWindowsTerminal(dockerArgs))
+    if (QProcess::startDetached(QStringLiteral("docker.exe"), dockerArgs))
         return;
-    QMessageBox::warning(this, QStringLiteral("Open Claude in Terminal"),
+    QStringList wtArgs = {"--", "docker.exe"};
+    wtArgs += dockerArgs;
+    if (QProcess::startDetached(QStringLiteral("wt.exe"), wtArgs))
+        return;
+    QMessageBox::warning(this, QStringLiteral("Attach to Claude Session"),
                          QStringLiteral("Could not launch a terminal.\n"
-                         "Neither wt.exe nor conhost.exe could be started."));
+                         "Neither docker.exe nor wt.exe could be started."));
+#elif defined(Q_OS_DARWIN)
+    QString dockerBin = QStandardPaths::findExecutable(
+        QStringLiteral("docker"),
+        {QStringLiteral("/usr/local/bin"),
+         QStringLiteral("/opt/homebrew/bin"),
+         QStringLiteral("/Applications/Docker.app/Contents/Resources/bin"),
+         QDir::homePath() + QStringLiteral("/.docker/bin")});
+    if (dockerBin.isEmpty())
+        dockerBin = QStringLiteral("docker");
+    // Wait for the tmux session to appear: the container may still be running
+    // git-config + claude startup when this action fires.
+    const QString dockerCmd = QStringLiteral(
+        "%1 exec -it %2 bash -c "
+        "'until tmux has-session -t main 2>/dev/null; "
+        "do sleep 0.5; done; exec tmux attach -t main'"
+    ).arg(dockerBin, info->name);
+
+    const QStringList iterm2Paths = {
+        QStringLiteral("/Applications/iTerm.app"),
+        QDir::homePath() + QStringLiteral("/Applications/iTerm.app"),
+    };
+    for (const QString &p : iterm2Paths) {
+        if (QFileInfo::exists(p)) {
+            if (QProcess::startDetached(QStringLiteral("osascript"), {
+                    "-e", "tell application \"iTerm2\"",
+                    "-e", "  activate",
+                    "-e", "  set w to (create window with default profile)",
+                    "-e", "  tell current session of w",
+                    "-e", QStringLiteral("    write text \"%1\"").arg(dockerCmd),
+                    "-e", "  end tell",
+                    "-e", "end tell"}))
+                return;
+            break;
+        }
+    }
+
+    {
+        const QString tmpPath = QDir::tempPath()
+            + QStringLiteral("/claude-box-attach.sh");
+        QFile f(tmpPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream s(&f);
+            s << "#!/bin/sh\nexec " << dockerCmd << "\n";
+            f.close();
+            f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+                           | QFile::ReadGroup  | QFile::ExeGroup
+                           | QFile::ReadOther  | QFile::ExeOther);
+            if (QProcess::startDetached(QStringLiteral("open"),
+                    {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath}))
+                return;
+        }
+    }
+
+    QMessageBox::warning(this, QStringLiteral("Attach to Claude Session"),
+                         QStringLiteral("Could not open an external terminal.\n"
+                         "Failed to write or open the launcher script."));
 #else
-    // docker attach connects directly to the Claude session (PID 1 in the
-    // container). ctrl-q,q overrides docker's default ctrl-p ctrl-q so
-    // ctrl-p reaches Claude instead; the two-key sequence avoids accidental
-    // detach on a bare Ctrl+Q, and avoids the XON/XOFF issue where a
-    // single ctrl-q (ASCII 0x11) is consumed by the PTY line discipline
-    // before docker attach ever sees it.
+    // Wait for the tmux session to appear before attaching.
     const QStringList innerCmd = {
         "bash", "-c",
-        QStringLiteral("docker attach --detach-keys=ctrl-q,q %1").arg(info->name)
+        QStringLiteral("docker exec -it %1 bash -c "
+                       "'until tmux has-session -t main 2>/dev/null; "
+                       "do sleep 0.5; done; exec tmux attach -t main'")
+            .arg(info->name)
     };
 
     struct Spec { QString term; bool gnomeStyle; };
@@ -1752,7 +1814,7 @@ void MainWindow::onOpenExternalClaude()
             return;
     }
 
-    QMessageBox::warning(this, QStringLiteral("Open Claude in Terminal"),
+    QMessageBox::warning(this, QStringLiteral("Attach to Claude Session"),
                          QStringLiteral("No terminal emulator found.\n"
                          "Set $TERMINAL, or install xterm or gnome-terminal."));
 #endif
@@ -1777,13 +1839,78 @@ void MainWindow::onOpenExternal()
         return;
     QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
                          QStringLiteral("Could not launch a terminal.\n"
-                         "Neither wt.exe nor conhost.exe could be started."));
+                         "Neither docker.exe nor wt.exe could be started."));
+#elif defined(Q_OS_DARWIN)
+    // Resolve the docker binary with the same candidate paths used in
+    // PtySessionUnix.cpp, so the AppleScript command works regardless of
+    // whether Docker Desktop created a /usr/local/bin symlink.
+    QString dockerBin = QStandardPaths::findExecutable(
+        QStringLiteral("docker"),
+        {QStringLiteral("/usr/local/bin"),
+         QStringLiteral("/opt/homebrew/bin"),
+         QStringLiteral("/Applications/Docker.app/Contents/Resources/bin"),
+         QDir::homePath() + QStringLiteral("/.docker/bin")});
+    if (dockerBin.isEmpty())
+        dockerBin = QStringLiteral("docker"); // fallback: let the shell find it
+    const QString dockerCmd = QStringLiteral(
+        "%1 exec -it %2 bash"
+    ).arg(dockerBin, info->name);
+
+    // iTerm2 -- check common install locations before attempting the
+    // AppleScript, so osascript doesn't report a "can't find application"
+    // error if iTerm2 isn't installed.
+    // dockerCmd contains only single quotes so it embeds safely inside
+    // the AppleScript double-quoted string without further escaping.
+    const QStringList iterm2Paths = {
+        QStringLiteral("/Applications/iTerm.app"),
+        QDir::homePath() + QStringLiteral("/Applications/iTerm.app"),
+    };
+    for (const QString &p : iterm2Paths) {
+        if (QFileInfo::exists(p)) {
+            if (QProcess::startDetached(QStringLiteral("osascript"), {
+                    "-e", "tell application \"iTerm2\"",
+                    "-e", "  activate",
+                    "-e", "  set w to (create window with default profile)",
+                    "-e", "  tell current session of w",
+                    "-e", QStringLiteral("    write text \"%1\"").arg(dockerCmd),
+                    "-e", "  end tell",
+                    "-e", "end tell"}))
+                return;
+            break;
+        }
+    }
+
+    // Terminal.app: write the command to a fixed temp script and open it.
+    // `open -a Terminal script.sh` always opens in a new window. AppleScript's
+    // `do script "cmd"` is unreliable — without an explicit target it injects
+    // into the frontmost existing tab regardless of the two-step new-tab trick,
+    // which just confused the user's own shell history.
+    // Fixed name means no temp-file accumulation: each open overwrites the last.
+    {
+        const QString tmpPath = QDir::tempPath()
+            + QStringLiteral("/claude-box-open.sh");
+        QFile f(tmpPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream s(&f);
+            s << "#!/bin/sh\nexec " << dockerCmd << "\n";
+            f.close();
+            f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+                           | QFile::ReadGroup  | QFile::ExeGroup
+                           | QFile::ReadOther  | QFile::ExeOther);
+            if (QProcess::startDetached(QStringLiteral("open"),
+                    {QStringLiteral("-a"), QStringLiteral("Terminal"), tmpPath}))
+                return;
+        }
+    }
+
+    QMessageBox::warning(this, QStringLiteral("Open External Terminal"),
+                         QStringLiteral("Could not open an external terminal.\n"
+                         "Failed to write or open the launcher script."));
 #else
-    // Attach to the container and attach or start a tmux session.
+    // Open a plain interactive shell in the container.
     const QStringList innerCmd = {
         "bash", "-c",
-        QStringLiteral("docker exec -it %1 bash -c 'tmux attach 2>/dev/null || tmux'")
-            .arg(info->name)
+        QStringLiteral("docker exec -it %1 bash").arg(info->name)
     };
 
     // Try terminals in preference order: $TERMINAL env var, then common ones.

@@ -586,7 +586,8 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
         spec.binds << (hostAbs + ":" + containerPath);
     }
 
-    spec.cmd << "bash" << "-c" << (gitSetup + " && shift && exec claude \"$@\"")
+    spec.cmd << "bash" << "-c"
+             << (gitSetup + " && shift && exec tmux new-session -s main -- claude \"$@\"")
              << "_" << containerDir;
     spec.cmd += claudeArgs;
     return spec;
@@ -644,7 +645,8 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
         args << "-v" << (hostPath + ":" + containerPath);
     }
 
-    args << "claude-code" << "bash" << "-c" << (gitSetup + " && shift && exec claude \"$@\"")
+    args << "claude-code" << "bash" << "-c"
+         << (gitSetup + " && shift && exec tmux new-session -s main -- claude \"$@\"")
          << "_" << containerDir;
     args += claudeArgs;
 

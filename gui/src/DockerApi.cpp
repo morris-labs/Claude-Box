@@ -1,5 +1,6 @@
 #include "DockerApi.h"
 
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QLocalSocket>
@@ -80,6 +81,14 @@ QString DockerApi::socketPath()
     // Docker Desktop's default endpoint. QLocalSocket speaks named pipes
     // on Windows, so the rest of this file needs no #ifdef at all.
     return QStringLiteral("docker_engine");
+#elif defined(Q_OS_DARWIN)
+    // Docker Desktop for Mac creates the socket here in recent versions.
+    // /var/run/docker.sock is a legacy symlink that may be absent or
+    // require elevated permissions, so probe the newer path first.
+    const QString primary = QDir::homePath() + QStringLiteral("/.docker/run/docker.sock");
+    if (QFileInfo::exists(primary))
+        return primary;
+    return QStringLiteral("/var/run/docker.sock");
 #else
     return QStringLiteral("/var/run/docker.sock");
 #endif
