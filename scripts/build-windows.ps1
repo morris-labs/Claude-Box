@@ -130,17 +130,21 @@ function Find-Iscc {
     # 1. Already on PATH.
     $onPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
     if ($onPath) { return $onPath.Source }
-    # 2. Fixed well-known locations.
+    # 2. Fixed well-known locations (system-wide and per-user).
     $fixed = @(
         "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe",
         "${env:ProgramFiles}\Inno Setup 6\iscc.exe",
         "${env:ProgramFiles(x86)}\Inno Setup 5\iscc.exe",
-        "${env:ProgramFiles}\Inno Setup 5\iscc.exe"
+        "${env:ProgramFiles}\Inno Setup 5\iscc.exe",
+        "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe",
+        "${env:LOCALAPPDATA}\Programs\Inno Setup 6\iscc.exe",
+        "${env:LOCALAPPDATA}\Programs\Inno Setup 5\ISCC.exe"
     )
     $hit = $fixed | Where-Object { Test-Path $_ } | Select-Object -First 1
     if ($hit) { return $hit }
-    # 3. Broad search under both Program Files trees.
-    foreach ($root in @("${env:ProgramFiles(x86)}", "${env:ProgramFiles}")) {
+    # 3. Broad search under Program Files and per-user Programs.
+    foreach ($root in @("${env:ProgramFiles(x86)}", "${env:ProgramFiles}", "${env:LOCALAPPDATA}\Programs")) {
+        if (-not (Test-Path $root)) { continue }
         $hit = Get-ChildItem $root -Recurse -Filter "iscc.exe" -ErrorAction SilentlyContinue |
                Select-Object -First 1 -ExpandProperty FullName
         if ($hit) { return $hit }
