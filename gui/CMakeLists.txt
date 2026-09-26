@@ -281,7 +281,13 @@ if(MACDEPLOYQT)
     #   codesign --deep --force --verify --sign "Developer ID Application: ..."
     add_custom_target(app-bundle
         COMMAND ${MACDEPLOYQT} "$<TARGET_BUNDLE_DIR:claude-box-gui>"
-        COMMAND codesign --deep --force --verify --sign -
+        # Sign first, then verify as a separate invocation. Combining
+        # --sign and --verify in one codesign call evaluates the existing
+        # signature state before signing on some Xcode versions, immediately
+        # failing with "code object is not signed at all" on a fresh bundle.
+        COMMAND codesign --deep --force --sign -
+                "$<TARGET_BUNDLE_DIR:claude-box-gui>"
+        COMMAND codesign --verify --deep
                 "$<TARGET_BUNDLE_DIR:claude-box-gui>"
         DEPENDS claude-box-gui
         COMMENT "Running macdeployqt and ad-hoc signing the .app bundle"
