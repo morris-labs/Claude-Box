@@ -10,7 +10,7 @@
 ; on a fresh install).
 
 #define AppName      "Claude Box"
-#define AppVersion   "2.1.0"
+#define AppVersion   "3.1.0"
 #define AppPublisher "Isaac Morris"
 #define AppExeName   "claude-box-gui.exe"
 #define BuildDir     "..\build\Release"
