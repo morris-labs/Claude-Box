@@ -34,4 +34,5 @@ private:
     void doCheck(bool emitUpToDate);
 
     QNetworkAccessManager *m_nam;
+    bool m_pendingCheck = false;
 };

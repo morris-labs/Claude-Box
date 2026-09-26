@@ -12,30 +12,28 @@
 
 namespace {
 const QString kDismissedKey = QStringLiteral("updateChecker/dismissedVersion");
-// Amber tone: reads as informational, not an error.
-const char *kBarStyle =
-    "background: #3a3020; border-bottom: 1px solid #7a6030; padding: 4px 8px;";
-const char *kLinkStyle =
-    "color: #d9aa57; text-decoration: underline;";
 }
 
 UpdateBar::UpdateBar(QWidget *parent)
     : QWidget(parent)
 {
     setVisible(false);
-    setStyleSheet(QLatin1String(kBarStyle));
+    setStyleSheet(QStringLiteral(
+        "background: %1; border-bottom: 1px solid %2; padding: 4px 8px;")
+        .arg(Theme::updateBarBg().name(), Theme::updateBarBorder().name()));
 
     m_messageLabel = new QLabel(this);
     m_messageLabel->setStyleSheet(
         QStringLiteral("color: %1; background: transparent;").arg(Theme::text().name()));
 
     m_actionLink = new QLabel(this);
-    m_actionLink->setStyleSheet(QLatin1String(kLinkStyle));
+    m_actionLink->setStyleSheet(
+        QStringLiteral("color: %1; text-decoration: underline;").arg(Theme::accent().name()));
     m_actionLink->setCursor(Qt::PointingHandCursor);
     m_actionLink->setVisible(false);
     m_actionLink->installEventFilter(this);
 
-    auto *dismiss = new QPushButton(QStringLiteral("×"), this);
+    auto *dismiss = new QPushButton(QStringLiteral("\xc3\x97"), this);
     dismiss->setFlat(true);
     dismiss->setFixedSize(20, 20);
     dismiss->setStyleSheet(
@@ -51,10 +49,10 @@ UpdateBar::UpdateBar(QWidget *parent)
     layout->addWidget(dismiss);
 
     connect(dismiss, &QPushButton::clicked, this, [this] {
-        QSettings s;
-        const QString ver = property("_dismissedVersion").toString();
-        if (!ver.isEmpty())
-            s.setValue(kDismissedKey, ver);
+        if (!m_dismissedVersion.isEmpty()) {
+            QSettings s;
+            s.setValue(kDismissedKey, m_dismissedVersion);
+        }
         setVisible(false);
     });
 }
@@ -65,7 +63,7 @@ void UpdateBar::notify(const QString &newVersion, const QUrl &releaseUrl)
     if (s.value(kDismissedKey).toString() == newVersion)
         return;
 
-    setProperty("_dismissedVersion", newVersion);
+    m_dismissedVersion = newVersion;
     m_releaseUrl = releaseUrl;
     m_action = nullptr;
 
@@ -80,7 +78,7 @@ void UpdateBar::notifyWithAction(const QString &message,
                                  const QString &actionLabel,
                                  std::function<void()> action)
 {
-    setProperty("_dismissedVersion", QString());
+    m_dismissedVersion.clear();
     m_action = std::move(action);
     m_releaseUrl = QUrl();
 
@@ -92,7 +90,7 @@ void UpdateBar::notifyWithAction(const QString &message,
 
 bool UpdateBar::eventFilter(QObject *obj, QEvent *event)
 {
-    if (obj == m_actionLink && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_actionLink && event->type() == QEvent::MouseButtonRelease) {
         if (m_action)
             m_action();
         else if (m_releaseUrl.isValid())
