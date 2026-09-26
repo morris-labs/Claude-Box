@@ -4,6 +4,7 @@
 #ifdef __APPLE__
 #  include <QDir>
 #  include <QStandardPaths>
+#  include <crt_externs.h>   // _NSGetEnviron()
 #endif
 
 #include <cerrno>
@@ -118,8 +119,11 @@ bool PtySession::start(const QString &program, const QStringList &args, const QS
             newPath += cur;
         }
 
+        // On macOS, environ is not in the C++ global namespace; use the
+        // Apple-provided accessor instead.
+        char **envList = *_NSGetEnviron();
         bool pathReplaced = false;
-        for (char **ep = ::environ; *ep; ++ep) {
+        for (char **ep = envList; *ep; ++ep) {
             if (::strncmp(*ep, "PATH=", 5) == 0) {
                 childEnvStorage.push_back(newPath);
                 pathReplaced = true;
