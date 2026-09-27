@@ -33,7 +33,7 @@ UpdateBar::UpdateBar(QWidget *parent)
     m_actionLink->setCursor(Qt::PointingHandCursor);
     m_actionLink->setVisible(false);
 
-    auto *dismiss = new QPushButton(QStringLiteral("\xc3\x97"), this);
+    auto *dismiss = new QPushButton(QString(QChar(0x00D7)), this);
     dismiss->setFlat(true);
     dismiss->setFixedSize(20, 20);
     dismiss->setStyleSheet(
