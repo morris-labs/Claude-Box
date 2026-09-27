@@ -139,7 +139,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_updateChecker = new UpdateChecker(m_nam, this);
     connect(m_updateChecker, &UpdateChecker::updateAvailable,
-            m_updateBar, &UpdateBar::notify);
+            this, [this](const QString &newVersion, const QUrl &releaseUrl) {
+        m_updateBarIsClaudeCode = false;
+        m_updateBar->notify(newVersion, releaseUrl);
+    });
     QTimer::singleShot(3000, m_updateChecker, &UpdateChecker::checkInBackground);
 
     m_claudeCodeChecker = new ClaudeCodeUpdateChecker(&m_docker, m_nam, this);
@@ -150,11 +153,19 @@ MainWindow::MainWindow(QWidget *parent)
                 "Claude Code %1 is available. The claude-code image needs a rebuild.").arg(latest)
             : QStringLiteral(
                 "Claude Code %1 is available (image has %2).").arg(latest, installed);
+        m_updateBarIsClaudeCode = true;
         m_updateBar->notifyWithAction(message, QStringLiteral("Rebuild image"),
                                      [this] { onSetupWizard(); });
     });
+    // Only hide the bar when it is showing a Claude Code notification.
+    // If UpdateChecker wrote an app-update notification, leave it visible.
     connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::upToDate,
-            m_updateBar, &UpdateBar::hide);
+            this, [this] {
+        if (m_updateBarIsClaudeCode) {
+            m_updateBar->hide();
+            m_updateBarIsClaudeCode = false;
+        }
+    });
     QTimer::singleShot(4000, m_claudeCodeChecker,
                        &ClaudeCodeUpdateChecker::checkInBackground);
 }
@@ -2215,14 +2226,34 @@ void MainWindow::onCheckForUpdates()
 
 void MainWindow::onCheckClaudeCodeUpdate()
 {
-    connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::upToDate, this, [this] {
-        statusBar()->showMessage(QStringLiteral("Claude Code is up to date."), 4000);
-    }, Qt::SingleShotConnection);
-    connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::checkFailed, this,
-            [this](const QString &reason) {
-        statusBar()->showMessage(
-            QStringLiteral("Claude Code update check failed: %1").arg(reason), 5000);
-    }, Qt::SingleShotConnection);
+    // Same grouped-cleanup pattern as onCheckForUpdates(): whichever signal
+    // fires first removes the other two, so they don't accumulate across
+    // repeated manual checks while an update is already available.
+    auto handles = std::make_shared<QList<QMetaObject::Connection>>();
+    auto cleanup = [handles] {
+        for (const auto &c : *handles)
+            QObject::disconnect(c);
+        handles->clear();
+    };
+
+    handles->append(connect(m_claudeCodeChecker,
+        &ClaudeCodeUpdateChecker::updateAvailable, this,
+        [cleanup](const QString &, const QString &) { cleanup(); },
+        Qt::SingleShotConnection));
+    handles->append(connect(m_claudeCodeChecker,
+        &ClaudeCodeUpdateChecker::upToDate, this,
+        [this, cleanup] {
+            statusBar()->showMessage(QStringLiteral("Claude Code is up to date."), 4000);
+            cleanup();
+        }, Qt::SingleShotConnection));
+    handles->append(connect(m_claudeCodeChecker,
+        &ClaudeCodeUpdateChecker::checkFailed, this,
+        [this, cleanup](const QString &reason) {
+            statusBar()->showMessage(
+                QStringLiteral("Claude Code update check failed: %1").arg(reason), 5000);
+            cleanup();
+        }, Qt::SingleShotConnection));
+
     m_claudeCodeChecker->checkNow();
 }
 
