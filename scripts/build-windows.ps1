@@ -31,6 +31,20 @@ function Reload-Path {
 }
 
 # ---------------------------------------------------------------------------
+# Pull latest?
+# ---------------------------------------------------------------------------
+$currentBranch = (& git -C $RepoDir rev-parse --abbrev-ref HEAD 2>$null)
+$currentHash   = (& git -C $RepoDir rev-parse --short HEAD 2>$null)
+Info "Current branch: $currentBranch ($currentHash)"
+$pullChoice = Read-Host "Pull latest from origin before building? [y/N]"
+if ($pullChoice -match '^[Yy]') {
+    Info "Pulling latest"
+    git -C $RepoDir pull origin main
+    if ($LASTEXITCODE -ne 0) { Fail "git pull failed" }
+    Ok "Up to date"
+}
+
+# ---------------------------------------------------------------------------
 # Parameter validation
 # ---------------------------------------------------------------------------
 if ($QtVersion -and $QtVersion -notmatch '^\d+\.\d+\.\d+$') {

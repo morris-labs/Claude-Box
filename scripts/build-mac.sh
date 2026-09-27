@@ -19,6 +19,19 @@ die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------------------
+# Pull latest?
+# ---------------------------------------------------------------------------
+CURRENT_BRANCH="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
+info "Current branch: $CURRENT_BRANCH ($(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown"))"
+printf 'Pull latest from origin before building? [y/N] '
+read -r PULL_LATEST
+if [[ "${PULL_LATEST,,}" == "y" || "${PULL_LATEST,,}" == "yes" ]]; then
+    info "Pulling latest"
+    git -C "$REPO_DIR" pull origin main
+    ok "Up to date"
+fi
+
+# ---------------------------------------------------------------------------
 # Xcode command-line tools
 # ---------------------------------------------------------------------------
 info "Checking Xcode command-line tools"
