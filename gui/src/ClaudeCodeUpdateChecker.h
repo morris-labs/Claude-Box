@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFuture>
+#include <QFutureWatcher>
 #include <QObject>
 #include <QString>
 

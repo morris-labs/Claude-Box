@@ -35,6 +35,10 @@ QColor known();
 QColor terminalBg();
 QColor terminalFg();
 
+// Colors for the update notification bar (amber tone).
+QColor updateBarBg();
+QColor updateBarBorder();
+
 void apply(QApplication &app);
 
 // Shared progress-bar helpers, used by UsageView and BoxDetailsPanel.
