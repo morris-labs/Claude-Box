@@ -1,20 +1,26 @@
 #include "MainWindow.h"
 
+#include <memory>
+
 #include "BoxDetailsPanel.h"
 #include "BoxRecord.h"
 #include "Icons.h"
 #include "ConversationCatalog.h"
 #include "ManageSshRemotesDialog.h"
 #include "NewBoxDialog.h"
+#include "PromptsDialog.h"
 #include "PortAllocator.h"
 #include "SetupWizard.h"
 #include "SshRemoteCatalog.h"
 #include "SshTunnelSession.h"
 #include "TerminalWidget.h"
 #include "Theme.h"
+#include "UpdateBar.h"
+#include "UpdateChecker.h"
 
 #include <QAction>
 #include <QApplication>
+#include <QNetworkAccessManager>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QtConcurrent>
@@ -115,6 +121,14 @@ MainWindow::MainWindow(QWidget *parent)
     // is reachable any time afterward via File > Setup....
     if (!SetupWizard::hasCompletedSetup())
         QTimer::singleShot(0, this, &MainWindow::onSetupWizard);
+
+    // Delay the update check a few seconds so the main window fully renders
+    // and the first box-list poll completes before the network request fires.
+    m_nam = new QNetworkAccessManager(this);
+    m_updateChecker = new UpdateChecker(m_nam, this);
+    connect(m_updateChecker, &UpdateChecker::updateAvailable,
+            m_updateBar, &UpdateBar::notify);
+    QTimer::singleShot(3000, m_updateChecker, &UpdateChecker::checkInBackground);
 }
 
 // --- construction -------------------------------------------------------
@@ -372,7 +386,17 @@ void MainWindow::buildUi()
     m_outerSplitter->setStretchFactor(1, 2);
     m_outerSplitter->setChildrenCollapsible(false);
     m_outerSplitter->setSizes({440, 360});
-    setCentralWidget(m_outerSplitter);
+
+    // The update bar sits above the splitter. It's hidden by default and
+    // only made visible when UpdateChecker signals an available release.
+    m_updateBar = new UpdateBar(this);
+    auto *centralContainer = new QWidget(this);
+    auto *centralLayout = new QVBoxLayout(centralContainer);
+    centralLayout->setContentsMargins(0, 0, 0, 0);
+    centralLayout->setSpacing(0);
+    centralLayout->addWidget(m_updateBar);
+    centralLayout->addWidget(m_outerSplitter, 1);
+    setCentralWidget(centralContainer);
 
     // When the Usage tab is active, the terminal panel is irrelevant and
     // would only waste vertical space. Hide it so Usage gets full height;
@@ -404,6 +428,10 @@ void MainWindow::buildMenus()
     fileMenu->addAction(m_newAction);
     fileMenu->addAction(m_setupAction);
     fileMenu->addAction(m_manageRemotesAction);
+    fileMenu->addAction(QStringLiteral("Edit &Prompts..."), this, [this] {
+        PromptsDialog dlg(this);
+        dlg.exec();
+    });
     fileMenu->addSeparator();
     QAction *quit = fileMenu->addAction(QStringLiteral("&Quit"), this, &QWidget::close);
     quit->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Q")));
@@ -443,6 +471,8 @@ void MainWindow::buildMenus()
     prevTab->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Left")));
 
     QMenu *helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
+    helpMenu->addAction(QStringLiteral("&Check for Updates"), this, &MainWindow::onCheckForUpdates);
+    helpMenu->addSeparator();
     helpMenu->addAction(QStringLiteral("&About claude-box"), this, &MainWindow::onAbout);
 }
 
@@ -2040,9 +2070,8 @@ void MainWindow::onPurge()
     }
 
     // Claude's own path encoding, not a naive slash swap: it collapses
-    // every non-alphanumeric byte, so a directory like app.odinhelp.com
-    // lands in -home-...-app-odinhelp-com. Purging with '/'-only encoding
-    // pointed at a path that never exists and silently left the
+    // every non-alphanumeric byte (dots included), so a naive '/'-only
+    // encoding points at a path that never exists and silently leaves
     // transcripts behind.
     const QString projectDir = ConversationCatalog::projectDirFor(dir);
 
@@ -2116,6 +2145,37 @@ void MainWindow::onAbout()
                        "<b>Ctrl+Shift</b> chords, leaving plain Ctrl keys to Claude Code "
                        "inside the terminal.</p>")
             .arg(QApplication::applicationVersion()));
+}
+
+void MainWindow::onCheckForUpdates()
+{
+    // checkNow() bypasses the 24-hour cooldown and emits one of three signals.
+    // All three connections are installed as a group so that whichever signal
+    // fires first cleans up the other two -- without this, the upToDate and
+    // checkFailed connections accumulate when updateAvailable fires instead.
+    auto handles = std::make_shared<QList<QMetaObject::Connection>>();
+    auto cleanup = [handles] {
+        for (const auto &c : *handles)
+            QObject::disconnect(c);
+        handles->clear();
+    };
+
+    handles->append(connect(m_updateChecker, &UpdateChecker::updateAvailable, this,
+        [cleanup](const QString &, const QUrl &) { cleanup(); },
+        Qt::SingleShotConnection));
+    handles->append(connect(m_updateChecker, &UpdateChecker::upToDate, this,
+        [this, cleanup] {
+            statusBar()->showMessage(QStringLiteral("claude-box is up to date."), 4000);
+            cleanup();
+        }, Qt::SingleShotConnection));
+    handles->append(connect(m_updateChecker, &UpdateChecker::checkFailed, this,
+        [this, cleanup](const QString &reason) {
+            statusBar()->showMessage(
+                QStringLiteral("Update check failed: %1").arg(reason), 5000);
+            cleanup();
+        }, Qt::SingleShotConnection));
+
+    m_updateChecker->checkNow();
 }
 
 // --- settings -----------------------------------------------------------
