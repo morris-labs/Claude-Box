@@ -49,5 +49,7 @@ private:
     const DockerBackend *m_docker;
     QNetworkAccessManager *m_nam;
     QFuture<QString> m_pendingFuture;
-    bool m_checkInProgress = false;
+    bool m_checkInProgress     = false;
+    bool m_pendingRecheck      = false;
+    bool m_pendingEmitUpToDate = false;
 };

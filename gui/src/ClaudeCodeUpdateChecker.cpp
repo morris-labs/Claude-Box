@@ -56,11 +56,18 @@ void ClaudeCodeUpdateChecker::cancelAndWait()
 
 void ClaudeCodeUpdateChecker::doCheck(bool emitUpToDate)
 {
-    // Guard against concurrent calls (e.g. the startup timer and a manual
-    // Help > Check action firing before the first reply lands).
-    if (m_checkInProgress)
+    // If a check is already in flight, queue a recheck for when it finishes.
+    // This covers the rebuild case: invalidateClaudeCodeVersionCache() clears
+    // the TTL, then checkNow() arrives while the docker probe is still running.
+    // The probe's result is for the old image; we must not commit it to cache.
+    if (m_checkInProgress) {
+        m_pendingRecheck      = true;
+        m_pendingEmitUpToDate = m_pendingEmitUpToDate || emitUpToDate;
         return;
-    m_checkInProgress = true;
+    }
+    m_checkInProgress     = true;
+    m_pendingRecheck      = false;
+    m_pendingEmitUpToDate = false;
 
     // Read the docker image version cache on the GUI thread. QSettings is
     // not thread-safe, so all reads and writes stay on the GUI thread; only
@@ -82,6 +89,18 @@ void ClaudeCodeUpdateChecker::doCheck(bool emitUpToDate)
     connect(watcher, &QFutureWatcher<QString>::finished, this,
             [this, watcher, emitUpToDate] {
         watcher->deleteLater();
+
+        // If a recheck was queued (e.g. image was rebuilt while this docker
+        // probe was in flight), discard the stale probe result and restart.
+        if (m_pendingRecheck) {
+            m_pendingRecheck      = false;
+            const bool notify     = m_pendingEmitUpToDate;
+            m_pendingEmitUpToDate = false;
+            m_checkInProgress     = false;
+            doCheck(notify);
+            return;
+        }
+
         const QString installed = watcher->result();
 
         // Write the version cache on the GUI thread (safe for QSettings).
@@ -117,6 +136,16 @@ void ClaudeCodeUpdateChecker::proceedWithNpmCheck(const QString &installed,
             [this, reply, installed, emitUpToDate] {
         reply->deleteLater();
         m_checkInProgress = false;
+
+        // Rebuild may also occur while the npm request is in flight; the
+        // installed version we captured is now stale.
+        if (m_pendingRecheck) {
+            const bool notify     = m_pendingEmitUpToDate;
+            m_pendingRecheck      = false;
+            m_pendingEmitUpToDate = false;
+            doCheck(notify);
+            return;
+        }
 
         if (reply->error() != QNetworkReply::NoError) {
             qDebug() << "ClaudeCodeUpdateChecker: npm error:"
