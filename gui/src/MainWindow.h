@@ -14,6 +14,7 @@
 #include "UsageView.h"
 
 class BoxDetailsPanel;
+class ClaudeCodeUpdateChecker;
 class SshTunnelSession;
 class UpdateBar;
 class UpdateChecker;
@@ -39,6 +40,9 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+
+public:
+    ~MainWindow() override;
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -69,6 +73,7 @@ private slots:
     void onPurge();
     void onAbout();
     void onCheckForUpdates();
+    void onCheckClaudeCodeUpdate();
 
     void onFilterChanged(const QString &text);
     void onCloseCurrentTab();
@@ -103,7 +108,9 @@ private:
 
     QNetworkAccessManager *m_nam = nullptr;
     UpdateChecker *m_updateChecker = nullptr;
+    ClaudeCodeUpdateChecker *m_claudeCodeChecker = nullptr;
     UpdateBar *m_updateBar = nullptr;
+    UpdateBar *m_claudeCodeUpdateBar = nullptr;
 
     // Docker polling runs on a worker thread: `docker stats` alone costs
     // 1-2 seconds per call, which froze the GUI for most of every refresh

@@ -2,8 +2,10 @@
 
 #include "ContainerPaths.h"
 #include "DockerApi.h"
+#include "PromptTemplates.h"
 
 #include <QCoreApplication>
+#include <QSettings>
 #include <QDir>
 #include <QEventLoop>
 #include <QTimer>
@@ -149,11 +151,7 @@ QString portHint(const QStringList &ports)
     if (mappings.isEmpty())
         return QString();
 
-    return QStringLiteral(
-        "The following container ports are mapped to the host: %1. Bind any web "
-        "server, API, or other network service the host needs to reach to one of "
-        "these container-side ports.")
-        .arg(mappings.join(QStringLiteral(", ")));
+    return PromptTemplates::portHint().arg(mappings.join(QStringLiteral(", ")));
 }
 
 } // namespace
@@ -561,6 +559,32 @@ bool DockerBackend::isRunning(const QString &name) const
     return out.split('\n', Qt::SkipEmptyParts).contains(name);
 }
 
+QString DockerBackend::claudeCodeImageVersion() const
+{
+    // Reads the version file written into the image at build time. An image
+    // built before this file existed returns a non-zero exit code, leaving
+    // the output empty -- the caller treats that as "unknown / out of date".
+    //
+    // This method is intentionally free of QSettings: it runs on a thread-
+    // pool thread (called from ClaudeCodeUpdateChecker), and QSettings is not
+    // thread-safe. The caller caches the result and writes to QSettings on the
+    // GUI thread.
+    QString out, err;
+    const bool ok = runDocker(
+        {QStringLiteral("run"), QStringLiteral("--rm"),
+         QStringLiteral("--entrypoint"), QStringLiteral(""),
+         QStringLiteral("claude-code"),
+         QStringLiteral("cat"), QStringLiteral("/etc/claude-code-version")},
+        &out, &err, 15000);
+    return ok ? out.trimmed() : QString();
+}
+
+void DockerBackend::invalidateClaudeCodeVersionCache()
+{
+    QSettings s;
+    s.remove(QStringLiteral("claudeCode/versionCachedAt"));
+}
+
 // Username inside the container, derived from the host at runtime so the
 // image can be built with any USER_NAME and still match what the host expects.
 // Falls back to "user" if none of $USER (Linux/macOS), $LOGNAME (POSIX),
@@ -856,18 +880,21 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
 
         rec.workspaceDir = slug;
 
-        openingPrompt = QString(
-            "Your workspace for this conversation is the %1/ folder in this directory, and it "
-            "already exists. Read this directory's CLAUDE.md for how a workspace here is set up, "
-            "do that setup inside %1/, and work there rather than in the directory above it. The "
-            "conversation was opened as \"%2\". Wait for details before changing anything.")
-            .arg(slug, rec.conversationName);
+        openingPrompt = PromptTemplates::workspace().arg(slug, rec.conversationName);
 
         // One name for everything: the folder, the box, the record and
         // claude's own session name all become the slug, so a row in the
         // dashboard, a container in `docker ps` and a directory listing
         // all say the same word.
         rec.conversationName = slug;
+    }
+
+    // Starter prompt: sent to new boxes that have no workspace subfolder.
+    // Empty by default; configured in File > Edit Prompts.
+    if (!resumeExisting && !provisionWorkspace) {
+        const QString s = PromptTemplates::starter();
+        if (!s.isEmpty())
+            openingPrompt = s.arg(rec.conversationName, rec.targetDir);
     }
 
     // Tell the agent which ports it can use for services the host needs to

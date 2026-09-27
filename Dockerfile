@@ -54,7 +54,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code && \
+    node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version" \
+    > /etc/claude-code-version
 
 USER ${USER_NAME}
 

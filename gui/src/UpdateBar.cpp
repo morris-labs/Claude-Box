@@ -94,4 +94,3 @@ void UpdateBar::notifyWithAction(const QString &message,
     m_actionLink->setVisible(true);
     setVisible(true);
 }
-

@@ -4,6 +4,7 @@
 
 #include "BoxDetailsPanel.h"
 #include "BoxRecord.h"
+#include "ClaudeCodeUpdateChecker.h"
 #include "Icons.h"
 #include "ConversationCatalog.h"
 #include "ManageSshRemotesDialog.h"
@@ -88,6 +89,16 @@ const QString kDetailsKey     = QStringLiteral("ui/detailsVisible");
 const QString kTableHeaderKey = QStringLiteral("ui/tableHeader");
 }
 
+MainWindow::~MainWindow()
+{
+    // m_docker is a value member of MainWindow, destroyed after this destructor
+    // body. Any in-flight thread-pool job in m_claudeCodeChecker holds a raw
+    // pointer to m_docker; block here until that job finishes so the pointer
+    // is never accessed after m_docker's destructor runs.
+    if (m_claudeCodeChecker)
+        m_claudeCodeChecker->cancelAndWait();
+}
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
@@ -122,13 +133,30 @@ MainWindow::MainWindow(QWidget *parent)
     if (!SetupWizard::hasCompletedSetup())
         QTimer::singleShot(0, this, &MainWindow::onSetupWizard);
 
-    // Delay the update check a few seconds so the main window fully renders
-    // and the first box-list poll completes before the network request fires.
+    // Delay update checks a few seconds so the main window fully renders
+    // and the first box-list poll completes before any network request fires.
     m_nam = new QNetworkAccessManager(this);
+
     m_updateChecker = new UpdateChecker(m_nam, this);
     connect(m_updateChecker, &UpdateChecker::updateAvailable,
             m_updateBar, &UpdateBar::notify);
     QTimer::singleShot(3000, m_updateChecker, &UpdateChecker::checkInBackground);
+
+    m_claudeCodeChecker = new ClaudeCodeUpdateChecker(&m_docker, m_nam, this);
+    connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::updateAvailable,
+            this, [this](const QString &installed, const QString &latest) {
+        const QString message = installed.isEmpty()
+            ? QStringLiteral(
+                "Claude Code %1 is available. The claude-code image needs a rebuild.").arg(latest)
+            : QStringLiteral(
+                "Claude Code %1 is available (image has %2).").arg(latest, installed);
+        m_claudeCodeUpdateBar->notifyWithAction(message, QStringLiteral("Rebuild image"),
+                                               [this] { onSetupWizard(); });
+    });
+    connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::upToDate,
+            m_claudeCodeUpdateBar, &UpdateBar::hide);
+    QTimer::singleShot(4000, m_claudeCodeChecker,
+                       &ClaudeCodeUpdateChecker::checkInBackground);
 }
 
 // --- construction -------------------------------------------------------
@@ -387,14 +415,16 @@ void MainWindow::buildUi()
     m_outerSplitter->setChildrenCollapsible(false);
     m_outerSplitter->setSizes({440, 360});
 
-    // The update bar sits above the splitter. It's hidden by default and
-    // only made visible when UpdateChecker signals an available release.
+    // The two update bars sit above the splitter, each hidden by default.
+    // Each checker owns one bar independently so they never overwrite each other.
     m_updateBar = new UpdateBar(this);
+    m_claudeCodeUpdateBar = new UpdateBar(this);
     auto *centralContainer = new QWidget(this);
     auto *centralLayout = new QVBoxLayout(centralContainer);
     centralLayout->setContentsMargins(0, 0, 0, 0);
     centralLayout->setSpacing(0);
     centralLayout->addWidget(m_updateBar);
+    centralLayout->addWidget(m_claudeCodeUpdateBar);
     centralLayout->addWidget(m_outerSplitter, 1);
     setCentralWidget(centralContainer);
 
@@ -472,6 +502,8 @@ void MainWindow::buildMenus()
 
     QMenu *helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
     helpMenu->addAction(QStringLiteral("&Check for Updates"), this, &MainWindow::onCheckForUpdates);
+    helpMenu->addAction(QStringLiteral("Check for &Claude Code Update"), this,
+                        &MainWindow::onCheckClaudeCodeUpdate);
     helpMenu->addSeparator();
     helpMenu->addAction(QStringLiteral("&About claude-box"), this, &MainWindow::onAbout);
 }
@@ -2119,6 +2151,11 @@ void MainWindow::onSetupWizard()
 {
     SetupWizard dlg(this);
     dlg.exec();
+    // If the wizard rebuilt the image, the version cache was invalidated by
+    // SetupWizard; re-check now so the update bar reflects the new state
+    // immediately rather than waiting for the next 24-hour cooldown cycle.
+    if (m_claudeCodeChecker)
+        m_claudeCodeChecker->checkNow();
 }
 
 void MainWindow::onManageSshRemotes()
@@ -2176,6 +2213,39 @@ void MainWindow::onCheckForUpdates()
         }, Qt::SingleShotConnection));
 
     m_updateChecker->checkNow();
+}
+
+void MainWindow::onCheckClaudeCodeUpdate()
+{
+    // Same grouped-cleanup pattern as onCheckForUpdates(): whichever signal
+    // fires first removes the other two, so they don't accumulate across
+    // repeated manual checks while an update is already available.
+    auto handles = std::make_shared<QList<QMetaObject::Connection>>();
+    auto cleanup = [handles] {
+        for (const auto &c : *handles)
+            QObject::disconnect(c);
+        handles->clear();
+    };
+
+    handles->append(connect(m_claudeCodeChecker,
+        &ClaudeCodeUpdateChecker::updateAvailable, this,
+        [cleanup](const QString &, const QString &) { cleanup(); },
+        Qt::SingleShotConnection));
+    handles->append(connect(m_claudeCodeChecker,
+        &ClaudeCodeUpdateChecker::upToDate, this,
+        [this, cleanup] {
+            statusBar()->showMessage(QStringLiteral("Claude Code is up to date."), 4000);
+            cleanup();
+        }, Qt::SingleShotConnection));
+    handles->append(connect(m_claudeCodeChecker,
+        &ClaudeCodeUpdateChecker::checkFailed, this,
+        [this, cleanup](const QString &reason) {
+            statusBar()->showMessage(
+                QStringLiteral("Claude Code update check failed: %1").arg(reason), 5000);
+            cleanup();
+        }, Qt::SingleShotConnection));
+
+    m_claudeCodeChecker->checkNow();
 }
 
 // --- settings -----------------------------------------------------------

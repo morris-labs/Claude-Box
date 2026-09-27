@@ -11,7 +11,7 @@
 
 #define AppName      "Claude Box"
 #define AppVersion   "3.2.0"
-#define AppPublisher "Isaac Morris"
+#define AppPublisher "Morris Labs"
 #define AppExeName   "claude-box-gui.exe"
 #define BuildDir     "..\build\Release"
 
@@ -20,7 +20,7 @@ AppId={{A3F2C1D4-7B8E-4F5A-9C2D-1E6B3A4F7D8C}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-AppPublisherURL=https://github.com/morris-lab-experiments/claude-box
+AppPublisherURL=https://github.com/morris-labs/claude-box
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 AllowNoIcons=yes
