@@ -11,6 +11,7 @@
 #include <QNetworkRequest>
 #include <QSettings>
 #include <QVersionNumber>
+#include <QFutureWatcher>
 #include <QtConcurrent>
 #include <QtDebug>
 
