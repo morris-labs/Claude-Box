@@ -23,6 +23,10 @@ QColor text();
 QColor dimText();
 QColor accent();
 
+// Colors for the update notification bar (amber tone).
+QColor updateBarBg();
+QColor updateBarBorder();
+
 // Status colors, shared by the table's dots and the details panel.
 QColor running();
 QColor stopped();
