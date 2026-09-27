@@ -110,6 +110,10 @@ private:
     UpdateChecker *m_updateChecker = nullptr;
     ClaudeCodeUpdateChecker *m_claudeCodeChecker = nullptr;
     UpdateBar *m_updateBar = nullptr;
+    // True while the update bar is showing a Claude Code staleness message.
+    // Guards against ClaudeCodeUpdateChecker::upToDate hiding an app-update
+    // notification that UpdateChecker wrote to the same bar.
+    bool m_updateBarIsClaudeCode = false;
 
     // Docker polling runs on a worker thread: `docker stats` alone costs
     // 1-2 seconds per call, which froze the GUI for most of every refresh

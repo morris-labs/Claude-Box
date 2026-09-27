@@ -120,16 +120,12 @@ void ClaudeCodeUpdateChecker::doCheck(bool emitUpToDate)
 void ClaudeCodeUpdateChecker::proceedWithNpmCheck(const QString &installed,
                                                    bool emitUpToDate)
 {
-    // Record the cooldown timestamp now that the docker step has either
-    // completed or was served from cache.
-    QSettings s;
-    s.setValue(kLastCheckKey, QDateTime::currentSecsSinceEpoch());
-
     const QUrl npmUrl(kNpmUrl);
     QNetworkRequest req(npmUrl);
     req.setRawHeader("User-Agent",
         QStringLiteral("claude-box-gui/%1")
             .arg(QApplication::applicationVersion()).toUtf8());
+    req.setTransferTimeout(10000);
 
     QNetworkReply *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this,
@@ -178,6 +174,7 @@ void ClaudeCodeUpdateChecker::proceedWithNpmCheck(const QString &installed,
         // built yet or was built before /etc/claude-code-version was added.
         // Treat it as out of date either way.
         if (installed.isEmpty()) {
+            QSettings().setValue(kLastCheckKey, QDateTime::currentSecsSinceEpoch());
             emit updateAvailable(installed, latest);
             return;
         }
@@ -195,6 +192,10 @@ void ClaudeCodeUpdateChecker::proceedWithNpmCheck(const QString &installed,
                     QStringLiteral("Could not compare version numbers."));
             return;
         }
+
+        // Persist the cooldown only on a successful registry response with
+        // parseable version numbers -- same policy as UpdateChecker.
+        QSettings().setValue(kLastCheckKey, QDateTime::currentSecsSinceEpoch());
 
         if (QVersionNumber::compare(remoteVer, localVer) > 0)
             emit updateAvailable(installed, latest);
