@@ -139,10 +139,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_updateChecker = new UpdateChecker(m_nam, this);
     connect(m_updateChecker, &UpdateChecker::updateAvailable,
-            this, [this](const QString &newVersion, const QUrl &releaseUrl) {
-        m_updateBarIsClaudeCode = false;
-        m_updateBar->notify(newVersion, releaseUrl);
-    });
+            m_updateBar, &UpdateBar::notify);
     QTimer::singleShot(3000, m_updateChecker, &UpdateChecker::checkInBackground);
 
     m_claudeCodeChecker = new ClaudeCodeUpdateChecker(&m_docker, m_nam, this);
@@ -153,19 +150,11 @@ MainWindow::MainWindow(QWidget *parent)
                 "Claude Code %1 is available. The claude-code image needs a rebuild.").arg(latest)
             : QStringLiteral(
                 "Claude Code %1 is available (image has %2).").arg(latest, installed);
-        m_updateBarIsClaudeCode = true;
-        m_updateBar->notifyWithAction(message, QStringLiteral("Rebuild image"),
-                                     [this] { onSetupWizard(); });
+        m_claudeCodeUpdateBar->notifyWithAction(message, QStringLiteral("Rebuild image"),
+                                               [this] { onSetupWizard(); });
     });
-    // Only hide the bar when it is showing a Claude Code notification.
-    // If UpdateChecker wrote an app-update notification, leave it visible.
     connect(m_claudeCodeChecker, &ClaudeCodeUpdateChecker::upToDate,
-            this, [this] {
-        if (m_updateBarIsClaudeCode) {
-            m_updateBar->hide();
-            m_updateBarIsClaudeCode = false;
-        }
-    });
+            m_claudeCodeUpdateBar, &UpdateBar::hide);
     QTimer::singleShot(4000, m_claudeCodeChecker,
                        &ClaudeCodeUpdateChecker::checkInBackground);
 }
@@ -426,14 +415,16 @@ void MainWindow::buildUi()
     m_outerSplitter->setChildrenCollapsible(false);
     m_outerSplitter->setSizes({440, 360});
 
-    // The update bar sits above the splitter. It's hidden by default and
-    // only made visible when an update checker signals an available release.
+    // The two update bars sit above the splitter, each hidden by default.
+    // Each checker owns one bar independently so they never overwrite each other.
     m_updateBar = new UpdateBar(this);
+    m_claudeCodeUpdateBar = new UpdateBar(this);
     auto *centralContainer = new QWidget(this);
     auto *centralLayout = new QVBoxLayout(centralContainer);
     centralLayout->setContentsMargins(0, 0, 0, 0);
     centralLayout->setSpacing(0);
     centralLayout->addWidget(m_updateBar);
+    centralLayout->addWidget(m_claudeCodeUpdateBar);
     centralLayout->addWidget(m_outerSplitter, 1);
     setCentralWidget(centralContainer);
 
