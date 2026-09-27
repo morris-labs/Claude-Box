@@ -224,3 +224,4 @@ bool DockerApi::del(const QString &path, QString *errorOut, int timeoutMs)
     }
     return true;
 }
+
