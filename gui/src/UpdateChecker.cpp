@@ -39,11 +39,14 @@ void UpdateChecker::checkNow()
 
 void UpdateChecker::doCheck(bool emitUpToDate)
 {
-    // Guard against concurrent requests (e.g. the startup timer and a Help >
-    // Check for Updates click arriving before the first reply lands).
-    if (m_pendingCheck)
+    // If a request is already in flight, record whether this caller wants
+    // upToDate/checkFailed feedback; the pending reply will honor it.
+    if (m_pendingCheck) {
+        m_pendingEmitUpToDate = m_pendingEmitUpToDate || emitUpToDate;
         return;
-    m_pendingCheck = true;
+    }
+    m_pendingCheck        = true;
+    m_pendingEmitUpToDate = false;
 
     const QUrl apiUrl(kReleasesUrl);
     QNetworkRequest req(apiUrl);
@@ -51,27 +54,27 @@ void UpdateChecker::doCheck(bool emitUpToDate)
         QStringLiteral("claude-box-gui/%1")
             .arg(QApplication::applicationVersion()).toUtf8());
     req.setRawHeader("Accept", "application/vnd.github+json");
+    req.setTransferTimeout(10000);
 
     QNetworkReply *reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, emitUpToDate] {
         reply->deleteLater();
         m_pendingCheck = false;
+        const bool shouldNotify = emitUpToDate || m_pendingEmitUpToDate;
+        m_pendingEmitUpToDate   = false;
 
         if (reply->error() != QNetworkReply::NoError) {
             qDebug() << "UpdateChecker: network error:" << reply->errorString();
-            if (emitUpToDate)
+            if (shouldNotify)
                 emit checkFailed(reply->errorString());
             return;
         }
-
-        QSettings s;
-        s.setValue(kLastCheckKey, QDateTime::currentSecsSinceEpoch());
 
         QJsonParseError parseErr;
         const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll(), &parseErr);
         if (parseErr.error != QJsonParseError::NoError || !doc.isObject()) {
             qDebug() << "UpdateChecker: bad JSON:" << parseErr.errorString();
-            if (emitUpToDate)
+            if (shouldNotify)
                 emit checkFailed(QStringLiteral("Unexpected response from GitHub."));
             return;
         }
@@ -82,7 +85,7 @@ void UpdateChecker::doCheck(bool emitUpToDate)
 
         if (tag.isEmpty() || url.isEmpty()) {
             qDebug() << "UpdateChecker: missing tag_name or html_url";
-            if (emitUpToDate)
+            if (shouldNotify)
                 emit checkFailed(QStringLiteral("Unexpected response from GitHub."));
             return;
         }
@@ -99,7 +102,7 @@ void UpdateChecker::doCheck(bool emitUpToDate)
         if (remote.isNull() || local.isNull()) {
             qDebug() << "UpdateChecker: could not parse versions:" << tag
                      << QApplication::applicationVersion();
-            if (emitUpToDate)
+            if (shouldNotify)
                 emit checkFailed(QStringLiteral("Could not compare version numbers."));
             return;
         }
@@ -110,14 +113,18 @@ void UpdateChecker::doCheck(bool emitUpToDate)
         // guard against it anyway rather than silently dropping the suffix.
         if (suffix != tag.size()) {
             qDebug() << "UpdateChecker: tag has pre-release suffix, ignoring:" << tag;
-            if (emitUpToDate)
+            if (shouldNotify)
                 emit checkFailed(QStringLiteral("Could not compare version numbers."));
             return;
         }
 
+        // Persist last-check only after a valid release response is parsed.
+        QSettings s;
+        s.setValue(kLastCheckKey, QDateTime::currentSecsSinceEpoch());
+
         if (QVersionNumber::compare(remote, local) > 0) {
             emit updateAvailable(remote.toString(), QUrl(url));
-        } else if (emitUpToDate) {
+        } else if (shouldNotify) {
             emit upToDate();
         }
     });

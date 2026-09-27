@@ -5,6 +5,7 @@
 #include <QWidget>
 
 class QLabel;
+class QPushButton;
 
 // A slim info bar shown when a newer version is available. Sits above the
 // main content area; hidden by default. Call notify() to show it.
@@ -28,12 +29,9 @@ public:
     void notifyWithAction(const QString &message, const QString &actionLabel,
                           std::function<void()> action);
 
-protected:
-    bool eventFilter(QObject *obj, QEvent *event) override;
-
 private:
-    QLabel *m_messageLabel = nullptr;
-    QLabel *m_actionLink   = nullptr;
+    QLabel      *m_messageLabel = nullptr;
+    QPushButton *m_actionLink   = nullptr;
     std::function<void()> m_action;
     QUrl m_releaseUrl;
     QString m_dismissedVersion;

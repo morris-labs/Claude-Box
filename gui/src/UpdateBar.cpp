@@ -3,10 +3,8 @@
 #include "Theme.h"
 
 #include <QDesktopServices>
-#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMouseEvent>
 #include <QPushButton>
 #include <QSettings>
 
@@ -26,12 +24,14 @@ UpdateBar::UpdateBar(QWidget *parent)
     m_messageLabel->setStyleSheet(
         QStringLiteral("color: %1; background: transparent;").arg(Theme::text().name()));
 
-    m_actionLink = new QLabel(this);
+    m_actionLink = new QPushButton(this);
+    m_actionLink->setFlat(true);
     m_actionLink->setStyleSheet(
-        QStringLiteral("color: %1; text-decoration: underline;").arg(Theme::accent().name()));
+        QStringLiteral("QPushButton { color: %1; text-decoration: underline;"
+                       " background: transparent; border: none; padding: 0px; }")
+            .arg(Theme::accent().name()));
     m_actionLink->setCursor(Qt::PointingHandCursor);
     m_actionLink->setVisible(false);
-    m_actionLink->installEventFilter(this);
 
     auto *dismiss = new QPushButton(QStringLiteral("\xc3\x97"), this);
     dismiss->setFlat(true);
@@ -47,6 +47,13 @@ UpdateBar::UpdateBar(QWidget *parent)
     layout->addWidget(m_messageLabel, 1);
     layout->addWidget(m_actionLink);
     layout->addWidget(dismiss);
+
+    connect(m_actionLink, &QPushButton::clicked, this, [this] {
+        if (m_action)
+            m_action();
+        else if (m_releaseUrl.isValid())
+            QDesktopServices::openUrl(m_releaseUrl);
+    });
 
     connect(dismiss, &QPushButton::clicked, this, [this] {
         if (!m_dismissedVersion.isEmpty()) {
@@ -88,14 +95,3 @@ void UpdateBar::notifyWithAction(const QString &message,
     setVisible(true);
 }
 
-bool UpdateBar::eventFilter(QObject *obj, QEvent *event)
-{
-    if (obj == m_actionLink && event->type() == QEvent::MouseButtonRelease) {
-        if (m_action)
-            m_action();
-        else if (m_releaseUrl.isValid())
-            QDesktopServices::openUrl(m_releaseUrl);
-        return true;
-    }
-    return QWidget::eventFilter(obj, event);
-}
