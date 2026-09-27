@@ -8,8 +8,10 @@ gui/build/
 # IDE/editor state -- local to each developer's machine.
 /.vscode/
 
-# Git credential store -- holds a live GitHub PAT, must never be committed.
-/.git-credentials
+# Git credential store and env files -- hold live PATs/secrets, must never be committed.
+.git-credentials
+.env
+*.env
 
 # Per-platform release workspaces -- local working directories, not source.
 /Windows_Release/

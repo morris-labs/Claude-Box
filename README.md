@@ -7,10 +7,10 @@ and interacting with them in an embedded terminal.
 
 Each sandbox is a disposable container built from a single `Dockerfile`. The
 GUI mounts your project directory into the container at the identical path,
-runs Claude Code with `--dangerously-skip-permissions` by default, and keeps
-the container alive with `docker run --rm` until you close it, so nothing
-lingers on disk beyond the container's `--rm` lifecycle and your project
-files.
+runs Claude Code with `--dangerously-skip-permissions` (a per-box toggle,
+on by default), and keeps the container alive with `docker run --rm` until
+you close it, so nothing lingers on disk beyond the container's `--rm`
+lifecycle and your project files.
 
 ## Features
 
@@ -27,7 +27,8 @@ files.
 - **Multi-select actions**: select several boxes at once to open, stop, or
   remove them together.
 - **Open in an external terminal**: attach to a running box's `tmux` session
-  in your system terminal instead of an in-app tab.
+  in your system terminal instead of an in-app tab for either the Claude Code
+  session or the docker shell session.
 - **Single instance**: launching the app while it's already running raises
   the existing window instead of opening a second one.
 
@@ -37,12 +38,13 @@ files.
   adopt a conversation that Claude Code already created outside the app, or
   fork an existing conversation into a new box.
 - **Per-box configuration**: model, reasoning effort, permission bypass, port
-  forwards, extra mounts, and SSH remotes, all editable per box.
-- **Workspace folders**: point a box at a named subfolder of your project
-  instead of the tree root, so several conversations can work side by side
-  without colliding.
+  forwards, extra mounts, and SSH remotes - all editable per box.
+- **Workspace sub-folders**: point a box at your project directory or repo root,
+  then create a working sub-folder from the conversation name so multiple Issues or
+  PRs can be worked on side by side without colliding.
 - **Working directory management**: move or change a box's project directory
-  from within the app, and relink a box whose directory has gone missing.
+  from within the app, and relink a box whose directory has gone missing due to
+  external moves or renames.
 - **Automatic port allocation**: each new box gets a block of 5 host ports
   from a shared range, so simultaneous boxes never collide.
 - **Resume after reboot**: the app remembers which boxes were running and
@@ -67,18 +69,21 @@ files.
 
 ### Cross-platform
 
-A native build for Linux, with a Windows port in progress. For details, see
-[Windows support](#windows-support).
+A native build for Linux, Windows, and Mac have been released, as well as
+build scripts for building it yourself.
 
 ## How it works
 
 A box is a container started with `docker run -d -i -t --rm --name
-claude-agent-<name> ...`. The GUI attaches to it with `docker attach`, wires
-the attach process to a PTY, and renders that PTY in a terminal tab. Closing a
-tab only detaches the local `docker attach` client — the container keeps
-running until you explicitly close the box. Because of `--rm`, `docker ps` is
-always the source of truth for whether a box is running: nothing else needs to
-track container state across a restart or a crash.
+claude-agent-<name> ...`. The container's entrypoint starts a `tmux` session
+running Claude Code, then waits in a keeper loop while that session is alive.
+The GUI opens a tab with `docker exec -it ... tmux attach -t main`, wires that
+process to a PTY, and renders it in a terminal tab. Closing a tab detaches the
+`tmux` client — `bash` is PID 1 in the container, not the client, so the
+container keeps running until Claude Code exits and `tmux` ends the session.
+Because of `--rm`, `docker ps` is always the source of truth for whether a box
+is running: nothing else needs to track container state across a restart or a
+crash.
 
 The container mounts your project directory at the same path inside the
 container as it has on the host, plus your `~/.claude` and `~/.claude.json`
@@ -88,27 +93,45 @@ does outside the sandbox.
 ## Prerequisites
 
 - Docker, with the daemon reachable from your user account.
-- Qt 6 and `libvterm` development packages, to build the GUI.
 
 ## Build and run
 
+The build scripts in `scripts/` install all missing prerequisites automatically.
+
+**Linux** (Ubuntu 22.04+, Fedora 36+, Arch):
+
 ```bash
-sudo apt install qt6-base-dev cmake build-essential libvterm-dev pkg-config
-cd gui
-cmake -B build
-cmake --build build
-./build/claude-box-gui
+./scripts/build-linux.sh
 ```
 
-The first run walks you through a setup wizard that builds the sandbox image
-from the repository's `Dockerfile`.
+Produces an AppImage, `.deb`, and `.rpm` under `installer/`.
 
-### Install a desktop entry
+**macOS**:
+
+```bash
+./scripts/build-mac.sh
+```
+
+Requires Homebrew. Produces a `.dmg` under `installer/`.
+
+**Windows** (Windows 10 1809+ or Windows 11):
+
+```powershell
+.\scripts\build-windows.ps1
+```
+
+Run in an elevated PowerShell session for the initial prerequisite install.
+Produces an `.exe` installer under `installer/`.
+
+The first run of the app walks you through a setup wizard that builds the
+sandbox image from the repository's `Dockerfile`.
+
+### Install a desktop entry (Linux)
 
 To add Claude Box to your application launcher:
 
 ```bash
-cmake --build build --target desktop-install
+cmake --build gui/build --target desktop-install
 ```
 
 This installs a `.desktop` file and icon under
@@ -116,19 +139,11 @@ This installs a `.desktop` file and icon under
 desktop environment, rather than by double-clicking the built binary or the
 `.desktop` file directly.
 
-## Windows support
-
-A native Windows build is in progress on the `main` branch. The GUI compiles
-and runs against Docker Desktop's WSL2 backend, including container attach,
-terminal rendering, and live stats over the Docker Engine API's named pipe.
-End-to-end validation against the `claude-code` image built from this
-repository's `Dockerfile` is still pending. See `CLAUDE.md` for implementation
-details.
-
 ## Repository layout
 
 - `Dockerfile`: builds the `claude-code` sandbox image.
 - `gui/`: the C++/Qt6 desktop application.
+- `scripts/`: platform build scripts (`build-linux.sh`, `build-mac.sh`, `build-windows.ps1`).
 - `CLAUDE.md`: detailed architecture and development notes for contributors.
 
 ## Development
