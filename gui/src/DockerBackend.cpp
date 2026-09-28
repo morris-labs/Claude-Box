@@ -1,6 +1,7 @@
 #include "DockerBackend.h"
 
 #include "ContainerPaths.h"
+#include "ConversationCatalog.h"
 #include "DockerApi.h"
 #include "PromptTemplates.h"
 
@@ -633,6 +634,21 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
                << (QDir::homePath() + "/.claude:" + containerHome + "/.claude")
                << (QDir::homePath() + "/.claude.json:" + containerHome + "/.claude.json");
 
+    // If ~/.claude/projects is a symlink pointing outside ~/.claude (e.g. the
+    // claude-account-switch shared-projects setup), that symlink is dangling
+    // inside the container because only ~/.claude itself is mounted. Detect
+    // this and add an explicit bind for the target at the same absolute path
+    // so the symlink resolves correctly inside the container.
+    {
+        const QFileInfo projectsInfo(QDir::homePath() + QStringLiteral("/.claude/projects"));
+        if (projectsInfo.isSymLink()) {
+            const QString target = projectsInfo.symLinkTarget();
+            const QString resolvedClaude = QFileInfo(QDir::homePath() + QStringLiteral("/.claude")).canonicalFilePath();
+            if (!target.startsWith(resolvedClaude + QLatin1Char('/')) && target != resolvedClaude)
+                spec.binds << (target + QLatin1Char(':') + target);
+        }
+    }
+
     QString gitSetup = "git config --global --add safe.directory \"$1\"";
     // The file is checked for on the host, but the value handed to the
     // container has to be the *container-side* path -- on Windows the host
@@ -692,6 +708,18 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
          << "-v" << (rec.targetDir + ":" + containerDir)
          << "-v" << (QDir::homePath() + "/.claude:" + cliContainerHome + "/.claude")
          << "-v" << (QDir::homePath() + "/.claude.json:" + cliContainerHome + "/.claude.json");
+
+    // Same reasoning as launchSpec(): if ~/.claude/projects symlinks outside
+    // ~/.claude, add an explicit bind for its target so it isn't dangling.
+    {
+        const QFileInfo projectsInfo(QDir::homePath() + QStringLiteral("/.claude/projects"));
+        if (projectsInfo.isSymLink()) {
+            const QString target = projectsInfo.symLinkTarget();
+            const QString resolvedClaude = QFileInfo(QDir::homePath() + QStringLiteral("/.claude")).canonicalFilePath();
+            if (!target.startsWith(resolvedClaude + QLatin1Char('/')) && target != resolvedClaude)
+                args << QStringLiteral("-v") << (target + QLatin1Char(':') + target);
+        }
+    }
 
     // Container-side path, not the host one -- see launchSpec() for why.
     if (QFileInfo::exists(rec.targetDir + "/gitconfig")) {
@@ -966,13 +994,34 @@ QStringList DockerBackend::baseClaudeArgs(const BoxRecord &rec)
 
 bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
 {
-    QStringList claudeArgs = baseClaudeArgs(rec);
-    claudeArgs << "--resume" << rec.sessionUuid;
+    BoxRecord updated = rec;
+    QStringList claudeArgs = baseClaudeArgs(updated);
 
-    if (!runContainer(rec, claudeArgs, errorOut))
+    if (!updated.conversationName.isEmpty())
+        claudeArgs << "--name" << updated.conversationName;
+
+    // If the transcript is missing (box crashed before Claude wrote it,
+    // or the session store was relocated by an account-switch script),
+    // fall back to a fresh session. Claude silently starts a new
+    // conversation when --resume gets an unknown UUID, so we detect this
+    // explicitly: mint a new UUID and use --session-id, which keeps the
+    // record consistent so subsequent reopens find the new transcript.
+    const QString transcriptPath =
+        ConversationCatalog::projectDirFor(updated.targetDir)
+        + QLatin1Char('/') + updated.sessionUuid + QStringLiteral(".jsonl");
+    const bool hasTranscript = !updated.sessionUuid.isEmpty()
+                               && QFile::exists(transcriptPath);
+
+    if (!hasTranscript)
+        updated.sessionUuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    claudeArgs << (hasTranscript ? QStringLiteral("--resume")
+                                 : QStringLiteral("--session-id"))
+               << updated.sessionUuid;
+
+    if (!runContainer(updated, claudeArgs, errorOut))
         return false;
 
-    BoxRecord updated = rec;
     updated.wasRunning = true;
     updated.save();
     return true;
