@@ -37,7 +37,7 @@ PromptsDialog::PromptsDialog(QWidget *parent)
     m_starterEdit = makeTab(tabs,
         QStringLiteral("Starter"),
         QStringLiteral("Sent as the opening message for new boxes that have no workspace "
-                       "subfolder. Leave empty to send no opening message. Port hints are "
+                       "subfolder. Clear the field to send no opening message. Port hints are "
                        "appended after this when ports are also mapped."),
         QStringLiteral("Placeholders: %1 = conversation name,  %2 = target directory"),
         PromptTemplates::starter(),

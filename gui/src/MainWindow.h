@@ -111,6 +111,7 @@ private:
     ClaudeCodeUpdateChecker *m_claudeCodeChecker = nullptr;
     UpdateBar *m_updateBar = nullptr;
     UpdateBar *m_claudeCodeUpdateBar = nullptr;
+    UpdateBar *m_dockerBar = nullptr;
 
     // Docker polling runs on a worker thread: `docker stats` alone costs
     // 1-2 seconds per call, which froze the GUI for most of every refresh
@@ -119,6 +120,7 @@ private:
     // a mutex.
     QFutureWatcher<QList<BoxInfo>> *m_refreshWatcher = nullptr;
     bool m_hasLoadedOnce = false;
+    bool m_dockerStartAttempted = false;
     QLabel *m_statusCounts = nullptr;
     QLabel *m_statusRefreshed = nullptr;
 

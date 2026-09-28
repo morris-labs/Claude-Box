@@ -91,6 +91,6 @@ void UpdateBar::notifyWithAction(const QString &message,
 
     m_messageLabel->setText(message);
     m_actionLink->setText(actionLabel);
-    m_actionLink->setVisible(true);
+    m_actionLink->setVisible(!actionLabel.isEmpty());
     setVisible(true);
 }
