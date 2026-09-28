@@ -61,6 +61,7 @@ private slots:
     void onEdit();
     void offerResumeAfterReboot();
     void onFork();
+    void onSwitchAccount();
     void onSetupWizard();
     void onManageSshRemotes();
     void onOpen();
@@ -125,6 +126,7 @@ private:
     QLabel *m_statusRefreshed = nullptr;
 
     QAction *m_newAction = nullptr;
+    QAction *m_switchAccountAction = nullptr;
     QAction *m_setupAction = nullptr;
     QAction *m_manageRemotesAction = nullptr;
     QAction *m_editAction = nullptr;
