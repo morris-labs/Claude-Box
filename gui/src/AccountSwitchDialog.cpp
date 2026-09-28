@@ -235,12 +235,11 @@ bool AccountSwitchDialog::performSwitch(const QString &toProfile, QString *error
     if (!QFile::link(claudeDir, claudeLink))
         return fail(QStringLiteral("Could not create symlink ~/.claude -> ") + claudeDir);
 
-    // ~/.claude.json: a permanent forwarding symlink created once.
-    if (!QFileInfo(claudeJson).isSymLink()) {
-        QFile::remove(claudeJson);
-        if (!QFile::link(claudeDir + "/.claude.json", claudeJson))
-            return fail(QStringLiteral("Could not create ~/.claude.json forwarding symlink"));
-    }
+    // ~/.claude.json always points to the active profile's .claude.json, so
+    // update it on every switch (not just the first time).
+    QFile::remove(claudeJson);
+    if (!QFile::link(claudeDir + "/.claude.json", claudeJson))
+        return fail(QStringLiteral("Could not create ~/.claude.json forwarding symlink"));
 
     return true;
 }
