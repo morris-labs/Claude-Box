@@ -172,7 +172,6 @@ bool AccountSwitchDialog::performSwitch(const QString &toProfile, QString *error
     const QString claudeDir  = home + "/.claude-" + toProfile;
     const QString sharedProj = home + "/.claude-projects-shared";
     const QString claudeLink = home + "/.claude";
-    const QString claudeJson = home + "/.claude.json";
 
     auto fail = [&](const QString &msg) -> bool {
         if (errorOut) *errorOut = msg;
@@ -195,11 +194,6 @@ bool AccountSwitchDialog::performSwitch(const QString &toProfile, QString *error
             return fail(QStringLiteral("cp -a failed: ")
                         + QString::fromLocal8Bit(cp.readAllStandardError()));
 
-        // Pull in .claude.json if not yet inside the profile.
-        const QString srcJson = QFileInfo(claudeJson).canonicalFilePath();
-        const QString dstJson = claudeDir + "/.claude.json";
-        if (!srcJson.isEmpty() && !QFileInfo::exists(dstJson))
-            QFile::copy(srcJson, dstJson);
     }
 
     // Ensure profile/projects is a symlink to the shared store.
@@ -234,12 +228,6 @@ bool AccountSwitchDialog::performSwitch(const QString &toProfile, QString *error
     }
     if (!QFile::link(claudeDir, claudeLink))
         return fail(QStringLiteral("Could not create symlink ~/.claude -> ") + claudeDir);
-
-    // ~/.claude.json always points to the active profile's .claude.json, so
-    // update it on every switch (not just the first time).
-    QFile::remove(claudeJson);
-    if (!QFile::link(claudeDir + "/.claude.json", claudeJson))
-        return fail(QStringLiteral("Could not create ~/.claude.json forwarding symlink"));
 
     return true;
 }
