@@ -25,7 +25,7 @@ CURRENT_BRANCH="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || 
 info "Current branch: $CURRENT_BRANCH ($(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown"))"
 printf 'Pull latest from origin before building? [y/N] '
 read -r PULL_LATEST
-if [[ "${PULL_LATEST,,}" == "y" || "${PULL_LATEST,,}" == "yes" ]]; then
+if [[ "$(echo "$PULL_LATEST" | tr '[:upper:]' '[:lower:]')" == "y" || "$(echo "$PULL_LATEST" | tr '[:upper:]' '[:lower:]')" == "yes" ]]; then
     info "Pulling latest"
     git -C "$REPO_DIR" pull origin main
     ok "Up to date"
