@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "AccountSwitchDialog.h"
 #include "BoxDetailsPanel.h"
 #include "BoxRecord.h"
 #include "ClaudeCodeUpdateChecker.h"
@@ -167,6 +168,11 @@ void MainWindow::buildActions()
     m_newAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+N")));
     m_newAction->setStatusTip(QStringLiteral("Create a new box and start a conversation in it"));
     connect(m_newAction, &QAction::triggered, this, &MainWindow::onNew);
+
+    m_switchAccountAction = new QAction(QStringLiteral("Switch &Account…"), this);
+    m_switchAccountAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+U")));
+    m_switchAccountAction->setStatusTip(QStringLiteral("Switch between Claude account profiles"));
+    connect(m_switchAccountAction, &QAction::triggered, this, &MainWindow::onSwitchAccount);
 
     m_setupAction = new QAction(QStringLiteral("&Setup…"), this);
     m_setupAction->setStatusTip(QStringLiteral("Check Docker, the claude-code image, and SSH keypair setup"));
@@ -458,6 +464,8 @@ void MainWindow::buildMenus()
 {
     QMenu *fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
     fileMenu->addAction(m_newAction);
+    fileMenu->addAction(m_switchAccountAction);
+    fileMenu->addSeparator();
     fileMenu->addAction(m_setupAction);
     fileMenu->addAction(m_manageRemotesAction);
     fileMenu->addAction(QStringLiteral("Edit &Prompts..."), this, [this] {
@@ -2167,6 +2175,22 @@ void MainWindow::onPurge()
     }
 
     refreshBoxes();
+}
+
+void MainWindow::onSwitchAccount()
+{
+    auto *dlg = new AccountSwitchDialog(&m_docker, this);
+    // After a successful switch, restart whichever boxes were stopped.
+    // syncTranscriptTitle=false: can be multiple boxes; skip per-box
+    // transcript reads to avoid a proportional stall.
+    connect(dlg, &AccountSwitchDialog::switchCompleted, this,
+            [this](const QStringList &names) {
+                for (const QString &name : names)
+                    startBox(name, /*syncTranscriptTitle=*/false);
+                refreshBoxes();
+            });
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->exec();
 }
 
 void MainWindow::onSetupWizard()
