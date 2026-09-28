@@ -10,7 +10,11 @@
 ; on a fresh install).
 
 #define AppName      "Claude Box"
-#define AppVersion   "3.2.0"
+; AppVersion is passed on the iscc command line: /DAppVersion=X.Y.Z
+; Source of truth: gui/CMakeLists.txt project(... VERSION ...)
+#ifndef AppVersion
+  #error "AppVersion must be defined via the iscc command line: /DAppVersion=X.Y.Z"
+#endif
 #define AppPublisher "Morris Labs"
 #define AppExeName   "claude-box-gui.exe"
 #define BuildDir     "..\build\Release"
