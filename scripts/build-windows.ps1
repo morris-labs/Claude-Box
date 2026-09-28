@@ -207,7 +207,13 @@ cmake --build "$GuiDir\build" --config Release --parallel
 if ($LASTEXITCODE -ne 0) { Fail "CMake build failed" }
 
 Info "Creating installer"
-& $IsccExe "$GuiDir\packaging\claude-box-gui.iss"
+# Read version from CMakeLists.txt (single source of truth).
+$CmakeVersion = (Select-String -Path "$GuiDir\CMakeLists.txt" `
+    -Pattern 'project\s*\(\s*claude-box-gui\s+VERSION\s+([\d.]+)' |
+    Select-Object -First 1).Matches[0].Groups[1].Value
+if (-not $CmakeVersion) { Fail "Could not extract version from CMakeLists.txt" }
+Info "App version: $CmakeVersion"
+& $IsccExe "/DAppVersion=$CmakeVersion" "$GuiDir\packaging\claude-box-gui.iss"
 if ($LASTEXITCODE -ne 0) { Fail "Inno Setup compilation failed" }
 
 # Locate the produced installer without pinning the version number.
