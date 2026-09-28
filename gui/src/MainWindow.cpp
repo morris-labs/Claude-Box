@@ -417,12 +417,14 @@ void MainWindow::buildUi()
 
     // The two update bars sit above the splitter, each hidden by default.
     // Each checker owns one bar independently so they never overwrite each other.
+    m_dockerBar = new UpdateBar(this);
     m_updateBar = new UpdateBar(this);
     m_claudeCodeUpdateBar = new UpdateBar(this);
     auto *centralContainer = new QWidget(this);
     auto *centralLayout = new QVBoxLayout(centralContainer);
     centralLayout->setContentsMargins(0, 0, 0, 0);
     centralLayout->setSpacing(0);
+    centralLayout->addWidget(m_dockerBar);
     centralLayout->addWidget(m_updateBar);
     centralLayout->addWidget(m_claudeCodeUpdateBar);
     centralLayout->addWidget(m_outerSplitter, 1);
@@ -753,6 +755,26 @@ void MainWindow::onBoxesLoaded()
     // Running-first -- so there's something to look at immediately.
     if (!selectedBoxInfo() && m_proxy->rowCount() > 0)
         m_table->selectRow(0);
+
+#if !defined(Q_OS_LINUX)
+    // On Windows and macOS, Docker Engine lives inside Docker Desktop. Start
+    // it automatically in the background the first time a poll finds it
+    // unreachable. `docker desktop start` brings up the engine without
+    // opening the Docker Desktop window. The bar disappears on the next
+    // successful poll; the flag resets so a later engine outage re-triggers.
+    if (m_docker.lastPollDaemonUnreachable()) {
+        if (!m_dockerStartAttempted) {
+            m_dockerStartAttempted = true;
+            QProcess::startDetached(QStringLiteral("docker"),
+                {QStringLiteral("desktop"), QStringLiteral("start")});
+        }
+        m_dockerBar->notifyWithAction(
+            QStringLiteral("Starting Docker Engine…"), QString(), nullptr);
+    } else {
+        m_dockerBar->hide();
+        m_dockerStartAttempted = false;
+    }
+#endif
 
     updateActionStates();
 }
