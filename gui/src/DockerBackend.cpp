@@ -646,12 +646,10 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
                << (QDir::homePath() + "/.claude:" + containerHome + "/.claude")
                << (QDir::homePath() + "/.claude.json:" + containerHome + "/.claude.json");
 
-    // Account-switch setups (e.g. the claude-account-switch tool) use
-    // ~/.claude-projects-shared as a shared session store across accounts.
-    // ~/.claude/projects in each account directory is meant to symlink there,
-    // but immediately after switching to a new account the symlink may not be
-    // set up yet -- Claude Code will have initialised that account's projects/
-    // as a regular empty directory. We handle this in two ways:
+    // Account-switch setups use ~/.claude-projects-shared as a shared session
+    // store across accounts. ~/.claude/projects in each account directory
+    // symlinks there, but immediately after switching to a new account the
+    // symlink may not be set up yet. We handle this in two ways:
     //
     // 1. Always bind ~/.claude-projects-shared when it exists, so it is
     //    accessible inside the container regardless of whether projects/ is
@@ -660,22 +658,32 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
     //    condition and creates the symlink inside the container, which is
     //    reflected back to the host via the bind mount.
     //
-    // When projects/ is a symlink pointing somewhere other than
-    // ~/.claude-projects-shared we also bind that target (the general
-    // dangling-symlink fix from before).
+    // When projects/ is a symlink pointing outside ~/.claude, bind the target
+    // so it resolves correctly inside the container. Docker resolves the
+    // top-level ~/.claude symlink when creating the bind mount (e.g. ~/.claude
+    // → ~/.claude-A means the container gets ~/.claude-A's content at
+    // ~/.claude), so the projects/ symlink's absolute target is never
+    // automatically included. Use spec.binds.contains() for deduplication
+    // rather than comparing against a specific hardcoded path, so any target
+    // outside ~/.claude is covered.
     {
         const QString sharedProjects = QDir::homePath() + QStringLiteral("/.claude-projects-shared");
         const QFileInfo projectsInfo(QDir::homePath() + QStringLiteral("/.claude/projects"));
-        const QString resolvedClaude = QFileInfo(QDir::homePath() + QStringLiteral("/.claude")).canonicalFilePath();
+        QString resolvedClaude = QFileInfo(QDir::homePath() + QStringLiteral("/.claude")).canonicalFilePath();
+        if (resolvedClaude.isEmpty())
+            resolvedClaude = QDir::homePath() + QStringLiteral("/.claude");
 
         if (QFileInfo(sharedProjects).isDir())
             spec.binds << (sharedProjects + QLatin1Char(':') + sharedProjects);
 
         if (projectsInfo.isSymLink()) {
             const QString target = projectsInfo.symLinkTarget();
-            if (!target.startsWith(resolvedClaude + QLatin1Char('/')) && target != resolvedClaude
-                && target != sharedProjects)
-                spec.binds << (target + QLatin1Char(':') + target);
+            const QString bindSpec = target + QLatin1Char(':') + target;
+            if (!target.isEmpty()
+                && !target.startsWith(resolvedClaude + QLatin1Char('/'))
+                && target != resolvedClaude
+                && !spec.binds.contains(bindSpec))
+                spec.binds << bindSpec;
         }
     }
 
@@ -740,20 +748,25 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
          << "-v" << (QDir::homePath() + "/.claude.json:" + cliContainerHome + "/.claude.json");
 
     // Same reasoning as launchSpec(): bind ~/.claude-projects-shared when it
-    // exists, and any other non-~/.claude symlink target for projects/.
+    // exists, and any projects/ symlink target that points outside ~/.claude.
     {
         const QString sharedProjects = QDir::homePath() + QStringLiteral("/.claude-projects-shared");
         const QFileInfo projectsInfo(QDir::homePath() + QStringLiteral("/.claude/projects"));
-        const QString resolvedClaude = QFileInfo(QDir::homePath() + QStringLiteral("/.claude")).canonicalFilePath();
+        QString resolvedClaude = QFileInfo(QDir::homePath() + QStringLiteral("/.claude")).canonicalFilePath();
+        if (resolvedClaude.isEmpty())
+            resolvedClaude = QDir::homePath() + QStringLiteral("/.claude");
 
         if (QFileInfo(sharedProjects).isDir())
             args << QStringLiteral("-v") << (sharedProjects + QLatin1Char(':') + sharedProjects);
 
         if (projectsInfo.isSymLink()) {
             const QString target = projectsInfo.symLinkTarget();
-            if (!target.startsWith(resolvedClaude + QLatin1Char('/')) && target != resolvedClaude
-                && target != sharedProjects)
-                args << QStringLiteral("-v") << (target + QLatin1Char(':') + target);
+            const QString bindSpec = target + QLatin1Char(':') + target;
+            if (!target.isEmpty()
+                && !target.startsWith(resolvedClaude + QLatin1Char('/'))
+                && target != resolvedClaude
+                && !args.contains(bindSpec))
+                args << QStringLiteral("-v") << bindSpec;
         }
     }
 
