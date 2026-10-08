@@ -25,9 +25,11 @@ namespace {
 QColor statusColor(BoxInfo::Status s)
 {
     switch (s) {
-    case BoxInfo::Status::Running: return Theme::running();
-    case BoxInfo::Status::Stopped: return Theme::known();
-    case BoxInfo::Status::Exited:  return Theme::stopped();
+    case BoxInfo::Status::Running:  return Theme::running();
+    case BoxInfo::Status::Stopped:  return Theme::known();
+    case BoxInfo::Status::Exited:   return Theme::stopped();
+    case BoxInfo::Status::Starting:
+    case BoxInfo::Status::Stopping: return Theme::pending();
     }
     return Theme::known();
 }
@@ -35,9 +37,11 @@ QColor statusColor(BoxInfo::Status s)
 QString statusText(BoxInfo::Status s)
 {
     switch (s) {
-    case BoxInfo::Status::Running: return QStringLiteral("Running");
-    case BoxInfo::Status::Stopped: return QStringLiteral("Not running");
-    case BoxInfo::Status::Exited:  return QStringLiteral("Exited");
+    case BoxInfo::Status::Running:  return QStringLiteral("Running");
+    case BoxInfo::Status::Stopped:  return QStringLiteral("Not running");
+    case BoxInfo::Status::Exited:   return QStringLiteral("Exited");
+    case BoxInfo::Status::Starting: return QStringLiteral("Starting...");
+    case BoxInfo::Status::Stopping: return QStringLiteral("Stopping...");
     }
     return QString();
 }

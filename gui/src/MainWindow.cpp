@@ -1579,7 +1579,7 @@ void MainWindow::onNew()
     // the GUI stays responsive. No transient row is shown for new boxes since
     // the container name isn't known until createNew() returns.
     const bool workspaceSubdir = dlg.workspaceSubdir();
-    QtConcurrent::run([this, rec, workspaceSubdir]() mutable {
+    (void)QtConcurrent::run([this, rec, workspaceSubdir]() mutable {
         QString error;
         const bool ok = m_docker.createNew(rec, workspaceSubdir, &error);
         const QString rName = rec.name;
@@ -1712,7 +1712,7 @@ void MainWindow::onFork()
 
     const bool workspaceSubdir = dlg.workspaceSubdir();
     const QString forkSourceUuid = dlg.forkSourceUuid();
-    QtConcurrent::run([this, rec, workspaceSubdir, forkSourceUuid]() mutable {
+    (void)QtConcurrent::run([this, rec, workspaceSubdir, forkSourceUuid]() mutable {
         QString error;
         const bool ok = m_docker.createNew(rec, workspaceSubdir, &error, forkSourceUuid);
         const QString rName = rec.name;
@@ -1769,7 +1769,7 @@ void MainWindow::startBox(const QString &name, bool syncTranscriptTitle)
     m_transient.insert(name, BoxInfo::Status::Starting);
     applyTransientToModel();
 
-    QtConcurrent::run([this, rec]() mutable {
+    (void)QtConcurrent::run([this, rec]() mutable {
         QString error;
         const bool ok = m_docker.reopen(rec, &error);
         const QString rName = rec.name;
@@ -1821,7 +1821,7 @@ void MainWindow::onClose()
         m_transient.insert(name, BoxInfo::Status::Stopping);
     applyTransientToModel();
 
-    QtConcurrent::run([this, names]() {
+    (void)QtConcurrent::run([this, names]() {
         QHash<QString, QString> errors;
         m_docker.stopMany(names, &errors);
         QMetaObject::invokeMethod(this, [this, names, errors]() {
@@ -1861,7 +1861,7 @@ void MainWindow::onStopAll()
         m_transient.insert(name, BoxInfo::Status::Stopping);
     applyTransientToModel();
 
-    QtConcurrent::run([this, names]() {
+    (void)QtConcurrent::run([this, names]() {
         QHash<QString, QString> errors;
         m_docker.stopMany(names, &errors);
         QMetaObject::invokeMethod(this, [this, names, errors]() {
