@@ -224,7 +224,7 @@ void MainWindow::buildActions()
     connect(m_openExternalClaudeAction, &QAction::triggered, this, &MainWindow::onOpenExternalClaude);
 
     m_removeAction = new QAction(Icons::removeBox(), QStringLiteral("&Remove"), this);
-    m_removeAction->setStatusTip(QStringLiteral("docker rm this stopped container"));
+    m_removeAction->setStatusTip(QStringLiteral("Remove from dashboard (keeps conversation data)"));
     connect(m_removeAction, &QAction::triggered, this, &MainWindow::onRemove);
 
     m_purgeAction = new QAction(Icons::purge(), QStringLiteral("&Purge…"), this);
@@ -882,9 +882,12 @@ void MainWindow::updateActionStates()
     // Multi-item actions: any matching selection is enough.
     m_openAction->setEnabled(anyStopped);
     m_closeAction->setEnabled(anyRunning);
-    // Remove is only safe for exited containers (stopped but not removed --
-    // rare with --rm): disable when anything is running or just stopped.
-    m_removeAction->setEnabled(anyExited && !anyRunning && !anyStopped);
+    // Remove is available for any non-running box. For Exited containers
+    // (stuck in Docker's exited state, rare with --rm) it also does docker rm.
+    // For Stopped boxes (BoxRecord only, container already gone) it just
+    // deletes the record. Purge is the heavier operation: use it when you
+    // also want to delete the conversation transcripts.
+    m_removeAction->setEnabled((anyExited || anyStopped) && !anyRunning);
 
     // Stop All: model-wide, not selection-gated.
     bool anyModelRunning = false;
@@ -2200,27 +2203,40 @@ void MainWindow::onOpenExternal()
 
 void MainWindow::onRemove()
 {
-    const QStringList names = [this] {
-        QStringList r;
-        for (const BoxInfo *info : selectedBoxInfos())
-            if (info->status == BoxInfo::Status::Exited)
-                r << info->name;
-        return r;
-    }();
+    const QList<const BoxInfo *> sel = selectedBoxInfos();
+    QStringList names;
+    for (const BoxInfo *info : sel)
+        if (info->status == BoxInfo::Status::Stopped || info->status == BoxInfo::Status::Exited)
+            names << info->name;
     if (names.isEmpty())
         return;
 
     const QString msg = names.size() == 1
-        ? QStringLiteral("Remove stopped container ") + names.first() + QStringLiteral("?")
-        : QStringLiteral("Remove %1 stopped containers?").arg(names.size());
+        ? QStringLiteral("Remove \"%1\" from the dashboard?\n\nThe conversation data is kept; use Purge to delete it.").arg(names.first())
+        : QStringLiteral("Remove %1 boxes from the dashboard?\n\nThe conversation data is kept; use Purge to delete it.").arg(names.size());
     if (QMessageBox::question(this, QStringLiteral("Remove"), msg) != QMessageBox::Yes)
         return;
 
     for (const QString &name : names) {
-        QString error;
-        if (!m_docker.remove(name, &error))
-            QMessageBox::warning(this, QStringLiteral("Remove"),
-                                 name + QStringLiteral(": ") + error);
+        // For containers stuck in Docker's exited state (unusual with --rm),
+        // remove the container artifact first.
+        const BoxInfo *info = [&]() -> const BoxInfo * {
+            for (const BoxInfo *b : sel)
+                if (b->name == name) return b;
+            return nullptr;
+        }();
+        if (info && info->status == BoxInfo::Status::Exited) {
+            QString error;
+            if (!m_docker.remove(name, &error)) {
+                QMessageBox::warning(this, QStringLiteral("Remove"),
+                                     name + QStringLiteral(": ") + error);
+                continue;
+            }
+        }
+        // Remove the on-disk record so the box no longer appears in the dashboard.
+        BoxRecord rec = BoxRecord::load(name);
+        if (rec.isValid())
+            rec.remove();
     }
     refreshBoxes();
 }
