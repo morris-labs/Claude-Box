@@ -628,6 +628,23 @@ void MainWindow::reselectByNames(const QStringList &names)
 
 // --- refresh ------------------------------------------------------------
 
+void MainWindow::applyTransientToModel()
+{
+    for (auto it = m_transient.cbegin(); it != m_transient.cend(); ++it) {
+        if (!m_model->setBoxStatusByName(it.key(), it.value())) {
+            // Box not yet in model (new box being created) -- add synthetic row.
+            const BoxRecord rec = BoxRecord::load(it.key());
+            BoxInfo info;
+            info.name = it.key();
+            info.status = it.value();
+            info.conversationName = rec.isValid() ? rec.conversationName : it.key();
+            info.targetDir = rec.targetDir;
+            m_model->insertBox(info);
+        }
+    }
+    updateActionStates();
+}
+
 void MainWindow::refreshBoxes()
 {
     // One poll at a time. If the previous one is still going (a stats
@@ -721,6 +738,46 @@ void MainWindow::onBoxesLoaded()
         }
     }
 
+    // Apply transient Starting/Stopping overlays. Done after wasRunning
+    // cleanup (which uses Docker-reported statuses) and before setBoxes().
+    // Auto-clears a transient when Docker confirms the expected final state:
+    // Starting clears once Docker reports Running; Stopping clears once the
+    // container is no longer Running.
+    if (!m_transient.isEmpty()) {
+        QSet<QString> freshNames;
+        for (const BoxInfo &b : freshBoxes)
+            freshNames.insert(b.name);
+
+        for (BoxInfo &b : freshBoxes) {
+            auto it = m_transient.find(b.name);
+            if (it == m_transient.end())
+                continue;
+            const BoxInfo::Status ts = it.value();
+            const bool startedUp = ts == BoxInfo::Status::Starting
+                                   && b.status == BoxInfo::Status::Running;
+            const bool stoppedDown = ts == BoxInfo::Status::Stopping
+                                     && b.status != BoxInfo::Status::Running;
+            if (startedUp || stoppedDown)
+                m_transient.erase(it); // Docker confirmed; drop overlay
+            else
+                b.status = ts; // still in flight
+        }
+
+        // Synthetic rows for Starting boxes not yet visible in Docker
+        for (auto it = m_transient.cbegin(); it != m_transient.cend(); ++it) {
+            if (!freshNames.contains(it.key())
+                    && it.value() == BoxInfo::Status::Starting) {
+                const BoxRecord rec = BoxRecord::load(it.key());
+                BoxInfo info;
+                info.name = it.key();
+                info.status = BoxInfo::Status::Starting;
+                info.conversationName = rec.isValid() ? rec.conversationName : it.key();
+                info.targetDir = rec.targetDir;
+                freshBoxes.prepend(info);
+            }
+        }
+    }
+
     m_model->setBoxes(freshBoxes);
     reselectByNames(selected);
     m_table->verticalScrollBar()->setValue(scrollPos);
@@ -738,9 +795,11 @@ void MainWindow::onBoxesLoaded()
         if (!info)
             continue;
         switch (info->status) {
-        case BoxInfo::Status::Running: ++running; break;
-        case BoxInfo::Status::Stopped: ++stopped; break;
-        case BoxInfo::Status::Exited:  ++exited;  break;
+        case BoxInfo::Status::Running:
+        case BoxInfo::Status::Starting:
+        case BoxInfo::Status::Stopping: ++running; break;
+        case BoxInfo::Status::Stopped:  ++stopped; break;
+        case BoxInfo::Status::Exited:   ++exited;  break;
         }
     }
 
@@ -795,19 +854,27 @@ void MainWindow::updateActionStates()
 
     bool anyRunning = false, anyStopped = false, anyExited = false;
     for (const BoxInfo *info : sel) {
-        if (info->status == BoxInfo::Status::Running) anyRunning = true;
-        if (info->status == BoxInfo::Status::Stopped) anyStopped = true;
-        if (info->status == BoxInfo::Status::Exited)  anyExited  = true;
+        switch (info->status) {
+        case BoxInfo::Status::Running:  anyRunning = true; break;
+        case BoxInfo::Status::Stopped:  anyStopped = true; break;
+        case BoxInfo::Status::Exited:   anyExited  = true; break;
+        case BoxInfo::Status::Starting:
+        case BoxInfo::Status::Stopping: break; // transitioning -- no action applies
+        }
     }
 
     // Single-item actions: require exactly one selection.
     m_editAction->setEnabled(single && rec.isValid());
     m_forkAction->setEnabled(single && rec.isValid() && !rec.sessionUuid.isEmpty());
     m_purgeAction->setEnabled(single && !single->targetDir.isEmpty());
-    const bool canRelocate = single && single->status != BoxInfo::Status::Running
+    const bool transitioning = single && (single->status == BoxInfo::Status::Starting
+                                          || single->status == BoxInfo::Status::Stopping);
+    const bool canRelocate = single && !transitioning
+                             && single->status != BoxInfo::Status::Running
                              && rec.isValid() && !single->targetDir.isEmpty();
     m_moveWorkDirAction->setEnabled(canRelocate);
-    m_changeWorkDirAction->setEnabled(single && single->status != BoxInfo::Status::Running
+    m_changeWorkDirAction->setEnabled(single && !transitioning
+                                      && single->status != BoxInfo::Status::Running
                                       && rec.isValid());
     m_openExternalAction->setEnabled(single && single->status == BoxInfo::Status::Running);
     m_openExternalClaudeAction->setEnabled(single && single->status == BoxInfo::Status::Running);
@@ -862,7 +929,9 @@ void MainWindow::onFilterChanged(const QString &text)
 void MainWindow::onMoveWorkingDirectory()
 {
     const BoxInfo *info = selectedBoxInfo();
-    if (!info || info->status == BoxInfo::Status::Running)
+    if (!info || info->status == BoxInfo::Status::Running
+            || info->status == BoxInfo::Status::Starting
+            || info->status == BoxInfo::Status::Stopping)
         return;
 
     // Copy fields out before opening a dialog: info points into the model's
@@ -947,7 +1016,9 @@ void MainWindow::onMoveWorkingDirectory()
 void MainWindow::onChangeWorkingDirectory()
 {
     const BoxInfo *info = selectedBoxInfo();
-    if (!info || info->status == BoxInfo::Status::Running)
+    if (!info || info->status == BoxInfo::Status::Running
+            || info->status == BoxInfo::Status::Starting
+            || info->status == BoxInfo::Status::Stopping)
         return;
 
     // Copy fields before opening a dialog (see onMoveWorkingDirectory).
@@ -1501,15 +1572,25 @@ void MainWindow::onNew()
     if (!rec.sessionUuid.isEmpty() && !confirmConversationAdoption(rec.sessionUuid))
         return;
 
-    QString error;
-    if (!m_docker.createNew(rec, dlg.workspaceSubdir(), &error)) {
-        QMessageBox::warning(this, QStringLiteral("New Box"),
-                             QStringLiteral("Failed to start box:\n") + error);
-        return;
-    }
-
-    refreshBoxes();
-    openTerminalTab(rec.name, rec.conversationName);
+    // createNew() is the slow part (docker run). Run it on a worker thread so
+    // the GUI stays responsive. No transient row is shown for new boxes since
+    // the container name isn't known until createNew() returns.
+    const bool workspaceSubdir = dlg.workspaceSubdir();
+    QtConcurrent::run([this, rec, workspaceSubdir]() mutable {
+        QString error;
+        const bool ok = m_docker.createNew(rec, workspaceSubdir, &error);
+        const QString rName = rec.name;
+        const QString rConv = rec.conversationName;
+        QMetaObject::invokeMethod(this, [this, rName, rConv, ok, error]() {
+            if (!ok) {
+                QMessageBox::warning(this, QStringLiteral("New Box"),
+                                     QStringLiteral("Failed to start box:\n") + error);
+            } else {
+                refreshBoxes();
+                openTerminalTab(rName, rConv);
+            }
+        }, Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::onEdit()
@@ -1626,15 +1707,23 @@ void MainWindow::onFork()
     rec.dirs = dlg.dirs();
     rec.sshRemoteRefs = dlg.sshRemoteRefs();
 
-    QString error;
-    if (!m_docker.createNew(rec, dlg.workspaceSubdir(), &error, dlg.forkSourceUuid())) {
-        QMessageBox::warning(this, QStringLiteral("Fork Conversation"),
-                             QStringLiteral("Failed to start box:\n") + error);
-        return;
-    }
-
-    refreshBoxes();
-    openTerminalTab(rec.name, rec.conversationName);
+    const bool workspaceSubdir = dlg.workspaceSubdir();
+    const QString forkSourceUuid = dlg.forkSourceUuid();
+    QtConcurrent::run([this, rec, workspaceSubdir, forkSourceUuid]() mutable {
+        QString error;
+        const bool ok = m_docker.createNew(rec, workspaceSubdir, &error, forkSourceUuid);
+        const QString rName = rec.name;
+        const QString rConv = rec.conversationName;
+        QMetaObject::invokeMethod(this, [this, rName, rConv, ok, error]() {
+            if (!ok) {
+                QMessageBox::warning(this, QStringLiteral("Fork Conversation"),
+                                     QStringLiteral("Failed to start box:\n") + error);
+            } else {
+                refreshBoxes();
+                openTerminalTab(rName, rConv);
+            }
+        }, Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::startBox(const QString &name, bool syncTranscriptTitle)
@@ -1672,15 +1761,27 @@ void MainWindow::startBox(const QString &name, bool syncTranscriptTitle)
         }
     }
 
-    QString error;
-    if (!m_docker.reopen(rec, &error)) {
-        QMessageBox::warning(this, QStringLiteral("Start"),
-                             QStringLiteral("Failed to reopen:\n") + error);
-        return;
-    }
+    // Show "Starting..." immediately; reopen() runs on a worker thread so
+    // the GUI stays responsive while Docker launches the container.
+    m_transient.insert(name, BoxInfo::Status::Starting);
+    applyTransientToModel();
 
-    refreshBoxes();
-    openTerminalTab(rec.name, rec.conversationName);
+    QtConcurrent::run([this, rec]() mutable {
+        QString error;
+        const bool ok = m_docker.reopen(rec, &error);
+        const QString rName = rec.name;
+        const QString rConv = rec.conversationName;
+        QMetaObject::invokeMethod(this, [this, rName, rConv, ok, error]() {
+            m_transient.remove(rName);
+            if (!ok) {
+                QMessageBox::warning(this, QStringLiteral("Start"),
+                                     QStringLiteral("Failed to start:\n") + error);
+            } else {
+                openTerminalTab(rName, rConv);
+            }
+            refreshBoxes();
+        }, Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::onOpen()
@@ -1709,19 +1810,31 @@ void MainWindow::onClose()
                 r << info->name;
         return r;
     }();
-    QHash<QString, QString> errors;
-    m_docker.stopMany(names, &errors);
-    for (const QString &name : names) {
-        if (errors.contains(name))
-            QMessageBox::warning(this, QStringLiteral("Stop"),
-                                 name + QStringLiteral(": ") + errors.value(name));
-        else {
-            closeTabForBox(name);
-            stopTunnelsForBox(name);
-        }
-    }
-    if (!names.isEmpty())
-        refreshBoxes();
+    if (names.isEmpty())
+        return;
+
+    // Show "Stopping..." immediately; stopMany() runs on a worker thread.
+    for (const QString &name : names)
+        m_transient.insert(name, BoxInfo::Status::Stopping);
+    applyTransientToModel();
+
+    QtConcurrent::run([this, names]() {
+        QHash<QString, QString> errors;
+        m_docker.stopMany(names, &errors);
+        QMetaObject::invokeMethod(this, [this, names, errors]() {
+            for (const QString &name : names) {
+                m_transient.remove(name);
+                if (errors.contains(name))
+                    QMessageBox::warning(this, QStringLiteral("Stop"),
+                                         name + QStringLiteral(": ") + errors.value(name));
+                else {
+                    closeTabForBox(name);
+                    stopTunnelsForBox(name);
+                }
+            }
+            refreshBoxes();
+        }, Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::onStopAll()
@@ -1741,18 +1854,27 @@ void MainWindow::onStopAll()
         != QMessageBox::Yes)
         return;
 
-    QHash<QString, QString> errors;
-    m_docker.stopMany(names, &errors);
-    for (const QString &name : names) {
-        if (errors.contains(name))
-            QMessageBox::warning(this, QStringLiteral("Stop All"),
-                                 name + QStringLiteral(": ") + errors.value(name));
-        else {
-            closeTabForBox(name);
-            stopTunnelsForBox(name);
-        }
-    }
-    refreshBoxes();
+    for (const QString &name : names)
+        m_transient.insert(name, BoxInfo::Status::Stopping);
+    applyTransientToModel();
+
+    QtConcurrent::run([this, names]() {
+        QHash<QString, QString> errors;
+        m_docker.stopMany(names, &errors);
+        QMetaObject::invokeMethod(this, [this, names, errors]() {
+            for (const QString &name : names) {
+                m_transient.remove(name);
+                if (errors.contains(name))
+                    QMessageBox::warning(this, QStringLiteral("Stop All"),
+                                         name + QStringLiteral(": ") + errors.value(name));
+                else {
+                    closeTabForBox(name);
+                    stopTunnelsForBox(name);
+                }
+            }
+            refreshBoxes();
+        }, Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::onOpenAll()

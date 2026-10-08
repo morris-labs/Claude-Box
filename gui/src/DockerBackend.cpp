@@ -1102,16 +1102,21 @@ bool DockerBackend::stop(const QString &name, QString *errorOut) const
             *errorOut = errors.value(name);
         return false;
     }
+    // Wait for removal so an immediate reopen() (called from onEdit's
+    // stop-then-restart flow) does not collide with the still-alive name.
+    // stopMany() itself no longer waits, so async callers (onClose,
+    // onStopAll) can fire-and-forget without blocking the GUI thread.
+    waitForRemoval(name);
     return true;
 }
 
 void DockerBackend::stopMany(const QStringList &names, QHash<QString, QString> *errorsOut) const
 {
-    // Issue every stop request first, then wait for the whole batch to be
-    // removed with one shared poll loop -- see the declaration comment for
-    // why (a full stop-then-wait-up-to-5s per box in sequence would let a
-    // multi-box Stop freeze the UI for up to names.size() * 5s).
-    QStringList stopped;
+    // Issue every stop request up front. The old version followed each stop
+    // with waitForRemovalMany() to ensure names were gone before returning;
+    // that call is now in stop() only (for onEdit's synchronous stop-then-
+    // reopen flow). Async callers (onClose, onStopAll) run this method on a
+    // worker thread and handle the completion via QMetaObject::invokeMethod.
     for (const QString &name : names) {
         bool ok = false;
         QString error;
@@ -1129,17 +1134,15 @@ void DockerBackend::stopMany(const QStringList &names, QHash<QString, QString> *
                 rec.wasRunning = false;
                 rec.save();
             }
-            stopped << name;
         } else if (errorsOut) {
             errorsOut->insert(name, error);
         }
     }
 
-    // With --rm, the daemon removes each container asynchronously after it
-    // exits. waitForRemovalMany() blocks until every stopped name is gone
-    // from docker ps -a so that an immediate reopen() doesn't collide with
-    // the old name.
-    waitForRemovalMany(stopped);
+    // waitForRemovalMany() is NOT called here so async callers (onClose,
+    // onStopAll) can run stopMany() on a worker thread without the nested
+    // event loop. The synchronous stop() above adds the wait for callers
+    // (onEdit) that immediately reopen the same name.
 }
 
 bool DockerBackend::waitForRemoval(const QString &name) const
@@ -1155,14 +1158,12 @@ QStringList DockerBackend::waitForRemovalMany(const QStringList &names) const
     if (names.isEmpty())
         return {};
 
-    // stop()/stopMany() run synchronously on the GUI thread, so this
-    // loop.exec() is itself a re-entrant nested event loop -- it does not
-    // prevent re-entrancy, it only narrows what can trigger it. Passing
-    // ExcludeUserInputEvents keeps the user from clicking Stop/Edit/Purge or
-    // opening a menu while the wait is in progress, but timers and posted
-    // events (the 3s refresh watcher's `finished` signal,
-    // onTerminalSessionFinished) are not user input and can still be
-    // delivered here.
+    // stop() calls this on the GUI thread (for onEdit's synchronous stop-
+    // then-reopen flow), so loop.exec() is a re-entrant nested event loop.
+    // ExcludeUserInputEvents keeps the user from clicking menu items while
+    // the short wait is in progress; timer signals and posted events can
+    // still fire. stopMany() no longer calls this -- async close paths
+    // (onClose/onStopAll) do not need to block on removal.
     QSet<QString> remaining(names.begin(), names.end());
     QEventLoop loop;
     QTimer poller;

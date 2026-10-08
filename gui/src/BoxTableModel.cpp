@@ -14,12 +14,11 @@ constexpr int ColumnCount     = 3;
 QString statusText(BoxInfo::Status s)
 {
     switch (s) {
-    case BoxInfo::Status::Running:
-        return QStringLiteral("Running");
-    case BoxInfo::Status::Stopped:
-        return QStringLiteral("Not running");
-    case BoxInfo::Status::Exited:
-        return QStringLiteral("Exited");
+    case BoxInfo::Status::Running:  return QStringLiteral("Running");
+    case BoxInfo::Status::Stopped:  return QStringLiteral("Not running");
+    case BoxInfo::Status::Exited:   return QStringLiteral("Exited");
+    case BoxInfo::Status::Starting: return QStringLiteral("Starting...");
+    case BoxInfo::Status::Stopping: return QStringLiteral("Stopping...");
     }
     return QString();
 }
@@ -27,12 +26,11 @@ QString statusText(BoxInfo::Status s)
 QColor statusColor(BoxInfo::Status s)
 {
     switch (s) {
-    case BoxInfo::Status::Running:
-        return Theme::running();
-    case BoxInfo::Status::Stopped:
-        return Theme::known();
-    case BoxInfo::Status::Exited:
-        return Theme::stopped();
+    case BoxInfo::Status::Running:  return Theme::running();
+    case BoxInfo::Status::Stopped:  return Theme::known();
+    case BoxInfo::Status::Exited:   return Theme::stopped();
+    case BoxInfo::Status::Starting: return Theme::pending();
+    case BoxInfo::Status::Stopping: return Theme::pending();
     }
     return Theme::known();
 }
@@ -41,12 +39,11 @@ QColor statusColor(BoxInfo::Status s)
 int statusRank(BoxInfo::Status s)
 {
     switch (s) {
-    case BoxInfo::Status::Running:
-        return 0;
-    case BoxInfo::Status::Stopped:
-        return 1;
-    case BoxInfo::Status::Exited:
-        return 2;
+    case BoxInfo::Status::Running:  return 0;
+    case BoxInfo::Status::Starting: return 0; // transitioning -- treat as running
+    case BoxInfo::Status::Stopping: return 0; // transitioning -- treat as running
+    case BoxInfo::Status::Stopped:  return 1;
+    case BoxInfo::Status::Exited:   return 2;
     }
     return 3;
 }
@@ -198,4 +195,29 @@ const BoxInfo *BoxTableModel::boxAt(int row) const
     if (row < 0 || row >= m_boxes.size())
         return nullptr;
     return &m_boxes.at(row);
+}
+
+bool BoxTableModel::setBoxStatusByName(const QString &name, BoxInfo::Status status)
+{
+    for (int i = 0; i < m_boxes.size(); ++i) {
+        if (m_boxes[i].name != name)
+            continue;
+        if (m_boxes[i].status == status)
+            return true;
+        m_boxes[i].status = status;
+        const QModelIndex left  = createIndex(i, 0);
+        const QModelIndex right = createIndex(i, ColumnCount - 1);
+        emit dataChanged(left, right,
+                         {Qt::DisplayRole, Qt::DecorationRole,
+                          Qt::ForegroundRole, Qt::ToolTipRole, SortRole});
+        return true;
+    }
+    return false;
+}
+
+void BoxTableModel::insertBox(const BoxInfo &info)
+{
+    beginInsertRows(QModelIndex(), 0, 0);
+    m_boxes.prepend(info);
+    endInsertRows();
 }

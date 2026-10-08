@@ -18,7 +18,10 @@
 // in `docker ps -a` but are not running (rare with --rm, only from
 // containers started outside the app or on failure).
 struct BoxInfo {
-    enum class Status { Running, Stopped, Exited };
+    // Running/Stopped/Exited are Docker-reported. Starting/Stopping are
+    // transient overlays set by MainWindow while an async launch or stop
+    // operation is in flight; they are never returned by listBoxes().
+    enum class Status { Running, Stopped, Exited, Starting, Stopping };
     Status status = Status::Stopped;
     QString name;
     QString conversationName;
@@ -162,13 +165,11 @@ public:
     bool stop(const QString &name, QString *errorOut) const;
     bool remove(const QString &name, QString *errorOut) const; // docker rm
 
-    // Stops every box in `names`. Unlike calling stop() in a loop, this
-    // issues every stop request up front and waits for all of them to be
-    // removed from docker with ONE shared poll loop, rather than a full
-    // stop-then-wait-up-to-5s per box in sequence -- a multi-box Stop or
-    // Stop All would otherwise be able to freeze the UI for up to
-    // names.size() * 5s. Failures are reported per name via errorsOut
-    // (keyed by name; a name with no entry stopped successfully).
+    // Stops every box in `names`, issuing all stop requests up front. Does
+    // NOT wait for containers to be fully removed from docker (--rm removes
+    // them asynchronously). Callers that need to block until removal (e.g.
+    // stop() for onEdit's stop-then-restart flow) do so separately. Failures
+    // are reported per name via errorsOut (keyed by name; absent = success).
     void stopMany(const QStringList &names, QHash<QString, QString> *errorsOut) const;
 
 private:

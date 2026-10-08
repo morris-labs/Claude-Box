@@ -21,6 +21,7 @@ const QColor kAccent    (0xd9, 0x77, 0x57);
 const QColor kRunning   (0x5f, 0xb3, 0x7a);
 const QColor kStopped   (0xd9, 0x6c, 0x6c);
 const QColor kKnown     (0x8a, 0x8f, 0x98);
+const QColor kPending   (0xd9, 0xb0, 0x57); // amber: transitioning (Starting/Stopping)
 const QColor kTermBg      (0x10, 0x11, 0x13);
 const QColor kTermFg      (0xe6, 0xe6, 0xe6);
 const QColor kUpdateBarBg (0x3a, 0x30, 0x20);
@@ -45,6 +46,7 @@ QColor Theme::accent()      { return kAccent; }
 QColor Theme::running()     { return kRunning; }
 QColor Theme::stopped()     { return kStopped; }
 QColor Theme::known()       { return kKnown; }
+QColor Theme::pending()     { return kPending; }
 QColor Theme::terminalBg()      { return kTermBg; }
 QColor Theme::terminalFg()      { return kTermFg; }
 QColor Theme::updateBarBg()     { return kUpdateBarBg; }

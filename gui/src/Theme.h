@@ -31,6 +31,8 @@ QColor updateBarBorder();
 QColor running();
 QColor stopped();
 QColor known();
+// Transitioning (Starting / Stopping) -- amber, between running and accent.
+QColor pending();
 
 QColor terminalBg();
 QColor terminalFg();
