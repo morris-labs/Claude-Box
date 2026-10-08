@@ -1,0 +1,204 @@
+name: Build and release
+
+# Triggers on version tags: git tag v3.3.3 && git push --tags
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+
+permissions:
+  contents: write   # needed to create the GitHub release
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Linux: AppImage (universal) + .deb (Ubuntu/Debian)
+  # ---------------------------------------------------------------------------
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qt6-base-dev cmake build-essential libvterm-dev pkg-config dpkg-dev
+
+      - name: Configure
+        run: cmake -B gui/build gui
+
+      - name: Build
+        run: cmake --build gui/build --parallel $(nproc)
+
+      - name: Stage install tree for AppImage
+        run: cmake --install gui/build --prefix gui/build/AppDir/usr
+
+      # Cache the linuxdeploy AppImages so repeated runs don't re-download them.
+      - name: Restore linuxdeploy cache
+        uses: actions/cache@v4
+        with:
+          path: gui/build/linuxdeploy-tools
+          key: linuxdeploy-x86_64-v1
+
+      - name: Download linuxdeploy tools
+        run: |
+          TOOLS=gui/build/linuxdeploy-tools
+          mkdir -p "$TOOLS"
+          download_if_missing() {
+            local name="$1" url="$2"
+            [[ -x "$TOOLS/$name" ]] && return
+            curl -fL --progress-bar -o "$TOOLS/$name" "$url"
+            chmod +x "$TOOLS/$name"
+          }
+          download_if_missing linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          download_if_missing linuxdeploy-plugin-qt-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+
+      - name: Build AppImage
+        env:
+          # Avoids the FUSE requirement: linuxdeploy is itself an AppImage and
+          # would otherwise need FUSE to mount itself.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          OUTPUT: gui/build/claude-box-x86_64.AppImage
+        run: |
+          QT_BIN=$(pkg-config --variable=bindir Qt6Core)
+          export PATH="$QT_BIN:$PATH"
+          gui/build/linuxdeploy-tools/linuxdeploy-x86_64.AppImage \
+            --appdir gui/build/AppDir \
+            --plugin qt \
+            --output appimage
+
+      - name: Build .deb
+        run: cd gui/build && cpack -G DEB
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            gui/build/claude-box-*.AppImage
+            gui/build/*.deb
+
+  # ---------------------------------------------------------------------------
+  # macOS: .app bundle + DMG
+  # ---------------------------------------------------------------------------
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          cache: true
+
+      - name: Install dependencies
+        run: brew install libvterm librsvg
+
+      - name: Configure
+        run: cmake -B gui/build gui
+
+      - name: Build
+        run: cmake --build gui/build --parallel $(sysctl -n hw.logicalcpu)
+
+      - name: Generate .icns icon
+        run: cmake --build gui/build --target generate-icns
+
+      - name: Bundle .app and create DMG
+        run: |
+          cmake --build gui/build --target app-bundle
+          cmake --build gui/build --target dmg
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: 'gui/build/Claude Box.dmg'
+
+  # ---------------------------------------------------------------------------
+  # Windows: Inno Setup installer (.exe)
+  # ---------------------------------------------------------------------------
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          arch: 'win64_msvc2022_64'
+          cache: true
+
+      - name: Configure
+        run: cmake -B gui/build gui -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build gui/build --config Release --parallel
+
+      # Copy Qt DLLs and plugins into build/Release so Inno Setup can bundle them.
+      - name: Deploy Qt runtime
+        run: windeployqt.exe gui\build\Release\claude-box-gui.exe
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Read version from CMakeLists.txt
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Select-String `
+            'project\s*\(\s*claude-box-gui\s+VERSION\s+([\d.]+)' `
+            gui\CMakeLists.txt).Matches[0].Groups[1].Value
+          "VERSION=$v" | Out-File -Append $env:GITHUB_OUTPUT
+
+      - name: Create installer directory
+        run: New-Item -ItemType Directory -Force installer | Out-Null
+        shell: pwsh
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          # Chocolatey installs Inno Setup to a versioned directory; find iscc.exe
+          # rather than hardcoding the version number.
+          $iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue |
+                  Select-Object -ExpandProperty Source
+          if (-not $iscc) {
+            $iscc = Get-ChildItem "${env:ProgramFiles(x86)}" `
+                      -Recurse -Filter iscc.exe -ErrorAction SilentlyContinue |
+                    Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $iscc) { throw "iscc.exe not found after choco install innosetup" }
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.VERSION }}" `
+                  "gui\packaging\claude-box-gui.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed (exit $LASTEXITCODE)" }
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: installer\claude-box-setup-*.exe
+
+  # ---------------------------------------------------------------------------
+  # Release: collect all artifacts and create a GitHub release
+  # ---------------------------------------------------------------------------
+  release:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.dmg
+            dist/*.exe
