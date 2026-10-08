@@ -24,6 +24,12 @@ public:
     void setBoxes(const QList<BoxInfo> &boxes);
     const BoxInfo *boxAt(int row) const;
 
+    // Targeted updates for transient statuses set by MainWindow while an
+    // async operation is in flight. setBoxStatusByName returns false when
+    // no row has that name (caller should then insertBox instead).
+    bool setBoxStatusByName(const QString &name, BoxInfo::Status status);
+    void insertBox(const BoxInfo &info);
+
 private:
     QList<BoxInfo> m_boxes;
 };

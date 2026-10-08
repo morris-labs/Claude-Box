@@ -120,6 +120,14 @@ private:
     // is also what makes DockerBackend's stats cache safe to touch without
     // a mutex.
     QFutureWatcher<QList<BoxInfo>> *m_refreshWatcher = nullptr;
+
+    // Transient status overlays for boxes currently being started or stopped
+    // asynchronously. Keyed by container name; values are Starting or Stopping.
+    // Applied to the model immediately when an operation begins and cleared
+    // either by the completion callback or by onBoxesLoaded() when Docker
+    // confirms the expected final state (Running for Starting, non-Running
+    // for Stopping).
+    QHash<QString, BoxInfo::Status> m_transient;
     bool m_hasLoadedOnce = false;
     bool m_dockerStartAttempted = false;
     QLabel *m_statusCounts = nullptr;
@@ -165,6 +173,13 @@ private:
     // ref-count stopTunnelsForBox() and the "last user tears it down"
     // logic are both built on this.
     QHash<QString, QSet<QString>> m_remoteUsers;
+
+    // Applies m_transient to the current model immediately (without waiting
+    // for the next 3-second refresh). Boxes in m_transient that are already
+    // in the model get their status updated in-place; boxes not yet in the
+    // model (Starting boxes whose container hasn't been created yet) get a
+    // synthetic row prepended.
+    void applyTransientToModel();
 
     void buildUi();
     void buildActions();
