@@ -42,6 +42,7 @@ private slots:
     void refreshChecks();
     void browseDefaultDir();
     void buildDockerImage();
+    void updateDockerPackages();
     void updateDockerImage();
     void generateSshKey();
     void fixSshPermissions();
@@ -66,6 +67,7 @@ private:
     CheckRow m_sshPermRow;
 
     QPushButton *m_buildImageButton = nullptr;
+    QPushButton *m_updatePackagesButton = nullptr;
     QPushButton *m_updateImageButton = nullptr;
     QPushButton *m_generateKeyButton = nullptr;
     QPushButton *m_fixPermButton = nullptr;
