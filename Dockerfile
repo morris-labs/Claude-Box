@@ -22,6 +22,10 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list
 
+# Passing --build-arg CACHEBUST_PACKAGES=$(date +%s) busts this layer and
+# everything after it: apt packages, NodeSource, nvm, SDKMAN, and claude-code.
+# Use this for a full package update without re-pulling the base image.
+ARG CACHEBUST_PACKAGES=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # core utilities
     git wget zip unzip sudo tmux jq \

@@ -122,10 +122,13 @@ SetupWizard::SetupWizard(QWidget *parent)
     auto *imageButtonLayout = new QVBoxLayout(imageButtons);
     imageButtonLayout->setContentsMargins(0, 0, 0, 0);
     imageButtonLayout->setSpacing(4);
-    m_updateImageButton = new QPushButton("Update Claude Code", imageButtons);
-    m_buildImageButton  = new QPushButton("Build Image", imageButtons);
-    connect(m_updateImageButton, &QPushButton::clicked, this, &SetupWizard::updateDockerImage);
-    connect(m_buildImageButton,  &QPushButton::clicked, this, &SetupWizard::buildDockerImage);
+    m_updatePackagesButton  = new QPushButton("Update Packages", imageButtons);
+    m_updateImageButton     = new QPushButton("Update Claude Code", imageButtons);
+    m_buildImageButton      = new QPushButton("Build Image", imageButtons);
+    connect(m_updatePackagesButton, &QPushButton::clicked, this, &SetupWizard::updateDockerPackages);
+    connect(m_updateImageButton,    &QPushButton::clicked, this, &SetupWizard::updateDockerImage);
+    connect(m_buildImageButton,     &QPushButton::clicked, this, &SetupWizard::buildDockerImage);
+    imageButtonLayout->addWidget(m_updatePackagesButton);
     imageButtonLayout->addWidget(m_updateImageButton);
     imageButtonLayout->addWidget(m_buildImageButton);
     m_imageRow = addCheckRow(grid, row++, "claude-code image", imageButtons);
@@ -247,8 +250,9 @@ void SetupWizard::refreshChecks()
     setRowStatus(m_imageRow, imageOk, imageDetail);
     m_buildImageButton->setText(imageOk ? "Rebuild Image" : "Build Image");
     m_buildImageButton->setEnabled(true);
-    // "Update Claude Code" only makes sense when there is an existing image to
-    // build on top of; hide it until then.
+    // Update buttons only make sense when an image already exists.
+    m_updatePackagesButton->setVisible(imageOk);
+    m_updatePackagesButton->setEnabled(true);
     m_updateImageButton->setVisible(imageOk);
     m_updateImageButton->setEnabled(true);
 
@@ -337,6 +341,42 @@ void SetupWizard::buildDockerImage()
     dlg->deleteLater();
     // A freshly built image has a new claude-code version; clear the cache so
     // ClaudeCodeUpdateChecker picks up the actual new version on its next run.
+    DockerBackend::invalidateClaudeCodeVersionCache();
+    refreshChecks();
+}
+
+void SetupWizard::updateDockerPackages()
+{
+#ifdef CLAUDE_BOX_REPO_DIR
+    const QString repoDir = QStringLiteral(CLAUDE_BOX_REPO_DIR);
+#else
+    const QString repoDir;
+#endif
+    const QString userName = DockerBackend::containerUsername();
+    if (repoDir.isEmpty() || !QFileInfo::exists(repoDir + "/Dockerfile")) {
+        QMessageBox::information(this, "Update Packages",
+            "This build of claude-box-gui doesn't know where its own Dockerfile is -- update it "
+            "yourself:\n\ndocker build -t claude-code --build-arg USER_NAME=" + userName +
+            " --build-arg CACHEBUST_PACKAGES=$(date +%s) <path to the claude-box repo>");
+        return;
+    }
+
+    // Bust CACHEBUST_PACKAGES to rebuild all layers from the apt install onward:
+    // apt packages, NodeSource Node.js, nvm, SDKMAN, Gradle, and claude-code.
+    // Base image and GitHub CLI repo setup stay cached. No --no-cache / --pull.
+    const QString cacheBust = QString::number(QDateTime::currentSecsSinceEpoch());
+    auto *dlg = new CommandTerminalDialog(QStringLiteral("Updating packages"),
+                                          QStringLiteral("docker"),
+                                          {QStringLiteral("build"), QStringLiteral("-t"),
+                                           QStringLiteral("claude-code"),
+                                           QStringLiteral("--build-arg"),
+                                           QStringLiteral("USER_NAME=") + userName,
+                                           QStringLiteral("--build-arg"),
+                                           QStringLiteral("CACHEBUST_PACKAGES=") + cacheBust,
+                                           repoDir},
+                                          this);
+    dlg->exec();
+    dlg->deleteLater();
     DockerBackend::invalidateClaudeCodeVersionCache();
     refreshChecks();
 }
