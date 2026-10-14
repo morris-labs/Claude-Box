@@ -42,6 +42,7 @@ private slots:
     void refreshChecks();
     void browseDefaultDir();
     void buildDockerImage();
+    void updateDockerImage();
     void generateSshKey();
     void fixSshPermissions();
     void finish();
@@ -53,7 +54,7 @@ private:
         QLabel *dot = nullptr;
         QLabel *detail = nullptr;
     };
-    CheckRow addCheckRow(QGridLayout *grid, int row, const QString &label, QPushButton *action = nullptr);
+    CheckRow addCheckRow(QGridLayout *grid, int row, const QString &label, QWidget *action = nullptr);
     void setRowStatus(const CheckRow &row, bool ok, const QString &detail);
 
     QLineEdit *m_targetDirEdit = nullptr;
@@ -65,6 +66,7 @@ private:
     CheckRow m_sshPermRow;
 
     QPushButton *m_buildImageButton = nullptr;
+    QPushButton *m_updateImageButton = nullptr;
     QPushButton *m_generateKeyButton = nullptr;
     QPushButton *m_fixPermButton = nullptr;
 };

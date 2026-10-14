@@ -54,10 +54,6 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code && \
-    node -p "require('$(npm root -g)/@anthropic-ai/claude-code/package.json').version" \
-    > /etc/claude-code-version
-
 USER ${USER_NAME}
 
 # nvm + Node.js (user-level; the system Node.js above is only for the
@@ -86,6 +82,19 @@ RUN curl -fsSL https://get.sdkman.io | bash && \
 ENV NVM_DIR=/home/${USER_NAME}/.nvm
 ENV SDKMAN_DIR=/home/${USER_NAME}/.sdkman
 ENV PATH=${NVM_DIR}/current/bin:${SDKMAN_DIR}/candidates/gradle/current/bin:${PATH}
+
+# claude-code is installed last so "Update Claude Code" (via the Setup
+# dialog or --build-arg CACHEBUST=$(date +%s)) only rebuilds this one layer,
+# reusing the cached layers above for nvm, SDKMAN, apt packages, etc.
+# Use explicit /usr/bin paths so the system npm is used regardless of
+# what nvm prepended to PATH above.
+USER root
+ARG CACHEBUST=1
+RUN /usr/bin/npm install -g @anthropic-ai/claude-code && \
+    /usr/bin/node -p \
+      "require('$(/usr/bin/npm root -g)/@anthropic-ai/claude-code/package.json').version" \
+      > /etc/claude-code-version
+USER ${USER_NAME}
 
 # The directory is handled dynamically by the orchestration script
 WORKDIR /home/${USER_NAME}/workspace

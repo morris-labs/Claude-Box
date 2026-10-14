@@ -6,6 +6,7 @@
 #include "Icons.h"
 #include "Theme.h"
 
+#include <QDateTime>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
@@ -117,9 +118,17 @@ SetupWizard::SetupWizard(QWidget *parent)
 
     m_dockerRow = addCheckRow(grid, row++, "Docker");
 
-    m_buildImageButton = new QPushButton("Build Image", this);
-    connect(m_buildImageButton, &QPushButton::clicked, this, &SetupWizard::buildDockerImage);
-    m_imageRow = addCheckRow(grid, row++, "claude-code image", m_buildImageButton);
+    auto *imageButtons = new QWidget(this);
+    auto *imageButtonLayout = new QVBoxLayout(imageButtons);
+    imageButtonLayout->setContentsMargins(0, 0, 0, 0);
+    imageButtonLayout->setSpacing(4);
+    m_updateImageButton = new QPushButton("Update Claude Code", imageButtons);
+    m_buildImageButton  = new QPushButton("Build Image", imageButtons);
+    connect(m_updateImageButton, &QPushButton::clicked, this, &SetupWizard::updateDockerImage);
+    connect(m_buildImageButton,  &QPushButton::clicked, this, &SetupWizard::buildDockerImage);
+    imageButtonLayout->addWidget(m_updateImageButton);
+    imageButtonLayout->addWidget(m_buildImageButton);
+    m_imageRow = addCheckRow(grid, row++, "claude-code image", imageButtons);
 
     m_sshClientRow = addCheckRow(grid, row++, "SSH client");
 
@@ -167,7 +176,7 @@ SetupWizard::SetupWizard(QWidget *parent)
 }
 
 SetupWizard::CheckRow SetupWizard::addCheckRow(QGridLayout *grid, int row, const QString &label,
-                                               QPushButton *action)
+                                               QWidget *action)
 {
     CheckRow r;
     r.dot = new QLabel(this);
@@ -225,10 +234,23 @@ void SetupWizard::refreshChecks()
                {QStringLiteral("image"), QStringLiteral("inspect"), QStringLiteral("claude-code")});
         imageOk = p.waitForStarted(3000) && p.waitForFinished(8000) && p.exitCode() == 0;
     }
-    setRowStatus(m_imageRow, imageOk,
-        imageOk ? "Built." : "Not built yet -- boxes can't start without it.");
+    QString imageDetail;
+    if (imageOk) {
+        // Read the version the ClaudeCodeUpdateChecker last cached; avoid a
+        // slow docker run on every Recheck click.
+        const QString ver = QSettings().value(QStringLiteral("claudeCode/version")).toString();
+        imageDetail = ver.isEmpty() ? QStringLiteral("Built.")
+                                    : QStringLiteral("Built. claude-code ") + ver;
+    } else {
+        imageDetail = QStringLiteral("Not built yet -- boxes can't start without it.");
+    }
+    setRowStatus(m_imageRow, imageOk, imageDetail);
     m_buildImageButton->setText(imageOk ? "Rebuild Image" : "Build Image");
     m_buildImageButton->setEnabled(true);
+    // "Update Claude Code" only makes sense when there is an existing image to
+    // build on top of; hide it until then.
+    m_updateImageButton->setVisible(imageOk);
+    m_updateImageButton->setEnabled(true);
 
     // SSH client.
     const QString sshPath = QStandardPaths::findExecutable(QStringLiteral("ssh"));
@@ -315,6 +337,43 @@ void SetupWizard::buildDockerImage()
     dlg->deleteLater();
     // A freshly built image has a new claude-code version; clear the cache so
     // ClaudeCodeUpdateChecker picks up the actual new version on its next run.
+    DockerBackend::invalidateClaudeCodeVersionCache();
+    refreshChecks();
+}
+
+void SetupWizard::updateDockerImage()
+{
+#ifdef CLAUDE_BOX_REPO_DIR
+    const QString repoDir = QStringLiteral(CLAUDE_BOX_REPO_DIR);
+#else
+    const QString repoDir;
+#endif
+    const QString userName = DockerBackend::containerUsername();
+    if (repoDir.isEmpty() || !QFileInfo::exists(repoDir + "/Dockerfile")) {
+        QMessageBox::information(this, "Update Claude Code",
+            "This build of claude-box-gui doesn't know where its own Dockerfile is -- update it "
+            "yourself:\n\ndocker build -t claude-code --build-arg USER_NAME=" + userName +
+            " --build-arg CACHEBUST=$(date +%s) <path to the claude-box repo>");
+        return;
+    }
+
+    // Rebuild only the final layer (npm install -g @anthropic-ai/claude-code) by
+    // passing a fresh CACHEBUST value. All earlier layers (apt packages, nvm,
+    // SDKMAN) stay cached, so this completes in ~30s instead of 15+ minutes.
+    // Intentionally no --no-cache / --pull: we want everything above CACHEBUST cached.
+    const QString cacheBust = QString::number(QDateTime::currentSecsSinceEpoch());
+    auto *dlg = new CommandTerminalDialog(QStringLiteral("Updating claude-code package"),
+                                          QStringLiteral("docker"),
+                                          {QStringLiteral("build"), QStringLiteral("-t"),
+                                           QStringLiteral("claude-code"),
+                                           QStringLiteral("--build-arg"),
+                                           QStringLiteral("USER_NAME=") + userName,
+                                           QStringLiteral("--build-arg"),
+                                           QStringLiteral("CACHEBUST=") + cacheBust,
+                                           repoDir},
+                                          this);
+    dlg->exec();
+    dlg->deleteLater();
     DockerBackend::invalidateClaudeCodeVersionCache();
     refreshChecks();
 }
