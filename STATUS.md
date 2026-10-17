@@ -14,6 +14,8 @@ which this container lacks.
   conversation combo, so a picked conversation now reaches `createNew()`.
 - Edit Box can re-select the conversation. A change asks for a restart, runs the
   adoption check, and "Start a new conversation on next restart" clears the link.
+- `SessionWatcher` follows /clear and /rename in running boxes (tested against a
+  real session: record's session_uuid and name updated). Not yet run in the GUI.
 - Prompts now give `~/...` paths and fill placeholders by number (fixes the
   starter prompt that said "working in <conversation name>").
 - Branches kept for earlier work: feature/account-switch, async-open-close,
@@ -24,10 +26,9 @@ which this container lacks.
 ## Next
 - Test on the host: adopt a conversation whose title matches an existing folder,
   then edit a running box and switch its conversation.
-- Build the session-file watch (PLAN step 6).
 - Decide on one container per project directory (PLAN step 7).
-- Fork/rewind "not available in this session": likely Claude Code's remote-control
-  limit, not ours; confirm where the user triggers it.
+- Fork/rewind button in the Claude desktop app fails: remote-control limitation of
+  Claude Code, not claude-box. Nothing to do here.
 - (old) Decide on auto-detecting `/clear` (new session id) on restart. See `PLAN.md`.
 - Merge the branch when the user approves. No push until told.
 

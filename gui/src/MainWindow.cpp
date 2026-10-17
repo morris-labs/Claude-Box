@@ -115,6 +115,16 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_refreshWatcher, &QFutureWatcher<QList<BoxInfo>>::finished,
             this, &MainWindow::onBoxesLoaded);
 
+    connect(&m_sessionWatcher, &SessionWatcher::boxChanged, this, [this](const QString &boxName) {
+        const int tab = tabIndexForBox(boxName);
+        if (tab >= 0) {
+            const QString title = BoxRecord::load(boxName).conversationName;
+            if (!title.isEmpty())
+                m_tabs->setTabText(tab, title);
+        }
+        refreshBoxes();
+    });
+
     m_refreshTimer = new QTimer(this);
     m_refreshTimer->setInterval(kRefreshIntervalMs);
     connect(m_refreshTimer, &QTimer::timeout, this, &MainWindow::refreshBoxes);
@@ -775,6 +785,13 @@ void MainWindow::onBoxesLoaded()
     m_table->verticalScrollBar()->setValue(scrollPos);
     m_usageView->setBoxes(freshBoxes);
     syncTunnels();
+
+    QStringList runningNames;
+    for (const BoxInfo &b : freshBoxes) {
+        if (b.status == BoxInfo::Status::Running)
+            runningNames << b.name;
+    }
+    m_sessionWatcher.setRunning(runningNames);
 
     if (wasFirstLoad) {
         QTimer::singleShot(0, this, &MainWindow::refreshBoxes);
@@ -1610,8 +1627,24 @@ void MainWindow::onEdit()
 
     NewBoxDialog dlg(this);
     dlg.loadForEdit(rec);
+    const QString shownUuid = rec.sessionUuid;
+    const QString shownName = rec.conversationName;
     if (dlg.exec() != QDialog::Accepted)
         return;
+
+    // SessionWatcher can update the record while the dialog is open (the
+    // agent ran /clear or /rename). Work from the current record, and take
+    // the dialog's session or name only if the user changed it from what the
+    // dialog opened with; otherwise saving would revert the watcher's update.
+    {
+        const BoxRecord fresh = BoxRecord::load(rec.name);
+        if (fresh.isValid())
+            rec = fresh;
+    }
+    const QString dlgUuid = dlg.sessionUuid();
+    const QString dlgName = dlg.conversationName();
+    const QString newUuid = dlgUuid != shownUuid ? dlgUuid : rec.sessionUuid;
+    const QString newName = dlgName != shownName ? dlgName : rec.conversationName;
 
     // Ports, mounts, model/effort and the permission flag are all baked
     // into the container at launch -- docker has no way to change any of
@@ -1622,7 +1655,6 @@ void MainWindow::onEdit()
     //
     // The linked conversation is the same kind of thing: it is the
     // --resume/--session-id argument of the claude process already running.
-    const QString newUuid = dlg.sessionUuid();
     const bool uuidChanged = newUuid != rec.sessionUuid;
     if (uuidChanged && !newUuid.isEmpty() && !confirmConversationAdoption(newUuid))
         return;
@@ -1631,7 +1663,7 @@ void MainWindow::onEdit()
         || rec.skipPermissions != dlg.skipPermissions() || rec.model != dlg.model()
         || rec.effort != dlg.effort();
 
-    rec.conversationName = dlg.conversationName();
+    rec.conversationName = newName;
     rec.sessionUuid = newUuid; // empty => reopen() mints a fresh session
     rec.skipPermissions = dlg.skipPermissions();
     rec.model = dlg.model();

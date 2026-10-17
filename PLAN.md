@@ -31,7 +31,7 @@ Branch: `fix/link-existing-conversations`
    name, instead of a path. `QString::arg(name, dir)` on a template that only
    used `%2` put the name in the `%2` slot. `PromptTemplates::expand()` now
    fills `%N` by number and prompts carry `~/...` container paths.
-6. [todo] Watch `~/.claude/sessions/<pid>.json` (it holds `sessionId` and
+6. [done] Watch `~/.claude/sessions/<pid>.json` (it holds `sessionId` and
    `name`, and changes on `/clear` and `/rename`; checked on Claude Code
    2.1.300) and update the box record. Match a file to a box by `cwd` and the
    recorded `sessionId`, then track the pid and `pidDomain`.

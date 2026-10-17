@@ -11,6 +11,7 @@
 #include "BoxDetailsPanel.h" // for SshTunnelStatus, a value member below
 #include "BoxTableModel.h"
 #include "DockerBackend.h"
+#include "SessionWatcher.h"
 #include "UsageView.h"
 
 class BoxDetailsPanel;
@@ -105,6 +106,8 @@ private:
     UsageView *m_usageView = nullptr;
 
     QTimer *m_refreshTimer = nullptr;
+    // Follows /clear and /rename inside running boxes; see SessionWatcher.
+    SessionWatcher m_sessionWatcher;
 
     QNetworkAccessManager *m_nam = nullptr;
     UpdateChecker *m_updateChecker = nullptr;
