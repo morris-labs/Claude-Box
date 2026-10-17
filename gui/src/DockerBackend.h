@@ -112,6 +112,10 @@ public:
     // cache age. Used by the explicit Refresh action.
     void invalidateStats();
 
+    // Mounts the project lists that its running shared container lacks (a
+    // container's mounts are fixed when it is created). Empty when the
+    // container is not running or has them all.
+    QStringList staleSharedMounts(const ProjectRecord &project) const;
     bool isRunning(const QString &name) const;
 
     // Returns the @anthropic-ai/claude-code version baked into the

@@ -11,6 +11,7 @@
 #include "NewBoxDialog.h"
 #include "PromptsDialog.h"
 #include "PortAllocator.h"
+#include "SharedContainer.h"
 #include "SetupWizard.h"
 #include "WorktreeMigration.h"
 #include "Worktrees.h"
@@ -400,6 +401,13 @@ void MainWindow::buildUi()
             [this] { m_projectPanel->setBoxes(m_lastBoxes); });
     connect(m_projectPanel, &ProjectPanel::convertToSharedRequested, this,
             &MainWindow::onConvertToShared);
+    connect(m_projectPanel, &ProjectPanel::mountsChanged, this, [this](const QString &root) {
+        const ProjectRecord project = ProjectRecord::forRoot(root);
+        if (!confirmSharedMounts(project)) {
+            return;
+        }
+        refreshBoxes();
+    });
 
     m_projectSplitter = new QSplitter(Qt::Horizontal, this);
     m_projectSplitter->addWidget(m_projectPanel);
@@ -1629,6 +1637,8 @@ void MainWindow::onNew()
         return;
     ProjectRecord project = ProjectRecord::forRoot(dlg.targetDir());
     PortAllocator::ensurePool(project);
+    if (!confirmSharedMounts(project))
+        return;
     if (!project.sharedContainer)
         commitPortAllocation(tentativePorts);
 
@@ -1776,6 +1786,51 @@ void MainWindow::onEdit()
     syncTunnels(); // pick up an SSH-forward change immediately rather than waiting for the next poll
 }
 
+bool MainWindow::confirmSharedMounts(const ProjectRecord &project, const QString &starting)
+{
+    if (!project.sharedContainer)
+        return true;
+    const QStringList missing = m_docker.staleSharedMounts(project);
+    if (missing.isEmpty())
+        return true;
+    const QStringList live = SharedContainer::liveSessions(project.containerName());
+    if (live.isEmpty())
+        return true; // idle: the backend replaces it when the next box starts
+
+    QStringList boxes;
+    for (const BoxRecord &rec : BoxRecord::loadAll()) {
+        if (rec.containerName() == project.containerName() && live.contains(rec.tmuxSession()))
+            boxes << rec.name;
+    }
+    const QString msg = QStringLiteral(
+        "The project's container is running without these mounts:\n\n%1\n\n"
+        "A container's mounts are fixed when it is created. Restarting recreates it, which stops "
+        "and resumes every box in it:\n\n%2\n\n"
+        "Yes: restart them now.\nNo: leave the container as it is; the mounts are missing until it "
+        "is next recreated.").arg(missing.join('\n'), boxes.join('\n'));
+    const auto answer = QMessageBox::question(this, QStringLiteral("Project mounts"), msg,
+                                              QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+    if (answer == QMessageBox::Cancel)
+        return false;
+    if (answer == QMessageBox::No)
+        return true;
+
+    for (const QString &name : boxes) {
+        QString error;
+        if (!m_docker.stop(name, &error)) {
+            QMessageBox::warning(this, QStringLiteral("Project mounts"),
+                                 QStringLiteral("Could not stop ") + name + QStringLiteral(":\n") + error);
+            return false;
+        }
+        closeTabForBox(name);
+    }
+    for (const QString &name : boxes) {
+        if (name != starting)
+            startBox(name, false);
+    }
+    return true;
+}
+
 // Moves a project's classic boxes into its shared container. A box that is
 // running keeps its own container until it is stopped, so the choice is
 // whether to restart those now: yes stops each one and starts it again inside
@@ -1885,6 +1940,8 @@ void MainWindow::onFork()
         return;
     ProjectRecord project = ProjectRecord::forRoot(dlg.targetDir());
     PortAllocator::ensurePool(project);
+    if (!confirmSharedMounts(project))
+        return;
     if (!project.sharedContainer)
         commitPortAllocation(tentativePorts);
 
@@ -2009,6 +2066,8 @@ void MainWindow::startBox(const QString &name, bool syncTranscriptTitle)
         return;
     }
     BoxRecord rec = BoxRecord::load(name);
+    if (rec.isValid() && rec.isShared() && !confirmSharedMounts(ProjectRecord::forRoot(rec.targetDir), name))
+        return;
     if (!rec.isValid()) {
         QMessageBox::warning(this, QStringLiteral("Start"),
                              QStringLiteral("No record found for ") + name);

@@ -152,6 +152,11 @@ So the stages are ordered to keep each one shippable.
      in the shared container, no moves only the stopped ones. A moved box's
      record gains `container=` and `session=`, its ports become pool ports,
      and its mounts are added to the project's.
+   - **Mount changes.** A container's mounts are fixed at creation. Saving
+     project mounts checks the host directories exist, then, if the container
+     is running without them, offers to restart every box in it. Starting a box
+     or creating one asks the same. A container that is only lingering after its
+     last box is replaced silently when the next box starts.
    - **Not in scope:** moving a running classic box into a shared container,
      and per-conversation CPU and memory (the container's totals are shown on
      each of its boxes).

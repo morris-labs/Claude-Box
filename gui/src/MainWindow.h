@@ -64,6 +64,11 @@ private slots:
     void onEdit();
     void offerResumeAfterReboot();
     void onConvertToShared(const QString &root);
+    // False if the user cancels. When the project's shared container is running
+    // without mounts the project now lists and boxes are live in it, asks to
+    // restart them all so the change applies; `starting` is a box the caller is
+    // about to start itself, so it is not restarted here.
+    bool confirmSharedMounts(const ProjectRecord &project, const QString &starting = QString());
     void onFork();
     void onSetupWizard();
     void onManageSshRemotes();

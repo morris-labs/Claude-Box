@@ -977,6 +977,38 @@ bool DockerBackend::runSharedContainer(const ProjectRecord &project, QString *er
     return runContainer(stand, {}, errorOut, sharedKeeperCommand());
 }
 
+QStringList DockerBackend::staleSharedMounts(const ProjectRecord &project) const
+{
+    const QString container = project.containerName();
+    if (project.dirs.isEmpty() || !isRunning(container))
+        return {};
+
+    QStringList have;
+    if (DockerApi::isAvailable()) {
+        const QJsonDocument doc = DockerApi::get(
+            QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + container + "/json");
+        for (const QJsonValue &b : doc.object().value("HostConfig").toObject().value("Binds").toArray())
+            have << b.toString();
+    } else {
+        QString out;
+        if (runDocker({"inspect", "-f", "{{range .HostConfig.Binds}}{{println .}}{{end}}", container},
+                      &out, nullptr, 5000))
+            have = out.split('\n', Qt::SkipEmptyParts);
+    }
+
+    QStringList missing;
+    for (const QString &d : project.dirs) {
+        QString hostRaw, containerPath;
+        ContainerPaths::splitMountSpec(d, hostRaw, containerPath);
+        const QString hostPath = QFileInfo(hostRaw).absoluteFilePath();
+        if (containerPath.isEmpty())
+            containerPath = ContainerPaths::hostToContainer(hostPath);
+        if (!have.contains(hostPath + QLatin1Char(':') + containerPath))
+            missing << d;
+    }
+    return missing;
+}
+
 bool DockerBackend::startShared(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const
 {
     QMutexLocker lock(&m_sharedMutex);
@@ -993,6 +1025,15 @@ bool DockerBackend::startShared(const BoxRecord &rec, const QStringList &claudeA
     for (const QString &a : claudeArgs)
         parts << shellQuote(a);
     const QString command = parts.join(QLatin1Char(' '));
+
+    // A container that is only lingering after its last session, with mounts
+    // the project has since changed, is replaced rather than reused: nothing is
+    // running in it, and reusing it would silently ignore the change.
+    if (isRunning(container) && SharedContainer::liveSessions(container).isEmpty()
+        && !staleSharedMounts(project).isEmpty()) {
+        stopMany({container}, nullptr);
+        waitForRemoval(container);
+    }
 
     QString lastError;
     // Twice: a container whose last session ended moments ago can be on its
