@@ -51,6 +51,10 @@ endif()
 add_executable(claude-box-gui WIN32
     src/main.cpp
     src/SingleInstanceGuard.cpp
+    src/WorktreeMigration.cpp
+    src/WorktreeMigration.h
+    src/Worktrees.cpp
+    src/Worktrees.h
     src/ProjectRecord.cpp
     src/ProjectRecord.h
     src/ProjectPanel.cpp

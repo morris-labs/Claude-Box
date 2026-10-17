@@ -6,6 +6,7 @@ namespace {
 const QString kWorkspaceKey = QStringLiteral("prompts/workspace");
 const QString kPortHintKey  = QStringLiteral("prompts/portHint");
 const QString kStarterKey   = QStringLiteral("prompts/starter");
+const QString kWorktreeKey  = QStringLiteral("prompts/worktree");
 } // namespace
 
 QString PromptTemplates::defaultWorkspace()
@@ -13,9 +14,10 @@ QString PromptTemplates::defaultWorkspace()
     return QStringLiteral(
         "Your workspace for this conversation is %3. It already exists.\n"
         "\n"
-        "Before making any changes, read CLAUDE.md if it exists, then read and maintain "
-        "INFRA.md, PLAN.md, and %3/STATUS.md — creating any that do not exist based on "
-        "the project and the conversation.\n"
+        "Before making any changes, read CLAUDE.md if it exists. Then read and maintain "
+        "%5 (notes on the shared environment) and PLAN.md and STATUS.md in %4 (notes "
+        "for this conversation only), creating any that do not exist based on the "
+        "project and the conversation.\n"
         "\n"
         "Do your work inside %3 rather than in the directory above it.\n"
         "\n"
@@ -26,11 +28,19 @@ QString PromptTemplates::defaultWorkspace()
         "asking. Any files that must survive a container rebuild must be saved inside "
         "the project directory.\n"
         "\n"
-        "When you stop work or are asked to checkpoint, update %3/STATUS.md with: the "
+        "When you stop work or are asked to checkpoint, update %4/STATUS.md with: the "
         "active plan, your current step, what you have done since the last checkpoint, "
         "what comes next, and any blockers. Keep STATUS.md under 60 lines.\n"
         "\n"
         "The conversation was opened as \"%2\". Wait for details before changing anything.");
+}
+
+QString PromptTemplates::defaultWorktree()
+{
+    return QStringLiteral(
+        "%3 is a git worktree of %1, on the branch %2. Commit your work to that branch. "
+        "Do not switch branches, and do not edit files in the main checkout. Other "
+        "conversations work in sibling worktrees of the same repository at the same time.");
 }
 
 QString PromptTemplates::defaultPortHint()
@@ -69,6 +79,21 @@ QString PromptTemplates::portHint()
 {
     QSettings s;
     return s.value(kPortHintKey, defaultPortHint()).toString();
+}
+
+QString PromptTemplates::worktree()
+{
+    QSettings s;
+    return s.value(kWorktreeKey, defaultWorktree()).toString();
+}
+
+void PromptTemplates::setWorktree(const QString &t)
+{
+    QSettings s;
+    if (t == defaultWorktree())
+        s.remove(kWorktreeKey);
+    else
+        s.setValue(kWorktreeKey, t);
 }
 
 QString PromptTemplates::starter()

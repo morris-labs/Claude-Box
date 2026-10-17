@@ -97,6 +97,8 @@ public:
     // True when the agent should get a subfolder of the target directory
     // named after the conversation, instead of working in the tree root.
     bool workspaceSubdir() const;
+    // True when the box should get its own git worktree and branch.
+    bool worktree() const;
     // Both start out showing what the settings files already resolve to,
     // and are always passed on to claude explicitly.
     QString model() const;
@@ -146,6 +148,13 @@ private:
     QComboBox *m_modelCombo = nullptr;
     QComboBox *m_effortCombo = nullptr;
     QCheckBox *m_skipPermsCheck = nullptr;
+    QCheckBox *m_worktreeCheck = nullptr;
+    // The git repository worktrees would come from for the current target
+    // directory; empty when there is none, which disables the checkbox.
+    QString m_primaryRepo;
+    // Edit mode for a worktree box: the conversation list is read from the
+    // worktree (where Claude's transcripts are), not from the project root.
+    QString m_conversationScanDir;
     QCheckBox *m_workspaceCheck = nullptr;
     QLabel *m_workspaceHint = nullptr;
     QDialogButtonBox *m_buttons = nullptr;

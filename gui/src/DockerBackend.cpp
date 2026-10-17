@@ -3,7 +3,9 @@
 #include "ContainerPaths.h"
 #include "ConversationCatalog.h"
 #include "DockerApi.h"
+#include "ProjectRecord.h"
 #include "PromptTemplates.h"
+#include "Worktrees.h"
 
 #include <QCoreApplication>
 #include <QSettings>
@@ -51,6 +53,19 @@ static QString promptPath(const QString &hostPath)
 {
     return PromptTemplates::displayPath(ContainerPaths::hostToContainer(hostPath),
                                         QStringLiteral("/home/") + DockerBackend::containerUsername());
+}
+
+// What the container runs to let git work in the mounted tree. A plain box
+// trusts its one directory. A worktree box also touches the main repository's
+// .git (which may be a different directory than the project root) and its
+// sibling worktrees, and safe.directory entries are not hierarchical, so it
+// trusts everything -- this is a sandbox, and the same thing a project's own
+// gitconfig does with `safe.directory = *`.
+static QString gitTrustCommand(const BoxRecord &rec)
+{
+    return rec.worktreeDir.isEmpty()
+        ? QStringLiteral("git config --global --add safe.directory \"$1\"")
+        : QStringLiteral("git config --global --add safe.directory '*'");
 }
 
 static QString buildContainerCmd(const QString &gitSetup, const QStringList &claudeArgs)
@@ -638,13 +653,15 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
     // something real (e.g. /mnt/host/c/Users/...) on Windows, where a host
     // path can't be a container path at all. See ContainerPaths.h.
     const QString containerDir = ContainerPaths::hostToContainer(rec.targetDir);
-    spec.workingDir = containerDir;
+    // Claude runs in the worktree when the box has one (it is under the
+    // mounted project root); everything else is keyed to the root.
+    spec.workingDir = ContainerPaths::hostToContainer(rec.workDir());
     spec.env << "IS_SANDBOX=1";
     spec.binds << (rec.targetDir + ":" + containerDir)
                << (QDir::homePath() + "/.claude:" + containerHome + "/.claude")
                << (QDir::homePath() + "/.claude.json:" + containerHome + "/.claude.json");
 
-    QString gitSetup = "git config --global --add safe.directory \"$1\"";
+    QString gitSetup = gitTrustCommand(rec);
     // The file is checked for on the host, but the value handed to the
     // container has to be the *container-side* path -- on Windows the host
     // string ("C:/.../gitconfig") is meaningless inside the Linux container,
@@ -684,7 +701,7 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
     if (DockerApi::isAvailable())
         return false; // a real failure, already reported -- don't retry differently
 
-    QString gitSetup = "git config --global --add safe.directory \"$1\"";
+    QString gitSetup = gitTrustCommand(rec);
     const QString containerDir = ContainerPaths::hostToContainer(rec.targetDir);
 
     const QString cliUser = containerUsername();
@@ -699,7 +716,7 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
          << "--name" << rec.name
          << "--user" << cliUser
          << "-e" << "IS_SANDBOX=1"
-         << "-w" << containerDir
+         << "-w" << ContainerPaths::hostToContainer(rec.workDir())
          << "-v" << (rec.targetDir + ":" + containerDir)
          << "-v" << (QDir::homePath() + "/.claude:" + cliContainerHome + "/.claude")
          << "-v" << (QDir::homePath() + "/.claude.json:" + cliContainerHome + "/.claude.json");
@@ -835,7 +852,8 @@ bool DockerBackend::runContainerViaApi(const BoxRecord &rec, const QStringList &
 }
 
 bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut,
-                              const QString &forkFromUuid) const
+                              const QString &forkFromUuid, bool useWorktree,
+                              const QString &forkSourceWorkDir) const
 {
     // A caller may hand us the uuid of a conversation that already exists
     // on disk (see ConversationCatalog / NewBoxDialog) -- typically one
@@ -857,15 +875,19 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
 
     QString slug;
     QString openingPrompt;
+    QString worktreeRepo;           // set once a worktree is provisioned
+    bool worktreeWasThere = false;  // it already existed: not ours to remove on failure
     // The container still mounts and runs in the *base* directory either
     // way -- the workspace is a subfolder the agent is pointed at, not a
     // different -w. That's deliberate, and inherited from the old bash
     // launcher: the sibling folders (and the tooling beside them) stay
     // visible, and every box for a tree keeps the same mount and the same
     // ~/.claude/projects encoding.
-    const bool provisionWorkspace = workspaceSubdir && !resumeExisting && !rec.conversationName.isEmpty();
+    const bool provisionWorktree = useWorktree && !resumeExisting && !rec.conversationName.isEmpty();
+    const bool provisionWorkspace = workspaceSubdir && !provisionWorktree && !resumeExisting
+                                    && !rec.conversationName.isEmpty();
 
-    if (provisionWorkspace) {
+    if (provisionWorktree || provisionWorkspace) {
         slug = slugifyIssueName(rec.conversationName);
         if (slug.isEmpty()) {
             if (errorOut)
@@ -873,27 +895,63 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
             return false;
         }
 
-        const QString workspacePath = rec.targetDir + "/" + slug;
-        // Creating the folder is all this does. Anything a particular tree
-        // needs inside it -- a repo clone, an .env, a seeded CLAUDE.md --
-        // is the agent's job, described in that directory's own CLAUDE.md.
-        // Scripting it here instead (this used to shell out to a project's
-        // new-issue.sh) put per-project knowledge in the launcher, where
-        // it can't be read by the agent that has to live with it.
-        //
-        // An existing folder is left exactly as it is: that means you're
-        // resuming prior work, not starting fresh.
-        if (!QDir(workspacePath).exists() && !QDir().mkpath(workspacePath)) {
-            if (errorOut)
-                *errorOut = "could not create workspace folder " + workspacePath;
-            return false;
+        QString workPath; // what the agent is told to work in
+        if (provisionWorktree) {
+            // A worktree of the project's primary repository. Claude runs
+            // there (see BoxRecord::workDir), so its transcripts and the
+            // conversation picker are keyed to that directory.
+            const QString repo = ProjectRecord::forRoot(rec.targetDir).primaryRepo;
+            if (repo.isEmpty()) {
+                if (errorOut)
+                    *errorOut = "this project has no git repository to make a worktree from";
+                return false;
+            }
+            QString error;
+            worktreeRepo = repo;
+            worktreeWasThere = QFileInfo::exists(Worktrees::worktreePath(repo, slug));
+            if (!Worktrees::add(repo, slug, &workPath, &error)) {
+                if (errorOut)
+                    *errorOut = "could not create the worktree: " + error;
+                return false;
+            }
+            rec.worktreeDir = workPath;
+            rec.branch = Worktrees::branchFor(slug);
+        } else {
+            workPath = rec.targetDir + "/" + slug;
+            // Creating the folder is all this does. Anything a particular tree
+            // needs inside it -- a repo clone, an .env, a seeded CLAUDE.md --
+            // is the agent's job, described in that directory's own CLAUDE.md.
+            // Scripting it here instead (this used to shell out to a project's
+            // new-issue.sh) put per-project knowledge in the launcher, where
+            // it can't be read by the agent that has to live with it.
+            //
+            // An existing folder is left exactly as it is: that means you're
+            // resuming prior work, not starting fresh.
+            if (!QDir(workPath).exists() && !QDir().mkpath(workPath)) {
+                if (errorOut)
+                    *errorOut = "could not create workspace folder " + workPath;
+                return false;
+            }
+            rec.workspaceDir = slug;
         }
 
-        rec.workspaceDir = slug;
+        // The notes for this conversation live in the project directory, not
+        // in the workspace, so they are easy to find and are not touched
+        // when a worktree goes away.
+        const QString notes = Worktrees::ensureNotesDir(rec.targetDir, slug);
+        const QString repoForExclude = ProjectRecord::forRoot(rec.targetDir).primaryRepo;
+        if (!repoForExclude.isEmpty())
+            Worktrees::ensureExcluded(repoForExclude);
 
         openingPrompt = PromptTemplates::expand(
             PromptTemplates::workspace(),
-            {slug, rec.conversationName, promptPath(workspacePath)});
+            {slug, rec.conversationName, promptPath(workPath), promptPath(notes),
+             promptPath(Worktrees::infraFile(rec.targetDir))});
+        if (provisionWorktree) {
+            openingPrompt += "\n\n" + PromptTemplates::expand(
+                PromptTemplates::worktree(),
+                {promptPath(repoForExclude), rec.branch, promptPath(workPath)});
+        }
 
         // One name for everything: the folder, the box, the record and
         // claude's own session name all become the slug, so a row in the
@@ -904,7 +962,7 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
 
     // Starter prompt: sent to new boxes that have no workspace subfolder.
     // Empty by default; configured in File > Edit Prompts.
-    if (!resumeExisting && !provisionWorkspace) {
+    if (!resumeExisting && !provisionWorkspace && !provisionWorktree) {
         const QString s = PromptTemplates::starter();
         if (!s.isEmpty())
             openingPrompt = PromptTemplates::expand(
@@ -942,13 +1000,35 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
     }
     if (!openingPrompt.isEmpty())
         claudeArgs << openingPrompt;
+    if (!forkFromUuid.isEmpty() && !forkSourceWorkDir.isEmpty()) {
+        // Claude finds the source transcript only under its own working
+        // directory, which a worktree box does not share with its source.
+        const QString from = ConversationCatalog::projectDirFor(forkSourceWorkDir);
+        const QString to = ConversationCatalog::projectDirFor(rec.workDir());
+        if (from != to) {
+            const QString src = from + '/' + forkFromUuid + ".jsonl";
+            const QString dst = to + '/' + forkFromUuid + ".jsonl";
+            QDir().mkpath(to);
+            if (QFileInfo::exists(src) && !QFileInfo::exists(dst) && !QFile::copy(src, dst)) {
+                if (errorOut)
+                    *errorOut = "could not copy the source transcript to " + dst;
+                return false;
+            }
+        }
+    }
     if (!forkFromUuid.isEmpty())
         claudeArgs << "--resume" << forkFromUuid << "--fork-session" << "--session-id" << rec.sessionUuid;
     else
         claudeArgs << (resumeExisting ? "--resume" : "--session-id") << rec.sessionUuid;
 
-    if (!runContainer(rec, claudeArgs, errorOut))
+    if (!runContainer(rec, claudeArgs, errorOut)) {
+        // A worktree made for this attempt has no box to belong to now. It is
+        // brand new, so the safety checks in remove() pass; a worktree that
+        // was already there is left alone.
+        if (!worktreeRepo.isEmpty() && !worktreeWasThere)
+            Worktrees::remove(worktreeRepo, rec.worktreeDir, nullptr);
         return false;
+    }
 
     rec.wasRunning = true;
     rec.save();
@@ -975,6 +1055,16 @@ QStringList DockerBackend::baseClaudeArgs(const BoxRecord &rec)
     if (!rec.effort.isEmpty())
         args << "--effort" << rec.effort;
 
+    // A worktree sits inside the project root, but when the primary
+    // repository is a subdirectory of it (reference repositories beside it,
+    // say), the rest of the root is outside Claude's working directory.
+    if (!rec.worktreeDir.isEmpty()) {
+        const ProjectRecord project = ProjectRecord::forRoot(rec.targetDir);
+        if (!project.primaryRepo.isEmpty()
+            && ProjectRecord::normalizeRoot(project.primaryRepo) != project.root)
+            args << "--add-dir" << ContainerPaths::hostToContainer(rec.targetDir);
+    }
+
     return args;
 }
 
@@ -993,7 +1083,7 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
     // explicitly: mint a new UUID and use --session-id, which keeps the
     // record consistent so subsequent reopens find the new transcript.
     const QString transcriptPath =
-        ConversationCatalog::projectDirFor(updated.targetDir)
+        ConversationCatalog::projectDirFor(updated.workDir())
         + QLatin1Char('/') + updated.sessionUuid + QStringLiteral(".jsonl");
     const bool hasTranscript = !updated.sessionUuid.isEmpty()
                                && QFile::exists(transcriptPath);

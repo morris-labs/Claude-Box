@@ -21,7 +21,8 @@ PromptsDialog::PromptsDialog(QWidget *parent)
         QStringLiteral("Workspace subfolder"),
         QStringLiteral("Sent as the opening message when a new box is created with a workspace "
                        "subfolder. The agent receives this before any user input."),
-        QStringLiteral("Placeholders: %1 = folder slug,  %2 = conversation name,  %3 = workspace folder path"),
+        QStringLiteral("Placeholders: %1 = folder slug,  %2 = conversation name,  %3 = workspace folder path,  "
+                       "%4 = this conversation's notes directory,  %5 = the shared INFRA.md path"),
         PromptTemplates::workspace(),
         PromptTemplates::defaultWorkspace());
 
@@ -43,6 +44,15 @@ PromptsDialog::PromptsDialog(QWidget *parent)
         PromptTemplates::starter(),
         PromptTemplates::defaultStarter());
 
+    m_worktreeEdit = makeTab(tabs,
+        QStringLiteral("Worktree"),
+        QStringLiteral("Appended to the workspace message when a new box works in its own "
+                       "git worktree. Tells the agent which branch it is on and to leave the "
+                       "main checkout alone."),
+        QStringLiteral("Placeholders: %1 = repository path,  %2 = branch,  %3 = worktree path"),
+        PromptTemplates::worktree(),
+        PromptTemplates::defaultWorktree());
+
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     connect(buttons, &QDialogButtonBox::accepted, this, &PromptsDialog::accept);
@@ -58,6 +68,7 @@ void PromptsDialog::accept()
     PromptTemplates::setWorkspace(m_workspaceEdit->toPlainText());
     PromptTemplates::setPortHint(m_portHintEdit->toPlainText());
     PromptTemplates::setStarter(m_starterEdit->toPlainText());
+    PromptTemplates::setWorktree(m_worktreeEdit->toPlainText());
     QDialog::accept();
 }
 

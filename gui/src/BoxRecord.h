@@ -61,6 +61,14 @@ struct BoxRecord {
     // targetDir either way, so nothing about reopening depends on it.
     QString workspaceDir;
     QString effort;           // `claude --effort <level>`; empty = whatever the settings say
+    // Host path of the git worktree this conversation works in, and its
+    // branch. Empty for a box that works in targetDir (or a workspace
+    // subfolder of it). When set, the container's working directory -- and so
+    // Claude's own, which names its transcript directory -- is this path,
+    // while targetDir stays the mounted project root. Always use workDir()
+    // to find the transcripts, never targetDir.
+    QString worktreeDir;
+    QString branch;
     QStringList ports;        // "HOST:CONTAINER", repeatable
     QStringList dirs;         // "HOSTPATH:CONTAINERPATH", repeatable
 
@@ -93,6 +101,8 @@ struct BoxRecord {
     // simply ignored in records written by earlier versions.
 
     bool isValid() const { return !name.isEmpty(); }
+    // The directory Claude runs in: the worktree when there is one.
+    QString workDir() const { return worktreeDir.isEmpty() ? targetDir : worktreeDir; }
 
     // Base ~/.claude-box/known directory (created on demand by save()).
     static QString knownDir();

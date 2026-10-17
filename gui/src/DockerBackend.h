@@ -154,8 +154,19 @@ public:
     // one is created. Existing folders are left untouched -- that means
     // "resuming", not "starting fresh". On success rec.workspaceDir holds
     // the folder's name.
+    //
+    // useWorktree instead gives the box its own git worktree of the project's
+    // primary repository (see Worktrees.h) and runs Claude there; it takes
+    // precedence over workspaceSubdir and is ignored when resuming. On
+    // success rec.worktreeDir and rec.branch are set.
+    //
+    // forkSourceWorkDir is the working directory of the box being forked.
+    // Claude only resumes a transcript found under its own working
+    // directory, so the source transcript is copied there first when the new
+    // box runs somewhere else.
     bool createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut,
-                    const QString &forkFromUuid = QString()) const;
+                    const QString &forkFromUuid = QString(), bool useWorktree = false,
+                    const QString &forkSourceWorkDir = QString()) const;
 
     // Restarts a known conversation's container with `claude --resume
     // <rec.sessionUuid>`. rec must already be fully populated (from
