@@ -74,4 +74,13 @@ QStringList liveSessions(const QString &container)
     return parseSessions(f.readAll());
 }
 
+QStringList allLiveSessions()
+{
+    QStringList all;
+    const QDir states(QDir::homePath() + QStringLiteral("/.claude-box/state"));
+    for (const QString &container : states.entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+        all += liveSessions(container);
+    return all;
+}
+
 } // namespace SharedContainer

@@ -46,4 +46,7 @@ QStringList parseSessions(const QByteArray &fileContents);
 // list when the file is missing or stale.
 QStringList liveSessions(const QString &container);
 
+// Live sessions of every shared container, found through the state directories.
+QStringList allLiveSessions();
+
 } // namespace SharedContainer

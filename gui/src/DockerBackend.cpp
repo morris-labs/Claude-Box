@@ -310,7 +310,13 @@ QString DockerBackend::uniqueBoxName(const QString &base) const
 
     QString out, err;
     runDocker({"ps", "-a", "--format", "{{.Names}}"}, &out, &err, 5000);
-    const QStringList existing = out.split('\n', Qt::SkipEmptyParts);
+    QStringList existing = out.split('\n', Qt::SkipEmptyParts);
+    // A box in a shared container has no container of its own to collide
+    // with, so its name must not match another record (a stopped box) or a
+    // live tmux session (which has to be unique within its container).
+    for (const BoxRecord &rec : BoxRecord::loadAll())
+        existing << rec.name;
+    existing += SharedContainer::allLiveSessions();
 
     int n = 1;
     while (existing.contains(candidate)) {
