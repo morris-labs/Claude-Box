@@ -9,7 +9,10 @@
 //
 // Placeholders are %N, filled in by expand():
 //   Workspace: %1 = folder slug, %2 = conversation name,
-//              %3 = workspace folder path
+//              %3 = workspace folder path, %4 = this conversation's notes
+//              directory, %5 = the shared INFRA.md path
+//   Worktree:  %1 = repository path, %2 = branch, %3 = worktree path;
+//              appended after the workspace prompt for worktree boxes
 //   Port hint: %1 = comma-separated mapped-port list
 //   Starter:   %1 = conversation name, %2 = target directory path
 // Paths are container-side and written with a leading ~ for the home
@@ -20,14 +23,17 @@ public:
     static QString workspace();
     static QString portHint();
     static QString starter();
+    static QString worktree();
 
     static void setWorkspace(const QString &t);
     static void setPortHint(const QString &t);
     static void setStarter(const QString &t);
+    static void setWorktree(const QString &t);
 
     static QString defaultWorkspace();
     static QString defaultPortHint();
     static QString defaultStarter();
+    static QString defaultWorktree();
 
     // Replaces each %N in `tmpl` with values[N-1] in a single pass. Unlike
     // QString::arg(a, b), a template that skips a number or uses only %2

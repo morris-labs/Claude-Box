@@ -3,6 +3,8 @@
 #include "BoxRecord.h"
 #include "CollapsibleSection.h"
 #include "ConversationCatalog.h"
+#include "ProjectRecord.h"
+#include "Worktrees.h"
 #include "ContainerPaths.h"
 #include "ManageSshRemotesDialog.h"
 #include "SshRemoteCatalog.h"
@@ -44,6 +46,9 @@ constexpr int kTitleRole = Qt::UserRole + 1;
 // on, so the two answers live in one list without a nested group.
 const char *kWorkspaceDirsKey = "newBox/workspaceDirs";
 const QString kNoWorkspaceMarker = QStringLiteral("!");
+// Same scheme for the worktree checkbox: absent = default (on when the
+// directory is a repository), "!"+path = explicitly off.
+const char *kWorktreeDirsKey = "newBox/worktreeDirs";
 
 // `claude --effort <level>` accepts exactly these, per `claude --help`.
 const QStringList kEffortLevels = {"low", "medium", "high", "xhigh", "max"};
@@ -294,12 +299,27 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     // a new-issue.sh; it works anywhere, so it's a checkbox. Ticked
     // automatically for a directory that has a provisioner, which is what
     // that project's boxes did implicitly before.
+    m_worktreeCheck = new QCheckBox("Give the agent its own git worktree and branch, named after the conversation", this);
+    form->addRow(QString(), m_worktreeCheck);
     m_workspaceCheck = new QCheckBox("Give the agent its own subfolder, named after the conversation", this);
     form->addRow(QString(), m_workspaceCheck);
     m_workspaceHint = new QLabel(this);
     m_workspaceHint->setWordWrap(true);
     m_workspaceHint->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
     form->addRow(QString(), m_workspaceHint);
+    // A conversation works in a worktree or in a subfolder, not both. `clicked`
+    // rather than `toggled`, so the programmatic changes made while loading a
+    // directory do not trigger this.
+    connect(m_worktreeCheck, &QCheckBox::clicked, this, [this](bool on) {
+        if (on)
+            m_workspaceCheck->setChecked(false);
+        updateWorkspaceHint();
+    });
+    connect(m_workspaceCheck, &QCheckBox::clicked, this, [this](bool on) {
+        if (on)
+            m_worktreeCheck->setChecked(false);
+        updateWorkspaceHint();
+    });
     connect(m_workspaceCheck, &QCheckBox::toggled, this, &NewBoxDialog::updateWorkspaceHint);
     connect(m_nameEdit, &QLineEdit::textChanged, this, &NewBoxDialog::updateWorkspaceHint);
 
@@ -421,6 +441,8 @@ void NewBoxDialog::loadForEdit(const BoxRecord &rec)
     m_dirEdit->setEnabled(false);
     m_dirBrowseButton->setEnabled(false);
 
+    // Claude's transcripts for a worktree box are keyed to the worktree.
+    m_conversationScanDir = rec.worktreeDir;
     reloadForDirectory(); // populates model/effort defaults and the conversation combo
     m_sessionCombo->setItemText(0, QStringLiteral("Start a new conversation on next restart"));
 
@@ -447,7 +469,11 @@ void NewBoxDialog::loadForEdit(const BoxRecord &rec)
     // agent may already be relying on it; shown for reference, not editable.
     m_workspaceCheck->setChecked(!rec.workspaceDir.isEmpty());
     m_workspaceCheck->setEnabled(false);
-    if (!rec.workspaceDir.isEmpty())
+    m_worktreeCheck->setChecked(!rec.worktreeDir.isEmpty());
+    m_worktreeCheck->setEnabled(false);
+    if (!rec.worktreeDir.isEmpty())
+        m_workspaceHint->setText(rec.worktreeDir + " (branch " + rec.branch + ") -- set when this box was created; not editable here.");
+    else if (!rec.workspaceDir.isEmpty())
         m_workspaceHint->setText(rec.workspaceDir + "/ -- set when this box was created; not editable here.");
 
     m_skipPermsCheck->setChecked(rec.skipPermissions);
@@ -577,8 +603,9 @@ void NewBoxDialog::reloadForDirectory()
     m_scannedDir = dir;
     const QString absDir = dir.isEmpty() ? QString() : QDir(dir).absolutePath();
 
+    const QString scanDir = m_conversationScanDir.isEmpty() ? absDir : m_conversationScanDir;
     const QList<ConversationInfo> conversations =
-        absDir.isEmpty() ? QList<ConversationInfo>() : ConversationCatalog::forDirectory(absDir);
+        scanDir.isEmpty() ? QList<ConversationInfo>() : ConversationCatalog::forDirectory(scanDir);
 
     QSignalBlocker blocker(m_sessionCombo);
     m_sessionCombo->clear();
@@ -641,6 +668,18 @@ void NewBoxDialog::reloadForDirectory()
         m_workspaceCheck->setChecked(remembered.contains(absDir)
                                      || (m_hasProvisioner && !remembered.contains(kNoWorkspaceMarker + absDir)));
     }
+
+    // A git repository gets worktrees by default; remembered per directory
+    // like the subfolder choice above, and exclusive with it.
+    m_primaryRepo = absDir.isEmpty() ? QString() : ProjectRecord::forRoot(absDir).primaryRepo;
+    if (!m_editMode) {
+        const QStringList rememberedTrees = QSettings().value(kWorktreeDirsKey).toStringList();
+        const bool wantTree = !m_primaryRepo.isEmpty() && !rememberedTrees.contains(kNoWorkspaceMarker + absDir);
+        m_worktreeCheck->setEnabled(!m_primaryRepo.isEmpty());
+        m_worktreeCheck->setChecked(wantTree);
+        if (wantTree)
+            m_workspaceCheck->setChecked(false);
+    }
     updateWorkspaceHint();
 }
 
@@ -658,13 +697,29 @@ void NewBoxDialog::updateWorkspaceHint()
     if (m_editMode)
         return; // loadForEdit() owns the hint; the folder is fixed at creation
 
-    // Resuming skips workspace provisioning altogether (see
-    // DockerBackend::createNew), so the checkbox has no effect to describe.
+    // Resuming skips workspace and worktree provisioning altogether (see
+    // DockerBackend::createNew), so the checkboxes have no effect to describe.
     const bool resuming = !m_sessionCombo->currentData().toString().isEmpty();
-    m_workspaceCheck->setEnabled(!resuming && !m_forkMode);
+    m_workspaceCheck->setEnabled(!resuming);
+    m_worktreeCheck->setEnabled(!resuming && !m_primaryRepo.isEmpty());
     if (resuming) {
         m_workspaceHint->setText(QStringLiteral(
-            "Resuming an existing conversation: no workspace folder is created."));
+            "Resuming an existing conversation: no workspace folder or worktree is created."));
+        return;
+    }
+
+    if (m_worktreeCheck->isChecked()) {
+        const QString slug = slugify(m_nameEdit->text().trimmed());
+        if (slug.isEmpty()) {
+            m_workspaceHint->setText(QStringLiteral("Needs a conversation name -- the worktree and branch are named after it."));
+            return;
+        }
+        m_workspaceHint->setText(QStringLiteral(
+            "A worktree of %1 on the new branch %2 will be created at %3, and the agent works there. "
+            "Its PLAN.md and STATUS.md go in %4.")
+            .arg(m_primaryRepo, Worktrees::branchFor(slug),
+                 Worktrees::worktreePath(m_primaryRepo, slug),
+                 Worktrees::notesDir(m_dirEdit->text().trimmed(), slug)));
         return;
     }
 
@@ -874,7 +929,7 @@ void NewBoxDialog::tryAccept()
 
     // The workspace checkbox is locked (and already satisfied) in edit
     // mode, so this only ever fires while actually choosing it.
-    if (m_workspaceCheck->isEnabled() && m_workspaceCheck->isChecked()
+    if (((m_workspaceCheck->isEnabled() && m_workspaceCheck->isChecked()) || worktree())
         && slugify(m_nameEdit->text().trimmed()).isEmpty()) {
         QMessageBox::warning(this, "New Box",
                              "A workspace folder is named after the conversation, so give this "
@@ -904,6 +959,14 @@ void NewBoxDialog::rememberWorkspaceChoice()
     remembered.removeAll(kNoWorkspaceMarker + dir);
     remembered << (m_workspaceCheck->isChecked() ? dir : (kNoWorkspaceMarker + dir));
     settings.setValue(kWorkspaceDirsKey, remembered);
+
+    if (!m_primaryRepo.isEmpty() && m_worktreeCheck->isEnabled()) {
+        QStringList trees = settings.value(kWorktreeDirsKey).toStringList();
+        trees.removeAll(kNoWorkspaceMarker + dir);
+        if (!m_worktreeCheck->isChecked())
+            trees << (kNoWorkspaceMarker + dir);
+        settings.setValue(kWorktreeDirsKey, trees);
+    }
 }
 
 QString NewBoxDialog::targetDir() const
@@ -929,6 +992,11 @@ bool NewBoxDialog::skipPermissions() const
 bool NewBoxDialog::workspaceSubdir() const
 {
     return m_workspaceCheck->isChecked();
+}
+
+bool NewBoxDialog::worktree() const
+{
+    return m_worktreeCheck->isChecked() && m_worktreeCheck->isEnabled();
 }
 
 QString NewBoxDialog::model() const

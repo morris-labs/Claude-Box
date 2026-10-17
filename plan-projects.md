@@ -106,7 +106,7 @@ So the stages are ordered to keep each one shippable.
    existing boxes by `target_dir` in the table and the details panel. Migrate
    by deriving projects from the existing records. No runtime change, and
    ports and mounts stay per box.
-2. Worktrees and migration. For a project with a primary repository, "New conversation"
+2. Worktrees and migration (built on `feature/projects-2-worktrees`). For a project with a primary repository, "New conversation"
    creates `git worktree add` on a new branch and runs Claude with the
    worktree as its working directory. This also fixes resuming, because the
    transcript is then keyed to the directory Claude runs in

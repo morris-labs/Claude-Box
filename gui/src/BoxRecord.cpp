@@ -67,6 +67,10 @@ BoxRecord BoxRecord::load(const QString &name)
             rec.workspaceDir = value;
         else if (key == "effort")
             rec.effort = value;
+        else if (key == "worktree")
+            rec.worktreeDir = value;
+        else if (key == "branch")
+            rec.branch = value;
         else if (key == "port")
             rec.ports.append(value);
         else if (key == "dir")
@@ -126,6 +130,10 @@ bool BoxRecord::save() const
         out << "workspace=" << workspaceDir << '\n';
     if (!effort.isEmpty())
         out << "effort=" << effort << '\n';
+    if (!worktreeDir.isEmpty())
+        out << "worktree=" << worktreeDir << '\n';
+    if (!branch.isEmpty())
+        out << "branch=" << branch << '\n';
     for (const QString &p : ports)
         out << "port=" << p << '\n';
     for (const QString &d : dirs)

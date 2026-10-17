@@ -41,5 +41,5 @@ Branch: `fix/link-existing-conversations`
 ## Projects (see plan-projects.md)
 
 - Stage 1, project layer: done on `feature/projects-1-project-layer`.
-- Stage 2, worktrees and migration: next.
+- Stage 2, worktrees and migration: done on `feature/projects-2-worktrees`, untested with a container.
 - Stage 3, shared container: after stage 2.

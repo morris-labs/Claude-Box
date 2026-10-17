@@ -12,6 +12,9 @@
 #include "PromptsDialog.h"
 #include "PortAllocator.h"
 #include "SetupWizard.h"
+#include "WorktreeMigration.h"
+#include "Worktrees.h"
+#include "ProjectRecord.h"
 #include "SshRemoteCatalog.h"
 #include "SshTunnelSession.h"
 #include "TerminalWidget.h"
@@ -199,6 +202,12 @@ void MainWindow::buildActions()
     m_forkAction->setStatusTip(QStringLiteral(
         "Start a new, independent box preloaded with this one's conversation history"));
     connect(m_forkAction, &QAction::triggered, this, &MainWindow::onFork);
+
+    m_convertWorktreeAction = new QAction(QStringLiteral("Convert to &Worktree…"), this);
+    m_convertWorktreeAction->setStatusTip(QStringLiteral(
+        "Turn this box's workspace subfolder into a git worktree of the project's repository, "
+        "keeping its conversation. Nothing is deleted."));
+    connect(m_convertWorktreeAction, &QAction::triggered, this, &MainWindow::onConvertToWorktree);
 
     m_openAction = new QAction(Icons::open(), QStringLiteral("&Start"), this);
     m_openAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")));
@@ -507,6 +516,7 @@ void MainWindow::buildMenus()
     boxMenu->addAction(m_openAction);
     boxMenu->addAction(m_editAction);
     boxMenu->addAction(m_forkAction);
+    boxMenu->addAction(m_convertWorktreeAction);
     boxMenu->addSeparator();
     boxMenu->addAction(m_closeAction);
     boxMenu->addAction(m_stopAllAction);
@@ -906,14 +916,22 @@ void MainWindow::updateActionStates()
     // Single-item actions: require exactly one selection.
     m_editAction->setEnabled(single && rec.isValid());
     m_forkAction->setEnabled(single && rec.isValid() && !rec.sessionUuid.isEmpty());
+    m_convertWorktreeAction->setEnabled(single && rec.isValid() && !rec.workspaceDir.isEmpty()
+                                        && rec.worktreeDir.isEmpty()
+                                        && single->status != BoxInfo::Status::Running
+                                        && single->status != BoxInfo::Status::Starting
+                                        && single->status != BoxInfo::Status::Stopping);
     m_purgeAction->setEnabled(single && !single->targetDir.isEmpty());
     const bool transitioning = single && (single->status == BoxInfo::Status::Starting
                                           || single->status == BoxInfo::Status::Stopping);
-    const bool canRelocate = single && !transitioning
+    // A worktree's .git file holds an absolute path into the project, so a
+    // box that has one cannot be moved or re-pointed without breaking it.
+    const bool hasWorktree = rec.isValid() && !rec.worktreeDir.isEmpty();
+    const bool canRelocate = single && !transitioning && !hasWorktree
                              && single->status != BoxInfo::Status::Running
                              && rec.isValid() && !single->targetDir.isEmpty();
     m_moveWorkDirAction->setEnabled(canRelocate);
-    m_changeWorkDirAction->setEnabled(single && !transitioning
+    m_changeWorkDirAction->setEnabled(single && !transitioning && !hasWorktree
                                       && single->status != BoxInfo::Status::Running
                                       && rec.isValid());
     m_openExternalAction->setEnabled(single && single->status == BoxInfo::Status::Running);
@@ -1099,6 +1117,7 @@ void MainWindow::showTableContextMenu(const QPoint &pos)
     menu.addAction(m_openAction);
     menu.addAction(m_editAction);
     menu.addAction(m_forkAction);
+    menu.addAction(m_convertWorktreeAction);
     menu.addSeparator();
     menu.addAction(m_closeAction);
     menu.addAction(m_openExternalClaudeAction);
@@ -1621,9 +1640,10 @@ void MainWindow::onNew()
     // the GUI stays responsive. No transient row is shown for new boxes since
     // the container name isn't known until createNew() returns.
     const bool workspaceSubdir = dlg.workspaceSubdir();
-    (void)QtConcurrent::run([this, rec, workspaceSubdir]() mutable {
+    const bool useWorktree = dlg.worktree();
+    (void)QtConcurrent::run([this, rec, workspaceSubdir, useWorktree]() mutable {
         QString error;
-        const bool ok = m_docker.createNew(rec, workspaceSubdir, &error);
+        const bool ok = m_docker.createNew(rec, workspaceSubdir, &error, QString(), useWorktree);
         const QString rName = rec.name;
         const QString rConv = rec.conversationName;
         QMetaObject::invokeMethod(this, [this, rName, rConv, ok, error]() {
@@ -1777,10 +1797,13 @@ void MainWindow::onFork()
     rec.sshRemoteRefs = dlg.sshRemoteRefs();
 
     const bool workspaceSubdir = dlg.workspaceSubdir();
+    const bool useWorktree = dlg.worktree();
     const QString forkSourceUuid = dlg.forkSourceUuid();
-    (void)QtConcurrent::run([this, rec, workspaceSubdir, forkSourceUuid]() mutable {
+    const QString sourceWorkDir = source.workDir();
+    (void)QtConcurrent::run([this, rec, workspaceSubdir, useWorktree, forkSourceUuid, sourceWorkDir]() mutable {
         QString error;
-        const bool ok = m_docker.createNew(rec, workspaceSubdir, &error, forkSourceUuid);
+        const bool ok = m_docker.createNew(rec, workspaceSubdir, &error, forkSourceUuid, useWorktree,
+                                           sourceWorkDir);
         const QString rName = rec.name;
         const QString rConv = rec.conversationName;
         QMetaObject::invokeMethod(this, [this, rName, rConv, ok, error]() {
@@ -1793,6 +1816,46 @@ void MainWindow::onFork()
             }
         }, Qt::QueuedConnection);
     });
+}
+
+// Converts a workspace-subfolder box into a worktree box. plan() inspects
+// without changing anything and its report is shown first; see
+// WorktreeMigration.h for what is and is not touched.
+void MainWindow::onConvertToWorktree()
+{
+    const BoxInfo *info = selectedBoxInfo();
+    if (!info)
+        return;
+    BoxRecord rec = BoxRecord::load(info->name);
+    if (!rec.isValid())
+        return;
+
+    const WorktreeMigration::Plan plan = WorktreeMigration::plan(rec);
+    if (!plan.ok) {
+        QMessageBox::information(this, QStringLiteral("Convert to Worktree"), plan.report().join('\n'));
+        return;
+    }
+
+    QMessageBox box(QMessageBox::Question, QStringLiteral("Convert to Worktree"),
+                    QStringLiteral("Convert \"%1\" to a git worktree?").arg(rec.conversationName),
+                    QMessageBox::Yes | QMessageBox::Cancel, this);
+    box.setInformativeText(plan.report().join('\n'));
+    box.setDefaultButton(QMessageBox::Cancel);
+    if (box.exec() != QMessageBox::Yes)
+        return;
+
+    QString error;
+    QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = WorktreeMigration::execute(rec, plan, &error);
+    QGuiApplication::restoreOverrideCursor();
+    if (!ok) {
+        QMessageBox::warning(this, QStringLiteral("Convert to Worktree"),
+                             QStringLiteral("Nothing was changed.\n\n") + error);
+        return;
+    }
+    if (!error.isEmpty())
+        QMessageBox::information(this, QStringLiteral("Convert to Worktree"), error);
+    refreshBoxes();
 }
 
 void MainWindow::startBox(const QString &name, bool syncTranscriptTitle)
@@ -1822,7 +1885,7 @@ void MainWindow::startBox(const QString &name, bool syncTranscriptTitle)
     if (syncTranscriptTitle && !rec.sessionUuid.isEmpty() && !rec.targetDir.isEmpty()
         && rec.conversationName == rec.transcriptSyncedName) {
         const QString transcriptTitle =
-            ConversationCatalog::titleForUuid(rec.targetDir, rec.sessionUuid);
+            ConversationCatalog::titleForUuid(rec.workDir(), rec.sessionUuid);
         if (!transcriptTitle.isEmpty() && transcriptTitle != rec.conversationName) {
             rec.conversationName = transcriptTitle;
             rec.transcriptSyncedName = transcriptTitle;
@@ -2267,6 +2330,28 @@ void MainWindow::onOpenExternal()
 #endif
 }
 
+// Asks whether to delete a removed box's worktree and branch too. Git has the
+// last word: Worktrees::remove() refuses a worktree with uncommitted work or a
+// branch with commits that exist nowhere else, and the reason is shown. The
+// default is to keep it.
+void MainWindow::offerWorktreeRemoval(const BoxRecord &rec)
+{
+    const QString repo = ProjectRecord::forRoot(rec.targetDir).primaryRepo;
+    if (repo.isEmpty())
+        return;
+    const QString msg = QStringLiteral("Also delete the git worktree for \"%1\"?\n\n%2\nbranch %3\n\n"
+                                       "It is deleted only if it has no uncommitted changes and its "
+                                       "branch has no commits that exist nowhere else.")
+                            .arg(rec.conversationName, rec.worktreeDir, rec.branch);
+    if (QMessageBox::question(this, QStringLiteral("Remove"), msg,
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        return;
+    QString error;
+    if (!Worktrees::remove(repo, rec.worktreeDir, &error))
+        QMessageBox::information(this, QStringLiteral("Remove"),
+                                 QStringLiteral("The worktree was kept: ") + error);
+}
+
 void MainWindow::onRemove()
 {
     const QList<const BoxInfo *> sel = selectedBoxInfos();
@@ -2301,6 +2386,8 @@ void MainWindow::onRemove()
         }
         // Remove the on-disk record so the box no longer appears in the dashboard.
         BoxRecord rec = BoxRecord::load(name);
+        if (rec.isValid() && !rec.worktreeDir.isEmpty() && QFileInfo::exists(rec.worktreeDir))
+            offerWorktreeRemoval(rec);
         if (rec.isValid())
             rec.remove();
     }
@@ -2347,8 +2434,16 @@ void MainWindow::onPurge()
 
     const QList<BoxRecord> known = BoxRecord::loadAll();
     for (const BoxRecord &rec : known) {
-        if (rec.targetDir == dir)
-            toRemove << (BoxRecord::knownDir() + "/" + rec.name);
+        if (rec.targetDir != dir)
+            continue;
+        toRemove << (BoxRecord::knownDir() + "/" + rec.name);
+        // A worktree box's transcripts are keyed to its worktree. The
+        // worktree itself is git work and is never purged.
+        if (!rec.worktreeDir.isEmpty()) {
+            const QString wtProject = ConversationCatalog::projectDirFor(rec.worktreeDir);
+            if (QDir(wtProject).exists() && !toRemove.contains(wtProject))
+                toRemove << wtProject;
+        }
     }
 
     if (toRemove.isEmpty()) {
@@ -2358,7 +2453,7 @@ void MainWindow::onPurge()
     }
 
     const QString msg = QStringLiteral("This will remove:\n\n") + toRemove.join('\n')
-        + QStringLiteral("\n\nThe directory's own contents (") + dir + QStringLiteral(") are not touched.\n\nProceed?");
+        + QStringLiteral("\n\nThe directory's own contents (") + dir + QStringLiteral("), including any worktrees, are not touched.\n\nProceed?");
     if (QMessageBox::question(this, QStringLiteral("Purge"), msg) != QMessageBox::Yes)
         return;
 

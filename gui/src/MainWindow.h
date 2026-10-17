@@ -147,6 +147,7 @@ private:
     QAction *m_manageRemotesAction = nullptr;
     QAction *m_editAction = nullptr;
     QAction *m_forkAction = nullptr;
+    QAction *m_convertWorktreeAction = nullptr;
     QAction *m_openAction = nullptr;
     QAction *m_closeAction = nullptr;
     QAction *m_stopAllAction = nullptr;
@@ -213,6 +214,8 @@ private:
     // False if the conversation the user picked in the New Box dialog
     // can't (or shouldn't) be adopted -- see the definition.
     bool confirmConversationAdoption(const QString &sessionUuid);
+    void offerWorktreeRemoval(const BoxRecord &rec);
+    void onConvertToWorktree();
 
     // syncTranscriptTitle: see the definition -- pass false when starting
     // several boxes in one loop to avoid a stall proportional to

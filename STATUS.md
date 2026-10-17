@@ -4,11 +4,16 @@
 `PLAN.md`: link existing conversations (branch `fix/link-existing-conversations`).
 
 ## Current step
-On branch `feature/projects-1-project-layer` (stage 1 done, stage 2 next).
+On branch `feature/projects-2-worktrees` (stages 1 and 2 built; stage 3, the shared
+container, not started). Needs a run on the host with Docker.
 Step 4 of 7: verify the picker flows in the running GUI. Needs a display and Docker,
 which this container lacks.
 
 ## Done since the last checkpoint
+- Stage 2: git worktrees per conversation (New Box checkbox, default on for git
+  projects), notes in `.claude-box/conversations/SLUG/`, Remove/Purge handling,
+  and Box > Convert to Worktree. Worktree and migration logic tested against real
+  git repositories (uncommitted, untracked, ignored files, transcripts, backup).
 - Stage 1 of `plan-projects.md`: project list beside the table, filtering by project,
   New Box opens in the selected project. Tested with an offscreen harness; the app
   starts offscreen. Not yet looked at on a real display.

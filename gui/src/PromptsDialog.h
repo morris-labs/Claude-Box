@@ -25,4 +25,5 @@ private:
     QPlainTextEdit *m_workspaceEdit = nullptr;
     QPlainTextEdit *m_portHintEdit  = nullptr;
     QPlainTextEdit *m_starterEdit   = nullptr;
+    QPlainTextEdit *m_worktreeEdit  = nullptr;
 };
