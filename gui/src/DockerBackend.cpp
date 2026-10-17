@@ -55,6 +55,35 @@ static QString promptPath(const QString &hostPath)
                                         QStringLiteral("/home/") + DockerBackend::containerUsername());
 }
 
+// Extra bind mounts needed when ~/.claude/projects is a symlink to somewhere
+// outside ~/.claude (a transcript store shared between setups, say). Only
+// ~/.claude itself is mounted, so inside the container that link would point
+// at nothing, and `claude --resume` would answer "No conversation found" for
+// a transcript that is sitting on the host. Binding the target at the same
+// absolute path makes the link resolve. Empty when projects/ is not a
+// symlink, or points inside ~/.claude.
+static QStringList projectsSymlinkBinds()
+{
+    QStringList binds;
+    const QFileInfo projectsInfo(QDir::homePath() + QStringLiteral("/.claude/projects"));
+    if (!projectsInfo.isSymLink())
+        return binds;
+    const QString target = projectsInfo.symLinkTarget();
+    if (target.isEmpty())
+        return binds;
+
+    // ~/.claude may itself be a symlink; compare against where it really is,
+    // and fall back to the logical path when it does not exist.
+    QString resolvedClaude = QFileInfo(QDir::homePath() + QStringLiteral("/.claude")).canonicalFilePath();
+    if (resolvedClaude.isEmpty())
+        resolvedClaude = QDir::homePath() + QStringLiteral("/.claude");
+    if (target == resolvedClaude || target.startsWith(resolvedClaude + QLatin1Char('/')))
+        return binds;
+
+    binds << (target + QLatin1Char(':') + target);
+    return binds;
+}
+
 // What the container runs to let git work in the mounted tree. A plain box
 // trusts its one directory. A worktree box also touches the main repository's
 // .git (which may be a different directory than the project root) and its
@@ -660,6 +689,10 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
     spec.binds << (rec.targetDir + ":" + containerDir)
                << (QDir::homePath() + "/.claude:" + containerHome + "/.claude")
                << (QDir::homePath() + "/.claude.json:" + containerHome + "/.claude.json");
+    for (const QString &b : projectsSymlinkBinds()) {
+        if (!spec.binds.contains(b))
+            spec.binds << b;
+    }
 
     QString gitSetup = gitTrustCommand(rec);
     // The file is checked for on the host, but the value handed to the
@@ -720,6 +753,8 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
          << "-v" << (rec.targetDir + ":" + containerDir)
          << "-v" << (QDir::homePath() + "/.claude:" + cliContainerHome + "/.claude")
          << "-v" << (QDir::homePath() + "/.claude.json:" + cliContainerHome + "/.claude.json");
+    for (const QString &b : projectsSymlinkBinds())
+        args << "-v" << b;
 
     // Container-side path, not the host one -- see launchSpec() for why.
     if (QFileInfo::exists(rec.targetDir + "/gitconfig")) {
