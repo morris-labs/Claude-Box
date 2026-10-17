@@ -33,19 +33,24 @@ container.
 ## Per-conversation notes
 
 `PLAN.md` and `STATUS.md` describe one line of work, so each conversation
-gets its own pair. `INFRA.md` describes the shared environment, so it stays
-once per project.
+gets its own pair. They live in the project directory, outside any worktree,
+so you can find them without knowing where a worktree is:
 
-- Location: `.claude-box/PLAN.md` and `.claude-box/STATUS.md` inside the
-  conversation's worktree (or workspace subfolder). The directory is added to
-  the repository's `info/exclude`, which every worktree shares, so the notes
-  are never committed and branches never conflict over them.
-- `INFRA.md` lives at the project root, outside any worktree.
-- The opening prompt names the exact paths, so the agent no longer relies on
-  the file being in its working directory. A project without worktrees or
+```
+PROJECT/.claude-box/INFRA.md                    shared environment notes
+PROJECT/.claude-box/conversations/SLUG/PLAN.md
+PROJECT/.claude-box/conversations/SLUG/STATUS.md
+```
+
+- `.claude-box/` is added to the repository's `info/exclude`, which every
+  worktree shares, so the notes are never committed and branches never
+  conflict over them.
+- The opening prompt names the exact paths, so the agent does not rely on the
+  files being in its working directory. A project without worktrees or
   subfolders keeps the root-level files, as today.
-- Removing a conversation moves its notes to
-  `PROJECT/.claude-box/archive/SLUG/` before the worktree is deleted.
+- The notes are not inside the worktree, so removing a worktree never removes
+  them. The directory name is a single constant, so renaming it is a
+  one-line change.
 
 ## Migrating existing subfolders
 
@@ -57,9 +62,8 @@ deletes anything.
 
 1. Classify the subfolder:
    - A clone of the same remote as a project repository: convertible.
-   - A repository with a different remote: register that repository on the
-     project, then convert. This means a project can have more than one
-     repository that worktrees come from (the per-issue trees need it).
+   - A repository with a different remote: not converted in stage 2; it
+     stays a plain subfolder until a project can have several repositories.
    - Not a repository: leave as a plain subfolder.
 2. For a convertible subfolder, fetch its branches into the project
    repository, create the worktree on the same branch, and copy over
@@ -67,10 +71,30 @@ deletes anything.
    or a detached HEAD that cannot be mapped.
 3. Move the old folder to `SLUG.pre-worktree` and leave removal to the user.
 4. Copy the conversation's transcript to the project directory that matches
-   the new working directory, and update `cwd`-dependent fields in the
-   record. Transcripts are keyed to the directory Claude ran in, which was
-   the project root, so without this step `--resume` finds nothing. Check
-   first that Claude resumes a copied transcript.
+   the new working directory (see "Old conversations are never lost").
+
+## Old conversations are never lost
+
+Checked on Claude Code 2.1.300: `claude --resume UUID` in the terminal looks
+only in the project directory of its own working directory ("No conversation
+found" otherwise). A transcript copied into the new directory's project folder
+resumes with its full history. A headless `claude -p --resume` found a
+transcript in another directory and appended to the original file, so do not
+rely on the interactive behavior matching it.
+
+Rules for the migration:
+
+- Copy, never move. The original transcript and the original box record stay
+  where they are.
+- Before changing anything, write a backup of the record to
+  `~/.claude-box/backup/` and list every transcript that will be copied.
+- A conversation is marked converted only after its copy exists and has the
+  same size as the original. Until then the old record keeps working.
+- Nothing in the migration deletes a transcript. Purge stays the only action
+  that does, and it asks first.
+- The conversation picker also offers transcripts found under the old project
+  root for the project's worktrees, so a conversation that was not converted
+  can still be adopted.
 
 ## Stages
 
@@ -97,9 +121,9 @@ So the stages are ordered to keep each one shippable.
 
 ## Open questions
 
-- Do the per-issue subfolders clone one shared repository or several
-  different ones? That decides how much of the multi-repository support in
-  stage 2 is needed.
+- Multiple repositories per project: the per-issue subfolders so far clone
+  one shared repository, so stage 2 supports one primary repository per
+  project. Several can be added later.
 - Where worktrees live: `.claude/worktrees/` (what `claude --worktree` uses)
   or a directory the app owns. Decide in stage 2.
 - Whether to drive worktrees with `claude --worktree` or with `git worktree`
