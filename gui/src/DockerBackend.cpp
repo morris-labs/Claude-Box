@@ -5,6 +5,7 @@
 #include "DockerApi.h"
 #include "ProjectRecord.h"
 #include "PromptTemplates.h"
+#include "SharedContainer.h"
 #include "Worktrees.h"
 
 #include <QCoreApplication>
@@ -102,6 +103,32 @@ static QString prepareSessionsMount(const BoxRecord &rec, const QString &contain
     if (!QDir().mkpath(dir))
         return QString();
     return dir + QLatin1Char(':') + containerHome + QStringLiteral("/.claude/sessions");
+}
+
+// The host directory the shared container's keeper writes its session list
+// into, mounted at SharedContainer::kStateMount. A stale list from an earlier
+// container of the same name is removed so it cannot pass for a live one.
+static QString sharedStateBind(const QString &container)
+{
+    const QString dir = SharedContainer::stateDir(container);
+    QDir().mkpath(dir);
+    QFile::remove(SharedContainer::stateFile(container));
+    return dir + QLatin1Char(':') + SharedContainer::kStateMount;
+}
+
+// The keeper command for a shared container: trust every directory for git
+// (it is a sandbox, and worktrees and sibling repositories are all in it),
+// then run the keeper. `bash -c SCRIPT _ STATE_DIR LINGER_SECONDS`.
+static QStringList sharedKeeperCommand()
+{
+    return {QStringLiteral("bash"), QStringLiteral("-c"),
+            QStringLiteral("git config --global --add safe.directory '*' 2>/dev/null; ")
+                + SharedContainer::keeperScript(),
+            QStringLiteral("_"), SharedContainer::kStateMount,
+            // CLAUDE_BOX_SHARED_GRACE lets a test shorten the linger.
+            QString::number(qEnvironmentVariableIsSet("CLAUDE_BOX_SHARED_GRACE")
+                                ? qEnvironmentVariableIntValue("CLAUDE_BOX_SHARED_GRACE")
+                                : SharedContainer::kStartupGraceSec)};
 }
 
 // What the container runs to let git work in the mounted tree. A plain box
@@ -383,6 +410,7 @@ QList<BoxInfo> DockerBackend::listBoxes(bool sampleStats) const
     // care which one ran.
     if (!listViaApi(result, seen, sampleStats))
         listViaCli(result, seen, sampleStats);
+    expandSharedContainers(result, seen);
 
     // Stopped: every tracked record not already accounted for (no container).
     const QList<BoxRecord> known = BoxRecord::loadAll();
@@ -622,6 +650,12 @@ void DockerBackend::listViaCli(QList<BoxInfo> &result, QSet<QString> &seen, bool
 
 bool DockerBackend::isRunning(const QString &name) const
 {
+    // A box in a shared container is running when its session is alive in a
+    // running container, not when a container of its own name exists.
+    const BoxRecord rec = BoxRecord::load(name);
+    if (rec.isValid() && rec.isShared())
+        return isRunning(rec.containerName()) && SharedContainer::liveSessions(rec.containerName()).contains(rec.tmuxSession());
+
     if (DockerApi::isAvailable()) {
         const QJsonDocument doc = DockerApi::get(
             QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + name + "/json");
@@ -693,7 +727,8 @@ QString DockerBackend::containerUsername()
 // create-container JSON body -- keeping the two derived from one
 // description is what stops them drifting apart.
 DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
-                                                    const QStringList &claudeArgs)
+                                                    const QStringList &claudeArgs,
+                                                    const QStringList &commandOverride)
 {
     LaunchSpec spec;
     spec.containerUser = containerUsername();
@@ -748,14 +783,20 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
         spec.binds << (hostAbs + ":" + containerPath);
     }
 
-    spec.cmd << "bash" << "-c" << buildContainerCmd(gitSetup, claudeArgs)
-             << "_" << containerDir;
+    if (!commandOverride.isEmpty()) {
+        spec.cmd = commandOverride;
+        spec.binds << sharedStateBind(rec.name);
+    } else {
+        spec.cmd << "bash" << "-c" << buildContainerCmd(gitSetup, claudeArgs)
+                 << "_" << containerDir;
+    }
     return spec;
 }
 
-bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const
+bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut,
+                                 const QStringList &commandOverride) const
 {
-    if (runContainerViaApi(rec, claudeArgs, errorOut))
+    if (runContainerViaApi(rec, claudeArgs, errorOut, commandOverride))
         return true;
     if (DockerApi::isAvailable())
         return false; // a real failure, already reported -- don't retry differently
@@ -811,20 +852,24 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
         args << "-v" << (hostPath + ":" + containerPath);
     }
 
-    args << "claude-code" << "bash" << "-c"
-         << buildContainerCmd(gitSetup, claudeArgs)
-         << "_" << containerDir;
+    if (!commandOverride.isEmpty()) {
+        args << "-v" << sharedStateBind(rec.name) << "claude-code" << commandOverride;
+    } else {
+        args << "claude-code" << "bash" << "-c"
+             << buildContainerCmd(gitSetup, claudeArgs)
+             << "_" << containerDir;
+    }
 
     return runDocker(args, nullptr, errorOut, 30000);
 }
 
 bool DockerBackend::runContainerViaApi(const BoxRecord &rec, const QStringList &claudeArgs,
-                                       QString *errorOut) const
+                                       QString *errorOut, const QStringList &commandOverride) const
 {
     if (!DockerApi::isAvailable())
         return false;
 
-    const LaunchSpec spec = launchSpec(rec, claudeArgs);
+    const LaunchSpec spec = launchSpec(rec, claudeArgs, commandOverride);
 
     QJsonArray cmd;
     for (const QString &arg : spec.cmd)
@@ -914,6 +959,109 @@ bool DockerBackend::runContainerViaApi(const BoxRecord &rec, const QStringList &
     if (errorOut)
         *errorOut = error;
     return false;
+}
+
+// Creates the project's shared container and starts its keeper. The record
+// handed to the launch code is a stand-in for the container itself: its name
+// is the container's, it mounts the project root, and it publishes the
+// project's port pool and extra mounts.
+bool DockerBackend::runSharedContainer(const ProjectRecord &project, QString *errorOut) const
+{
+    BoxRecord stand;
+    stand.name = project.containerName();
+    stand.targetDir = project.root;
+    stand.ports = project.ports;
+    stand.dirs = project.dirs;
+    stand.skipPermissions = false;
+    return runContainer(stand, {}, errorOut, sharedKeeperCommand());
+}
+
+bool DockerBackend::startShared(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const
+{
+    QMutexLocker lock(&m_sharedMutex);
+
+    const ProjectRecord project = ProjectRecord::forRoot(rec.targetDir);
+    const QString container = rec.containerName();
+    const QString workDir = ContainerPaths::hostToContainer(rec.workDir());
+
+    // claude and its arguments as one shell-quoted string, so tmux does not
+    // re-split a multi-word argument (see SharedContainer::sessionStartScript).
+    QStringList parts;
+    parts << QStringLiteral("claude");
+    for (const QString &a : claudeArgs)
+        parts << shellQuote(a);
+    const QString command = parts.join(QLatin1Char(' '));
+
+    QString lastError;
+    // Twice: a container whose last session ended moments ago can be on its
+    // way out just as we reach it.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (!isRunning(container)) {
+            if (!runSharedContainer(project, &lastError)) {
+                if (errorOut)
+                    *errorOut = lastError;
+                return false;
+            }
+        }
+
+        QString out, err;
+        const QStringList args = {QStringLiteral("exec"), QStringLiteral("--user"), containerUsername(),
+                                  container, QStringLiteral("bash"), QStringLiteral("-c"),
+                                  SharedContainer::sessionStartScript(), QStringLiteral("_"),
+                                  rec.tmuxSession(), workDir, command};
+        if (runDocker(args, &out, &err, 60000))
+            return true;
+        lastError = err.isEmpty() ? out : err;
+        if (isRunning(container))
+            break; // it is up, so this is a real failure, not the shutdown race
+    }
+    if (errorOut)
+        *errorOut = lastError;
+    return false;
+}
+
+// The container of a running shared project is not itself a box. Swap its row
+// for one row per box in it, Running or not according to the container's
+// session list, and let each carry the container's resource figures.
+void DockerBackend::expandSharedContainers(QList<BoxInfo> &result, QSet<QString> &seen) const
+{
+    const QList<BoxRecord> known = BoxRecord::loadAll();
+    QHash<QString, QList<BoxRecord>> byContainer;
+    for (const BoxRecord &rec : known) {
+        if (rec.isShared())
+            byContainer[rec.containerName()].append(rec);
+    }
+    if (byContainer.isEmpty())
+        return;
+
+    for (int i = result.size() - 1; i >= 0; --i) {
+        const BoxInfo container = result.at(i);
+        const auto boxes = byContainer.constFind(container.name);
+        if (boxes == byContainer.constEnd())
+            continue;
+        result.removeAt(i);
+
+        const bool up = container.status == BoxInfo::Status::Running;
+        const QStringList live = up ? SharedContainer::liveSessions(container.name) : QStringList();
+        for (const BoxRecord &rec : boxes.value()) {
+            BoxInfo info = container; // resource figures and detail text
+            info.name = rec.name;
+            info.conversationName = rec.conversationName;
+            info.targetDir = rec.targetDir;
+            info.wasRunning = rec.wasRunning;
+            info.status = live.contains(rec.tmuxSession()) ? BoxInfo::Status::Running
+                                                           : BoxInfo::Status::Stopped;
+            if (info.status != BoxInfo::Status::Running) {
+                info.stats.clear();
+                info.cpuPct = -1.0f;
+                info.memUsedBytes = 0;
+                info.memLimitBytes = 0;
+                info.detail = QStringLiteral("not running");
+            }
+            result.insert(i, info);
+            seen.insert(rec.name);
+        }
+    }
 }
 
 bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *errorOut,
@@ -1098,7 +1246,16 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
     else
         claudeArgs << (resumeExisting ? "--resume" : "--session-id") << rec.sessionUuid;
 
-    if (!runContainer(rec, claudeArgs, errorOut)) {
+    // A project that shares one container starts the conversation as a tmux
+    // session in it; the box's record names the container and the session.
+    const ProjectRecord project = ProjectRecord::forRoot(rec.targetDir);
+    const bool shared = project.sharedContainer;
+    if (shared) {
+        rec.container = project.containerName();
+        rec.session = rec.name;
+    }
+
+    if (!(shared ? startShared(rec, claudeArgs, errorOut) : runContainer(rec, claudeArgs, errorOut))) {
         // A worktree made for this attempt has no box to belong to now. It is
         // brand new, so the safety checks in remove() pass; a worktree that
         // was already there is left alone.
@@ -1172,7 +1329,8 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
                                  : QStringLiteral("--session-id"))
                << updated.sessionUuid;
 
-    if (!runContainer(updated, claudeArgs, errorOut))
+    if (!(updated.isShared() ? startShared(updated, claudeArgs, errorOut)
+                             : runContainer(updated, claudeArgs, errorOut)))
         return false;
 
     updated.wasRunning = true;
@@ -1207,7 +1365,21 @@ void DockerBackend::stopMany(const QStringList &names, QHash<QString, QString> *
     for (const QString &name : names) {
         bool ok = false;
         QString error;
-        if (DockerApi::isAvailable()) {
+        const BoxRecord shared = BoxRecord::load(name);
+        if (shared.isValid() && shared.isShared()) {
+            // Ending the conversation's tmux session is the whole stop; the
+            // container itself leaves once its last session has been gone for
+            // a while. A container that is already gone means it is stopped.
+            if (!isRunning(shared.containerName())) {
+                ok = true;
+            } else {
+                ok = runDocker({"exec", shared.containerName(), "tmux", "kill-session", "-t",
+                                "=" + shared.tmuxSession()}, nullptr, &error, 15000);
+                // A session that was not there is as stopped as one just killed.
+                if (!ok && error.contains(QStringLiteral("can't find session")))
+                    ok = true;
+            }
+        } else if (DockerApi::isAvailable()) {
             DockerApi::post(QStringLiteral("/") + DockerApi::kApiVersion + "/containers/" + name + "/stop",
                             {}, &error, 20000);
             ok = error.isEmpty();
@@ -1259,6 +1431,16 @@ QStringList DockerBackend::waitForRemovalMany(const QStringList &names) const
     QObject::connect(&poller, &QTimer::timeout, [&]() {
         for (auto it = remaining.begin(); it != remaining.end();) {
             const QString &name = *it;
+            // A box in a shared container is gone when its session has left
+            // the container's list, not when a container of its name has.
+            const BoxRecord sharedRec = BoxRecord::load(name);
+            if (sharedRec.isValid() && sharedRec.isShared()) {
+                if (!SharedContainer::liveSessions(sharedRec.containerName()).contains(sharedRec.tmuxSession()))
+                    it = remaining.erase(it);
+                else
+                    ++it;
+                continue;
+            }
             // Only a definitive answer -- confirmed gone, or confirmed still
             // present -- settles `exists`. A transient failure (socket hiccup,
             // docker CLI timeout) must not be read as "removed": that would

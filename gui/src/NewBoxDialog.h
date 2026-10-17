@@ -149,6 +149,8 @@ private:
     QComboBox *m_effortCombo = nullptr;
     QCheckBox *m_skipPermsCheck = nullptr;
     QCheckBox *m_worktreeCheck = nullptr;
+    // Shown when the target directory's project shares one container.
+    QLabel *m_sharedHint = nullptr;
     // The git repository worktrees would come from for the current target
     // directory; empty when there is none, which disables the checkbox.
     QString m_primaryRepo;

@@ -25,3 +25,4 @@ gui/build/
 /claude-box-resume-all.bash
 /claude-box-resume.service
 /docker-compose.yml
+/gitcontrol.sh

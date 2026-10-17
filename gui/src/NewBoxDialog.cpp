@@ -303,6 +303,11 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     form->addRow(QString(), m_worktreeCheck);
     m_workspaceCheck = new QCheckBox("Give the agent its own subfolder, named after the conversation", this);
     form->addRow(QString(), m_workspaceCheck);
+    m_sharedHint = new QLabel(this);
+    m_sharedHint->setWordWrap(true);
+    m_sharedHint->setVisible(false);
+    m_sharedHint->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
+    form->addRow(QString(), m_sharedHint);
     m_workspaceHint = new QLabel(this);
     m_workspaceHint->setWordWrap(true);
     m_workspaceHint->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::dimText().name()));
@@ -680,7 +685,13 @@ void NewBoxDialog::reloadForDirectory()
 
     // A git repository gets worktrees by default; remembered per directory
     // like the subfolder choice above, and exclusive with it.
-    m_primaryRepo = absDir.isEmpty() ? QString() : ProjectRecord::forRoot(absDir).primaryRepo;
+    const ProjectRecord project = absDir.isEmpty() ? ProjectRecord() : ProjectRecord::forRoot(absDir);
+    m_primaryRepo = project.primaryRepo;
+    m_sharedHint->setVisible(project.sharedContainer);
+    if (project.sharedContainer)
+        m_sharedHint->setText(QStringLiteral(
+            "This project shares one container. Ports come from the project's pool and mounts from "
+            "the project, so the port and mount settings below are not used."));
     if (!m_editMode) {
         const QStringList rememberedTrees = QSettings().value(kWorktreeDirsKey).toStringList();
         const bool wantTree = !m_primaryRepo.isEmpty() && !rememberedTrees.contains(kNoWorkspaceMarker + absDir);

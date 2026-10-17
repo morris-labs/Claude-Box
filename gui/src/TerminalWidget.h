@@ -28,7 +28,9 @@ public:
 
     // Spawns `docker attach <name>` and starts feeding its output into
     // the terminal. Returns false if the PTY/process spawn itself failed.
-    bool attachToContainer(const QString &containerName);
+    // `session` is the tmux session to attach to: "main" for a box with a
+    // container of its own, the box's own session in a shared container.
+    bool attachToContainer(const QString &containerName, const QString &session = QStringLiteral("main"));
 
     // Same idea, for any other interactive/long-running command worth
     // watching live rather than running silently in the background -- an

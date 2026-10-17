@@ -69,6 +69,12 @@ struct BoxRecord {
     // to find the transcripts, never targetDir.
     QString worktreeDir;
     QString branch;
+
+    // A box in a project's shared container: the container it runs in and
+    // its tmux session there. Both empty for a classic box, which owns a
+    // container of its own named `name` and runs claude in session "main".
+    QString container;
+    QString session;
     QStringList ports;        // "HOST:CONTAINER", repeatable
     QStringList dirs;         // "HOSTPATH:CONTAINERPATH", repeatable
 
@@ -103,6 +109,9 @@ struct BoxRecord {
     bool isValid() const { return !name.isEmpty(); }
     // The directory Claude runs in: the worktree when there is one.
     QString workDir() const { return worktreeDir.isEmpty() ? targetDir : worktreeDir; }
+    bool isShared() const { return !container.isEmpty() && container != name; }
+    QString containerName() const { return container.isEmpty() ? name : container; }
+    QString tmuxSession() const { return session.isEmpty() ? QStringLiteral("main") : session; }
 
     // Base ~/.claude-box/known directory (created on demand by save()).
     static QString knownDir();

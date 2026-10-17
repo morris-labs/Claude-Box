@@ -1,5 +1,6 @@
 #include "ProjectPanel.h"
 
+#include "PortAllocator.h"
 #include "ProjectRecord.h"
 #include "Theme.h"
 
@@ -136,14 +137,25 @@ void ProjectPanel::showContextMenu(const QPoint &pos)
     if (root.isEmpty())
         return;
 
+    const ProjectRecord project = ProjectRecord::forRoot(root);
     QMenu menu(this);
     QAction *rename = menu.addAction(QStringLiteral("Rename project…"));
     QAction *open = menu.addAction(QStringLiteral("Open folder"));
+    menu.addSeparator();
+    QAction *share = menu.addAction(QStringLiteral("Share one container for this project"));
+    share->setCheckable(true);
+    share->setChecked(project.sharedContainer);
+    QAction *mounts = menu.addAction(QStringLiteral("Project mounts…"));
+    mounts->setEnabled(project.sharedContainer);
     QAction *chosen = menu.exec(m_list->viewport()->mapToGlobal(pos));
     if (chosen == rename)
         renameProject(root);
     else if (chosen == open)
         QDesktopServices::openUrl(QUrl::fromLocalFile(root));
+    else if (chosen == share)
+        setSharedContainer(root, share->isChecked());
+    else if (chosen == mounts)
+        editMounts(root);
 }
 
 void ProjectPanel::renameProject(const QString &root)
@@ -163,4 +175,63 @@ void ProjectPanel::renameProject(const QString &root)
         return;
     }
     emit projectRenamed();
+}
+
+// Turning sharing on reserves the project's pool of ten host ports once; they
+// stay reserved when it is turned off, so a conversation already holding one
+// keeps it. Boxes that exist keep running as they are: sharing applies to
+// conversations started afterwards.
+void ProjectPanel::setSharedContainer(const QString &root, bool on)
+{
+    ProjectRecord rec = ProjectRecord::forRoot(root);
+    if (on) {
+        const QString msg = QStringLiteral(
+            "New conversations in \"%1\" will run together in one container, sharing its tools, "
+            "caches, ports and mounts. Existing boxes are not changed.\n\n"
+            "The container's ports and mounts are fixed when it is created, so changing them "
+            "later restarts every conversation in it.\n\nTurn this on?").arg(rec.name());
+        if (QMessageBox::question(this, QStringLiteral("Shared container"), msg) != QMessageBox::Yes)
+            return;
+        if (rec.ports.isEmpty()) {
+            const QList<int> ports = PortAllocator::tentativeAllocate(10, BoxRecord::loadAll());
+            if (ports.size() < 10) {
+                QMessageBox::warning(this, QStringLiteral("Shared container"),
+                                     QStringLiteral("Not enough free ports in the reserved range."));
+                return;
+            }
+            for (int port : ports)
+                rec.ports << QStringLiteral("%1:%1").arg(port);
+            PortAllocator::setNextBase(ports.last() + 1 > PortAllocator::kRangeEnd
+                                           ? PortAllocator::kRangeStart : ports.last() + 1);
+        }
+    }
+    rec.sharedContainer = on;
+    if (!rec.save()) {
+        QMessageBox::warning(this, QStringLiteral("Shared container"),
+                             QStringLiteral("Could not save the project."));
+        return;
+    }
+    emit projectRenamed(); // rebuilds the list
+}
+
+void ProjectPanel::editMounts(const QString &root)
+{
+    ProjectRecord rec = ProjectRecord::forRoot(root);
+    bool ok = false;
+    const QString text = QInputDialog::getMultiLineText(
+        this, QStringLiteral("Project mounts"),
+        QStringLiteral("One mount per line, HOST_PATH or HOST_PATH:CONTAINER_PATH.\n"
+                       "Applied when the container is next created, which is when no conversation "
+                       "in this project is running."),
+        rec.dirs.join('\n'), &ok);
+    if (!ok)
+        return;
+    rec.dirs.clear();
+    for (const QString &line : text.split('\n', Qt::SkipEmptyParts)) {
+        const QString t = line.trimmed();
+        if (!t.isEmpty())
+            rec.dirs << t;
+    }
+    if (!rec.save())
+        QMessageBox::warning(this, QStringLiteral("Project mounts"), QStringLiteral("Could not save the project."));
 }

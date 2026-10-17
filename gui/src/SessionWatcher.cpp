@@ -104,16 +104,16 @@ void SessionWatcher::scan()
     QStringList watchDirs = {sharedSessionsDir()};
     QStringList watchFiles;
 
-    // The shared directory is read lazily: only boxes without a directory of
-    // their own need it.
-    QHash<QString, Entry> shared;
-    bool sharedRead = false;
-    auto readShared = [&]() -> const QHash<QString, Entry> & {
-        if (!sharedRead) {
-            shared = readEntries(sharedSessionsDir(), &watchFiles);
-            sharedRead = true;
+    // Directories of files shared by several boxes (the host's own sessions
+    // directory, or a shared container's), read lazily and once per scan.
+    QHash<QString, QHash<QString, Entry>> sharedDirs;
+    auto readShared = [&](const QString &dir) -> const QHash<QString, Entry> & {
+        auto it = sharedDirs.find(dir);
+        if (it == sharedDirs.end()) {
+            watchDirs << dir;
+            it = sharedDirs.insert(dir, readEntries(dir, &watchFiles));
         }
-        return shared;
+        return it.value();
     };
 
     // A box that stopped has nothing to follow; it is read afresh when it
@@ -155,7 +155,11 @@ void SessionWatcher::scan()
             // they display, and a killed container leaves stale files, so
             // several matches are expected and settled in favour of the newest
             // command-line process.
-            const QHash<QString, Entry> &all = readShared();
+            // Boxes in a shared container have one directory for the whole
+            // container, where pids are unique; everything else shares the
+            // host's.
+            const QHash<QString, Entry> &all =
+                readShared(rec.isShared() ? BoxRecord::sessionsDir(rec.containerName()) : sharedSessionsDir());
             if (!binding.key.isEmpty()) {
                 const auto found = all.constFind(binding.key);
                 if (found != all.constEnd())

@@ -125,7 +125,7 @@ void TerminalWidget::setupVterm()
     vterm_output_set_callback(m_vterm, vtermOutputCallback, this);
 }
 
-bool TerminalWidget::attachToContainer(const QString &containerName)
+bool TerminalWidget::attachToContainer(const QString &containerName, const QString &session)
 {
     // Containers run a keeper-loop bash as PID 1 (not the tmux client), so
     // `docker attach` would connect to the bash loop -- not to claude. Use
@@ -146,11 +146,12 @@ bool TerminalWidget::attachToContainer(const QString &containerName)
                          containerName,
                          QStringLiteral("bash"), QStringLiteral("-c"),
                          QStringLiteral("count=0; "
-                             "until tmux has-session -t main 2>/dev/null; do "
+                             "until tmux has-session -t \"=$1\" 2>/dev/null; do "
                                "sleep 0.5; count=$((count+1)); "
                                "[ $count -ge 60 ] && exit 1; "
                              "done; "
-                             "exec tmux attach -d -t main")});
+                             "exec tmux attach -d -t \"=$1\""),
+                         QStringLiteral("_"), session});
 }
 
 bool TerminalWidget::attachToCommand(const QString &program, const QStringList &args,

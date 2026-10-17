@@ -1,5 +1,7 @@
 #include "PortAllocator.h"
 
+#include "ProjectRecord.h"
+
 #include <QDir>
 #include <QLockFile>
 #include <QSettings>
@@ -35,6 +37,17 @@ QSet<int> PortAllocator::reservedPorts(const QList<BoxRecord> &existing)
     QSet<int> used;
     for (const BoxRecord &rec : existing) {
         for (const QString &p : rec.ports) {
+            const int colon = p.indexOf(':');
+            bool ok = false;
+            const int hostPort = (colon >= 0 ? p.left(colon) : p).toInt(&ok);
+            if (ok && hostPort > 0)
+                used.insert(hostPort);
+        }
+    }
+    // A shared container publishes its whole pool whether or not a
+    // conversation is using it yet.
+    for (const ProjectRecord &project : ProjectRecord::loadAll()) {
+        for (const QString &p : project.ports) {
             const int colon = p.indexOf(':');
             bool ok = false;
             const int hostPort = (colon >= 0 ? p.left(colon) : p).toInt(&ok);
