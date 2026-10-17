@@ -46,10 +46,12 @@ PromptsDialog::PromptsDialog(QWidget *parent)
 
     m_worktreeEdit = makeTab(tabs,
         QStringLiteral("Worktree"),
-        QStringLiteral("Appended to the workspace message when a new box works in its own "
-                       "git worktree. Tells the agent which branch it is on and to leave the "
-                       "main checkout alone."),
-        QStringLiteral("Placeholders: %1 = repository path,  %2 = branch,  %3 = worktree path"),
+        QStringLiteral("Sent as the opening message when a new box is created with its own git "
+                       "worktree. It replaces the workspace subfolder message for those boxes. "
+                       "Clearing the field restores the default."),
+        QStringLiteral("Placeholders: %1 = folder slug,  %2 = conversation name,  %3 = worktree path,  "
+                       "%4 = this conversation's notes directory,  %5 = the shared INFRA.md path,  "
+                       "%6 = repository path,  %7 = branch"),
         PromptTemplates::worktree(),
         PromptTemplates::defaultWorktree());
 

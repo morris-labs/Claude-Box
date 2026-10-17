@@ -12,8 +12,11 @@
 //   Workspace: %1 = folder slug, %2 = conversation name,
 //              %3 = workspace folder path, %4 = this conversation's notes
 //              directory, %5 = the shared INFRA.md path
-//   Worktree:  %1 = repository path, %2 = branch, %3 = worktree path;
-//              appended after the workspace prompt for worktree boxes
+//   Worktree:  a complete variant of the workspace prompt, used instead of it
+//              for a box with its own worktree. %1 = folder slug,
+//              %2 = conversation name, %3 = worktree path, %4 = notes
+//              directory, %5 = shared INFRA.md path, %6 = repository path,
+//              %7 = branch
 //   Port hint: %1 = comma-separated mapped-port list
 //   Starter:   %1 = conversation name, %2 = target directory path
 // Paths are container-side and written with a leading ~ for the home
