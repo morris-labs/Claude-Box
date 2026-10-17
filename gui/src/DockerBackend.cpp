@@ -943,14 +943,17 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
         if (!repoForExclude.isEmpty())
             Worktrees::ensureExcluded(repoForExclude);
 
-        openingPrompt = PromptTemplates::expand(
-            PromptTemplates::workspace(),
-            {slug, rec.conversationName, promptPath(workPath), promptPath(notes),
-             promptPath(Worktrees::infraFile(rec.targetDir))});
+        const QString notesPath = promptPath(notes);
+        const QString infraPath = promptPath(Worktrees::infraFile(rec.targetDir));
         if (provisionWorktree) {
-            openingPrompt += "\n\n" + PromptTemplates::expand(
+            openingPrompt = PromptTemplates::expand(
                 PromptTemplates::worktree(),
-                {promptPath(repoForExclude), rec.branch, promptPath(workPath)});
+                {slug, rec.conversationName, promptPath(workPath), notesPath, infraPath,
+                 promptPath(repoForExclude), rec.branch});
+        } else {
+            openingPrompt = PromptTemplates::expand(
+                PromptTemplates::workspace(),
+                {slug, rec.conversationName, promptPath(workPath), notesPath, infraPath});
         }
 
         // One name for everything: the folder, the box, the record and
