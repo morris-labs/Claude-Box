@@ -26,7 +26,8 @@ which this container lacks.
 ## Next
 - Test on the host: adopt a conversation whose title matches an existing folder,
   then edit a running box and switch its conversation.
-- Review `plan-projects.md`; start stage 1 (project layer) on a new branch.
+- Review `plan-projects.md` (now has per-conversation notes and subfolder
+  migration); start stage 1 (project layer) on a new branch.
 - Fork/rewind button in the Claude desktop app fails: remote-control limitation of
   Claude Code, not claude-box. Nothing to do here.
 - (old) Decide on auto-detecting `/clear` (new session id) on restart. See `PLAN.md`.
