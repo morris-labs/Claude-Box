@@ -31,6 +31,9 @@ signals:
     // The user asked to move the project's existing boxes into its shared
     // container; the owner does it, since it stops and starts boxes.
     void convertToSharedRequested(const QString &root);
+    // The project's mounts were saved; the owner checks whether a running
+    // container needs recreating to apply them.
+    void mountsChanged(const QString &root);
 
 private:
     void showContextMenu(const QPoint &pos);

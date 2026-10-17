@@ -2,10 +2,12 @@
 
 #include "BoxRecord.h"
 #include "PortAllocator.h"
+#include "ContainerPaths.h"
 #include "ProjectRecord.h"
 #include "Theme.h"
 
 #include <QDesktopServices>
+#include <QFileInfo>
 #include <QHash>
 #include <QInputDialog>
 #include <QLabel>
@@ -213,12 +215,29 @@ void ProjectPanel::editMounts(const QString &root)
         rec.dirs.join('\n'), &ok);
     if (!ok)
         return;
-    rec.dirs.clear();
+    QStringList dirs, missing;
     for (const QString &line : text.split('\n', Qt::SkipEmptyParts)) {
         const QString t = line.trimmed();
-        if (!t.isEmpty())
-            rec.dirs << t;
+        if (t.isEmpty())
+            continue;
+        QString hostRaw, containerPath;
+        ContainerPaths::splitMountSpec(t, hostRaw, containerPath);
+        // A host directory that does not exist would be created by docker,
+        // owned by root and unwritable by the container user.
+        if (!QFileInfo(hostRaw).isDir())
+            missing << hostRaw;
+        dirs << t;
     }
-    if (!rec.save())
+    if (!missing.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Project mounts"),
+                             QStringLiteral("These directories do not exist on the host:\n\n")
+                                 + missing.join('\n') + QStringLiteral("\n\nNothing was saved."));
+        return;
+    }
+    rec.dirs = dirs;
+    if (!rec.save()) {
         QMessageBox::warning(this, QStringLiteral("Project mounts"), QStringLiteral("Could not save the project."));
+        return;
+    }
+    emit mountsChanged(root);
 }
