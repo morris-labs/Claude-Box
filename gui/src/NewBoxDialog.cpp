@@ -412,18 +412,28 @@ void NewBoxDialog::loadForEdit(const BoxRecord &rec)
     if (auto *ok = m_buttons->button(QDialogButtonBox::Ok))
         ok->setText("Save Changes");
 
-    // Neither is safe to change after creation: the mount and the
-    // ~/.claude/projects encoding are keyed off the directory, and
-    // switching which conversation a box resumes is what adopting a
-    // conversation into a *new* box is for, not this.
+    // The directory isn't safe to change after creation: the mount and the
+    // ~/.claude/projects encoding are keyed off it. The conversation is: a
+    // box can end up linked to the wrong one (Claude's /clear starts a new
+    // session id that the record never hears about), so the picker stays
+    // live and lets the user point the box at another.
     m_dirEdit->setText(rec.targetDir);
     m_dirEdit->setEnabled(false);
     m_dirBrowseButton->setEnabled(false);
 
-    reloadForDirectory(); // populates model/effort defaults and the (disabled) conversation combo
-    m_sessionCombo->setEnabled(false);
-    m_sessionHint->setText(rec.sessionUuid.isEmpty() ? QStringLiteral("No session recorded for this box.")
-        : QStringLiteral("Resumes %1. Editing a box doesn't change which conversation it resumes.").arg(rec.sessionUuid));
+    reloadForDirectory(); // populates model/effort defaults and the conversation combo
+    m_sessionCombo->setItemText(0, QStringLiteral("Start a new conversation on next restart"));
+
+    int current = rec.sessionUuid.isEmpty() ? 0 : m_sessionCombo->findData(rec.sessionUuid);
+    if (current < 0) {
+        // Recorded, but no transcript on disk (or none with user turns).
+        // Keep it selectable so saving without touching the picker is a no-op.
+        m_sessionCombo->addItem(QStringLiteral("Current: %1  (no transcript found)").arg(rec.sessionUuid),
+                                rec.sessionUuid);
+        current = m_sessionCombo->count() - 1;
+    }
+    m_sessionCombo->setCurrentIndex(current);
+    onConversationChanged(current);
 
     m_nameEdit->setText(rec.conversationName);
     m_autoFilledName = rec.conversationName;
@@ -565,7 +575,6 @@ void NewBoxDialog::reloadForDirectory()
     if (dir == m_scannedDir && m_sessionCombo->count() > 0)
         return;
     m_scannedDir = dir;
-    m_folderMatchDir.clear();
     const QString absDir = dir.isEmpty() ? QString() : QDir(dir).absolutePath();
 
     const QList<ConversationInfo> conversations =
@@ -637,101 +646,77 @@ void NewBoxDialog::reloadForDirectory()
 
 // Says, in the form, exactly what will appear on disk -- the slug rules
 // are the container's (alphanumeric runs joined by underscores), so
-// showing the result beats explaining it. Also detects an existing
-// matching subfolder and pre-populates the conversation combo with its
-// conversations (folder-match), restoring the parent dir's list when the
-// match is no longer applicable.
+// showing the result beats explaining it.
+//
+// This only ever writes the hint label. It must never touch the
+// conversation picker: selecting a conversation fills in the name, the
+// name change lands here, and a folder named after that conversation
+// usually exists already -- resetting the picker at that point silently
+// turned "resume this conversation" into "start a new one".
 void NewBoxDialog::updateWorkspaceHint()
 {
-    auto restoreParentConversations = [this] {
-        if (!m_folderMatchDir.isEmpty()) {
-            m_folderMatchDir.clear();
-            m_folderMatchConvCount = 0;
-            m_scannedDir.clear(); // force reloadForDirectory to rescan
-            reloadForDirectory(); // also calls updateWorkspaceHint; m_folderMatchDir is now clear so no loop
-        }
-    };
+    if (m_editMode)
+        return; // loadForEdit() owns the hint; the folder is fixed at creation
+
+    // Resuming skips workspace provisioning altogether (see
+    // DockerBackend::createNew), so the checkbox has no effect to describe.
+    const bool resuming = !m_sessionCombo->currentData().toString().isEmpty();
+    m_workspaceCheck->setEnabled(!resuming && !m_forkMode);
+    if (resuming) {
+        m_workspaceHint->setText(QStringLiteral(
+            "Resuming an existing conversation: no workspace folder is created."));
+        return;
+    }
 
     if (!m_workspaceCheck->isChecked()) {
         m_workspaceHint->setText(QStringLiteral("The agent works in the target directory itself."));
-        restoreParentConversations();
         return;
     }
 
     const QString slug = slugify(m_nameEdit->text().trimmed());
     if (slug.isEmpty()) {
         m_workspaceHint->setText(QStringLiteral("Needs a conversation name -- the folder is named after it."));
-        restoreParentConversations();
         return;
     }
 
-    const QString dir = m_dirEdit->text().trimmed();
-    const QString path = dir + "/" + slug;
-
+    const QString path = m_dirEdit->text().trimmed() + "/" + slug;
     if (!QDir(path).exists()) {
-        restoreParentConversations();
         m_workspaceHint->setText(QStringLiteral("%1/ will be created, and the agent told to set it up "
                                                "per this directory's CLAUDE.md and work there.").arg(slug));
         return;
     }
 
-    // Folder exists. If this is a newly matched folder, reset the combo to
-    // just "Start a new conversation" -- the subfolder's own conversations
-    // are deliberately not added as items (see m_folderMatchConvCount).
-    if (m_folderMatchDir != path) {
-        m_folderMatchDir = path;
-        const QString absPath = QDir(path).absolutePath();
-        // The container runs with -w <baseDir>, not the subfolder, so
-        // `claude --resume <uuid>` looks in the base directory's project dir
-        // and won't find transcripts stored under the subfolder's encoded
-        // path. Selecting one would take the resumeExisting path in
-        // createNew() with the wrong -w, so they are never made selectable --
-        // only their count is surfaced, in the hint text below.
-        m_folderMatchConvCount = ConversationCatalog::forDirectory(absPath).size();
-
-        {
-            QSignalBlocker blocker(m_sessionCombo);
-            m_sessionCombo->clear();
-            m_sessionCombo->addItem(QStringLiteral("Start a new conversation"), QString());
-        }
-
-        // Clear m_sessionHint: it may still describe a conversation from the
-        // parent directory (since the QSignalBlocker above prevented
-        // onConversationChanged from running and updating it). The combo is
-        // back on index 0, so hint should say nothing about a session.
-        m_sessionHint->setText(QString());
-        // Reset m_autoFilledName so the next auto-fill comparison is against
-        // the current name field, not whatever a prior selection set.
-        m_autoFilledName = m_nameEdit->text();
-
-        if (m_folderMatchConvCount > 0) {
-            m_workspaceHint->setText(QStringLiteral(
-                "%1/ already exists (%2 conversation(s) found there). "
-                "They cannot be resumed from this box — the container runs in the "
-                "base directory. Start a new conversation instead.")
-                .arg(slug).arg(m_folderMatchConvCount));
-        } else {
-            m_workspaceHint->setText(
-                QStringLiteral("%1/ already exists — it will be reused as-is.").arg(slug));
-        }
-        return;
-    }
-
-    // Already matching this folder -- just refresh the hint.
-    if (m_folderMatchConvCount > 0)
+    // The container runs with -w <baseDir>, not the subfolder, so
+    // `claude --resume <uuid>` looks in the base directory's project dir
+    // and won't find transcripts stored under the subfolder's encoded
+    // path. They are therefore never offered in the picker -- only counted
+    // here.
+    const int count = ConversationCatalog::forDirectory(QDir(path).absolutePath()).size();
+    if (count > 0) {
         m_workspaceHint->setText(QStringLiteral(
             "%1/ already exists (%2 conversation(s) found there). "
-            "They cannot be resumed from this box — the container runs in the "
-            "base directory. Start a new conversation instead.")
-            .arg(slug).arg(m_folderMatchConvCount));
-    else
+            "They cannot be resumed from this box -- the container runs in the "
+            "base directory. Start a new conversation instead.").arg(slug).arg(count));
+    } else {
         m_workspaceHint->setText(
-            QStringLiteral("%1/ already exists — it will be reused as-is.").arg(slug));
+            QStringLiteral("%1/ already exists -- it will be reused as-is.").arg(slug));
+    }
 }
 
 void NewBoxDialog::onConversationChanged(int index)
 {
     const QString uuid = m_sessionCombo->itemData(index).toString();
+
+    if (m_editMode) {
+        QString hint = uuid.isEmpty()
+            ? QStringLiteral("The next restart starts a fresh conversation. The old transcript stays on disk.")
+            : QStringLiteral("Resumes %1 the next time this box starts.").arg(uuid);
+        const QString tip = m_sessionCombo->itemData(index, Qt::ToolTipRole).toString();
+        if (tip.contains(QStringLiteral("Already tracked by box ")))
+            hint += QStringLiteral(" Another box already tracks this conversation.");
+        m_sessionHint->setText(hint);
+        return; // the name is the user's to edit; never overwrite it from the picker
+    }
 
     if (uuid.isEmpty()) {
         const int existing = m_sessionCombo->count() - 1;
@@ -754,6 +739,8 @@ void NewBoxDialog::onConversationChanged(int index)
         m_autoFilledName = uuid.isEmpty() ? QString() : m_sessionCombo->itemData(index, kTitleRole).toString();
         m_nameEdit->setText(m_autoFilledName);
     }
+
+    updateWorkspaceHint();
 }
 
 void NewBoxDialog::addPort()
