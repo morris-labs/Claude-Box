@@ -205,12 +205,4 @@ private:
     bool m_forkMode = false;
     // Set by loadForFork(); see forkSourceUuid().
     QString m_forkSourceUuid;
-    // Non-empty while the workspace subfolder (folder-match) has conversations
-    // of its own. They are never added to m_sessionCombo -- selecting one
-    // would take the resumeExisting path with the wrong -w -- so only their
-    // count, cached here, is folded into the hint text. Cleared and the
-    // parent dir's conversations restored whenever the matched folder is no
-    // longer applicable.
-    QString m_folderMatchDir;
-    int m_folderMatchConvCount = 0;
 };

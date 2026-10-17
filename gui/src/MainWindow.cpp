@@ -1619,11 +1619,20 @@ void MainWindow::onEdit()
     // restart to actually take effect. SSH forwards don't: they're a
     // separate host-side process synced from the record on every poll
     // (see syncTunnels), independent of the container's own lifecycle.
-    const bool needsRestart = rec.ports != dlg.ports() || rec.dirs != dlg.dirs()
+    //
+    // The linked conversation is the same kind of thing: it is the
+    // --resume/--session-id argument of the claude process already running.
+    const QString newUuid = dlg.sessionUuid();
+    const bool uuidChanged = newUuid != rec.sessionUuid;
+    if (uuidChanged && !newUuid.isEmpty() && !confirmConversationAdoption(newUuid))
+        return;
+
+    const bool needsRestart = uuidChanged || rec.ports != dlg.ports() || rec.dirs != dlg.dirs()
         || rec.skipPermissions != dlg.skipPermissions() || rec.model != dlg.model()
         || rec.effort != dlg.effort();
 
     rec.conversationName = dlg.conversationName();
+    rec.sessionUuid = newUuid; // empty => reopen() mints a fresh session
     rec.skipPermissions = dlg.skipPermissions();
     rec.model = dlg.model();
     rec.effort = dlg.effort();
@@ -1639,8 +1648,8 @@ void MainWindow::onEdit()
 
     if (wasRunning && needsRestart) {
         const QString msg = rec.name + QStringLiteral(
-            " is running, and docker can't change port mappings, mounts, model/effort, or "
-            "the permission flag on a live container -- they take effect the next time it "
+            " is running, and docker can't change port mappings, mounts, model/effort, the "
+            "permission flag, or the linked conversation on a live container -- they take effect the next time it "
             "(re)starts.\n\nRestart it now to apply them?");
         if (QMessageBox::question(this, QStringLiteral("Edit Box"), msg) == QMessageBox::Yes) {
             QString error;
