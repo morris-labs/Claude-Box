@@ -84,6 +84,26 @@ static QStringList projectsSymlinkBinds()
     return binds;
 }
 
+// The per-box sessions directory, mounted over the container's
+// ~/.claude/sessions. Claude Code keeps one <pid>.json there per running
+// process, and every container numbers its pids from the same small values,
+// so with a shared directory boxes overwrite each other's files and the
+// result cannot say which box a file belongs to. A directory per box makes
+// the owner certain. It is emptied at each launch so a file left by a
+// container that was killed cannot be mistaken for the new process.
+static QString prepareSessionsMount(const BoxRecord &rec, const QString &containerHome)
+{
+    // The mountpoint must already exist inside the mounted ~/.claude, or
+    // docker creates it owned by root and the host's own claude cannot write
+    // there.
+    QDir().mkpath(QDir::homePath() + QStringLiteral("/.claude/sessions"));
+    const QString dir = BoxRecord::sessionsDir(rec.name);
+    QDir(dir).removeRecursively();
+    if (!QDir().mkpath(dir))
+        return QString();
+    return dir + QLatin1Char(':') + containerHome + QStringLiteral("/.claude/sessions");
+}
+
 // What the container runs to let git work in the mounted tree. A plain box
 // trusts its one directory. A worktree box also touches the main repository's
 // .git (which may be a different directory than the project root) and its
@@ -693,6 +713,12 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
         if (!spec.binds.contains(b))
             spec.binds << b;
     }
+    const QString sessionsBind = prepareSessionsMount(rec, containerHome);
+    if (!sessionsBind.isEmpty())
+        spec.binds << sessionsBind;
+    // Updates arrive by rebuilding the image (Update Claude Code); the
+    // in-app updater cannot write to the image's npm prefix and only nags.
+    spec.env << "DISABLE_AUTOUPDATER=1";
 
     QString gitSetup = gitTrustCommand(rec);
     // The file is checked for on the host, but the value handed to the
@@ -755,6 +781,10 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
          << "-v" << (QDir::homePath() + "/.claude.json:" + cliContainerHome + "/.claude.json");
     for (const QString &b : projectsSymlinkBinds())
         args << "-v" << b;
+    const QString cliSessionsBind = prepareSessionsMount(rec, cliContainerHome);
+    if (!cliSessionsBind.isEmpty())
+        args << "-v" << cliSessionsBind;
+    args << "-e" << "DISABLE_AUTOUPDATER=1";
 
     // Container-side path, not the host one -- see launchSpec() for why.
     if (QFileInfo::exists(rec.targetDir + "/gitconfig")) {
