@@ -35,5 +35,5 @@ Branch: `fix/link-existing-conversations`
    `name`, and changes on `/clear` and `/rename`; checked on Claude Code
    2.1.300) and update the box record. Match a file to a box by `cwd` and the
    recorded `sessionId`, then track the pid and `pidDomain`.
-7. [todo] Design: one container per project directory instead of one per box.
-   See the discussion in STATUS.md.
+7. [planned] Projects, worktrees and one container per project. See
+   `plan-projects.md`. This branch ends at step 6.
