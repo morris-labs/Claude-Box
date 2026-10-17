@@ -37,3 +37,9 @@ Branch: `fix/link-existing-conversations`
    recorded `sessionId`, then track the pid and `pidDomain`.
 7. [planned] Projects, worktrees and one container per project. See
    `plan-projects.md`. This branch ends at step 6.
+
+## Projects (see plan-projects.md)
+
+- Stage 1, project layer: done on `feature/projects-1-project-layer`.
+- Stage 2, worktrees and migration: next.
+- Stage 3, shared container: after stage 2.

@@ -8,6 +8,8 @@
 #include <QPoint>
 #include <QString>
 
+#include "BoxFilterProxy.h"
+#include "ProjectPanel.h"
 #include "BoxDetailsPanel.h" // for SshTunnelStatus, a value member below
 #include "BoxTableModel.h"
 #include "DockerBackend.h"
@@ -89,7 +91,12 @@ private slots:
 private:
     DockerBackend m_docker;
     BoxTableModel *m_model = nullptr;
-    QSortFilterProxyModel *m_proxy = nullptr;
+    BoxFilterProxy *m_proxy = nullptr;
+    ProjectPanel *m_projectPanel = nullptr;
+    // Project to reselect once the first poll fills the list; set from settings.
+    QString m_pendingProject;
+    QSplitter *m_projectSplitter = nullptr;
+    QList<BoxInfo> m_lastBoxes; // most recent poll, for rebuilding the project list on rename
 
     QTableView *m_table = nullptr;
     QLineEdit *m_filterEdit = nullptr;

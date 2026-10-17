@@ -85,6 +85,8 @@ const QString kGeometryKey    = QStringLiteral("ui/geometry");
 const QString kWindowStateKey = QStringLiteral("ui/windowState");
 const QString kOuterSplitKey  = QStringLiteral("ui/outerSplitter");
 const QString kTopSplitKey    = QStringLiteral("ui/topSplitter");
+const QString kProjectSplitKey = QStringLiteral("ui/projectSplitter");
+const QString kProjectKey      = QStringLiteral("ui/selectedProject");
 const QString kDetailsKey     = QStringLiteral("ui/detailsVisible");
 const QString kTableHeaderKey = QStringLiteral("ui/tableHeader");
 }
@@ -274,7 +276,7 @@ void MainWindow::buildUi()
     // --- table + filter -------------------------------------------------
     m_model = new BoxTableModel(this);
 
-    m_proxy = new QSortFilterProxyModel(this);
+    m_proxy = new BoxFilterProxy(this);
     m_proxy->setSourceModel(m_model);
     m_proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
     m_proxy->setFilterKeyColumn(-1); // match against every column
@@ -373,8 +375,31 @@ void MainWindow::buildUi()
         }
     });
 
+    // Project list on the left, the table of that project's conversations
+    // beside it. A nested splitter keeps m_topSplitter at two children, so
+    // its saved state from earlier versions still restores.
+    m_projectPanel = new ProjectPanel(this);
+    m_projectPanel->setMinimumWidth(150);
+    connect(m_projectPanel, &ProjectPanel::projectSelected, this, [this](const QString &root) {
+        const QStringList selected = currentSelectedNames();
+        m_proxy->setProjectRoot(root);
+        reselectByNames(selected);
+        updateActionStates();
+        QSettings().setValue(kProjectKey, root);
+    });
+    connect(m_projectPanel, &ProjectPanel::projectRenamed, this,
+            [this] { m_projectPanel->setBoxes(m_lastBoxes); });
+
+    m_projectSplitter = new QSplitter(Qt::Horizontal, this);
+    m_projectSplitter->addWidget(m_projectPanel);
+    m_projectSplitter->addWidget(tableSide);
+    m_projectSplitter->setStretchFactor(0, 0);
+    m_projectSplitter->setStretchFactor(1, 1);
+    m_projectSplitter->setChildrenCollapsible(false);
+    m_projectSplitter->setSizes({200, 700});
+
     m_topSplitter = new QSplitter(Qt::Horizontal, this);
-    m_topSplitter->addWidget(tableSide);
+    m_topSplitter->addWidget(m_projectSplitter);
     m_topSplitter->addWidget(m_details);
     m_topSplitter->setStretchFactor(0, 3);
     m_topSplitter->setStretchFactor(1, 1);
@@ -784,6 +809,12 @@ void MainWindow::onBoxesLoaded()
     reselectByNames(selected);
     m_table->verticalScrollBar()->setValue(scrollPos);
     m_usageView->setBoxes(freshBoxes);
+    m_lastBoxes = freshBoxes;
+    m_projectPanel->setBoxes(freshBoxes);
+    if (!m_pendingProject.isEmpty()) {
+        m_projectPanel->selectRoot(m_pendingProject);
+        m_pendingProject.clear();
+    }
     syncTunnels();
 
     QStringList runningNames;
@@ -1563,7 +1594,9 @@ void MainWindow::offerResumeAfterReboot()
 void MainWindow::onNew()
 {
     NewBoxDialog dlg(this);
-    dlg.setInitialDir(SetupWizard::defaultTargetDir());
+    // A new conversation starts in the project that is open in the list.
+    const QString projectRoot = m_proxy->projectRoot();
+    dlg.setInitialDir(projectRoot.isEmpty() ? SetupWizard::defaultTargetDir() : projectRoot);
     // Pre-fill port rows tentatively; advance the pointer only on accept.
     const QList<int> tentativePorts = setupPortAllocation(dlg);
     if (dlg.exec() != QDialog::Accepted)
@@ -2458,6 +2491,7 @@ void MainWindow::saveSettings()
     s.setValue(kWindowStateKey, saveState());
     s.setValue(kOuterSplitKey, m_outerSplitter->saveState());
     s.setValue(kTopSplitKey, m_topSplitter->saveState());
+    s.setValue(kProjectSplitKey, m_projectSplitter->saveState());
     s.setValue(kDetailsKey, m_detailsAction->isChecked());
     s.setValue(kTableHeaderKey, m_table->horizontalHeader()->saveState());
 }
@@ -2473,6 +2507,9 @@ void MainWindow::restoreSettings()
         m_outerSplitter->restoreState(s.value(kOuterSplitKey).toByteArray());
     if (s.contains(kTopSplitKey))
         m_topSplitter->restoreState(s.value(kTopSplitKey).toByteArray());
+    if (s.contains(kProjectSplitKey))
+        m_projectSplitter->restoreState(s.value(kProjectSplitKey).toByteArray());
+    m_pendingProject = s.value(kProjectKey).toString();
     // Column widths set up in buildUi() are just the first-run default --
     // restoreState() (when there's something saved) overrides them with
     // whatever the user last dragged them to, resize mode included, so

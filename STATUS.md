@@ -4,10 +4,14 @@
 `PLAN.md`: link existing conversations (branch `fix/link-existing-conversations`).
 
 ## Current step
+On branch `feature/projects-1-project-layer` (stage 1 done, stage 2 next).
 Step 4 of 7: verify the picker flows in the running GUI. Needs a display and Docker,
 which this container lacks.
 
 ## Done since the last checkpoint
+- Stage 1 of `plan-projects.md`: project list beside the table, filtering by project,
+  New Box opens in the selected project. Tested with an offscreen harness; the app
+  starts offscreen. Not yet looked at on a real display.
 - Removed the account-switch feature (commit d320555). Kept the unrelated work
   that followed it: async open and close, Remove fix, CI, update buttons.
 - Fixed adoption in `NewBoxDialog`: `updateWorkspaceHint()` no longer resets the

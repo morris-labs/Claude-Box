@@ -51,6 +51,11 @@ endif()
 add_executable(claude-box-gui WIN32
     src/main.cpp
     src/SingleInstanceGuard.cpp
+    src/ProjectRecord.cpp
+    src/ProjectRecord.h
+    src/ProjectPanel.cpp
+    src/ProjectPanel.h
+    src/BoxFilterProxy.h
     src/SessionWatcher.cpp
     src/SessionWatcher.h
     src/SingleInstanceGuard.h
