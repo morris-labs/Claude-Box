@@ -82,8 +82,6 @@ add_executable(claude-box-gui WIN32
     src/SshForwardsDialog.h
     src/ManageSshRemotesDialog.cpp
     src/ManageSshRemotesDialog.h
-    src/AccountSwitchDialog.cpp
-    src/AccountSwitchDialog.h
     src/SetupWizard.cpp
     src/SetupWizard.h
     src/PromptTemplates.cpp

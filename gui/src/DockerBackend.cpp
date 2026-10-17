@@ -61,20 +61,8 @@ static QString buildContainerCmd(const QString &gitSetup, const QStringList &cla
     // (which is in the bind-mounted workspace and persists after --rm removes
     // the container). This is the only trace a fast startup failure leaves,
     // since --rm discards the container's own log on exit.
-    // If ~/.claude-projects-shared is mounted but ~/.claude/projects is still
-    // a regular directory (e.g. the account was just switched and the new
-    // account's projects/ hasn't been symlinked yet), create the symlink now.
-    // Only replaces an empty directory -- a non-empty one has its own
-    // transcripts and must not be silently discarded.
-    const QString projectsFixup =
-        QStringLiteral("(S=\"$HOME/.claude-projects-shared\"; P=\"$HOME/.claude/projects\";"
-                       " [ -d \"$S\" ] && [ ! -L \"$P\" ] &&"
-                       " { [ ! -d \"$P\" ] || [ -z \"$(ls -A \"$P\" 2>/dev/null)\" ]; } &&"
-                       " { rm -rf \"$P\" 2>/dev/null; ln -sfn \"$S\" \"$P\"; }) 2>/dev/null || true");
-
     return QStringLiteral("TSTART=$SECONDS; ")
-         + projectsFixup
-         + QStringLiteral(" && ") + gitSetup
+         + gitSetup
          + QStringLiteral(" && tmux new-session -d -s main -- ") + claudeCmd
          + QStringLiteral(" && LAUNCH_OK=1;"
                           " while tmux has-session -t main 2>/dev/null; do sleep 1; done;"
@@ -646,47 +634,6 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
                << (QDir::homePath() + "/.claude:" + containerHome + "/.claude")
                << (QDir::homePath() + "/.claude.json:" + containerHome + "/.claude.json");
 
-    // Account-switch setups use ~/.claude-projects-shared as a shared session
-    // store across accounts. ~/.claude/projects in each account directory
-    // symlinks there, but immediately after switching to a new account the
-    // symlink may not be set up yet. We handle this in two ways:
-    //
-    // 1. Always bind ~/.claude-projects-shared when it exists, so it is
-    //    accessible inside the container regardless of whether projects/ is
-    //    already a symlink pointing to it.
-    // 2. The container startup command (buildContainerCmd) detects the same
-    //    condition and creates the symlink inside the container, which is
-    //    reflected back to the host via the bind mount.
-    //
-    // When projects/ is a symlink pointing outside ~/.claude, bind the target
-    // so it resolves correctly inside the container. Docker resolves the
-    // top-level ~/.claude symlink when creating the bind mount (e.g. ~/.claude
-    // → ~/.claude-A means the container gets ~/.claude-A's content at
-    // ~/.claude), so the projects/ symlink's absolute target is never
-    // automatically included. Use spec.binds.contains() for deduplication
-    // rather than comparing against a specific hardcoded path, so any target
-    // outside ~/.claude is covered.
-    {
-        const QString sharedProjects = QDir::homePath() + QStringLiteral("/.claude-projects-shared");
-        const QFileInfo projectsInfo(QDir::homePath() + QStringLiteral("/.claude/projects"));
-        QString resolvedClaude = QFileInfo(QDir::homePath() + QStringLiteral("/.claude")).canonicalFilePath();
-        if (resolvedClaude.isEmpty())
-            resolvedClaude = QDir::homePath() + QStringLiteral("/.claude");
-
-        if (QFileInfo(sharedProjects).isDir())
-            spec.binds << (sharedProjects + QLatin1Char(':') + sharedProjects);
-
-        if (projectsInfo.isSymLink()) {
-            const QString target = projectsInfo.symLinkTarget();
-            const QString bindSpec = target + QLatin1Char(':') + target;
-            if (!target.isEmpty()
-                && !target.startsWith(resolvedClaude + QLatin1Char('/'))
-                && target != resolvedClaude
-                && !spec.binds.contains(bindSpec))
-                spec.binds << bindSpec;
-        }
-    }
-
     QString gitSetup = "git config --global --add safe.directory \"$1\"";
     // The file is checked for on the host, but the value handed to the
     // container has to be the *container-side* path -- on Windows the host
@@ -746,29 +693,6 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
          << "-v" << (rec.targetDir + ":" + containerDir)
          << "-v" << (QDir::homePath() + "/.claude:" + cliContainerHome + "/.claude")
          << "-v" << (QDir::homePath() + "/.claude.json:" + cliContainerHome + "/.claude.json");
-
-    // Same reasoning as launchSpec(): bind ~/.claude-projects-shared when it
-    // exists, and any projects/ symlink target that points outside ~/.claude.
-    {
-        const QString sharedProjects = QDir::homePath() + QStringLiteral("/.claude-projects-shared");
-        const QFileInfo projectsInfo(QDir::homePath() + QStringLiteral("/.claude/projects"));
-        QString resolvedClaude = QFileInfo(QDir::homePath() + QStringLiteral("/.claude")).canonicalFilePath();
-        if (resolvedClaude.isEmpty())
-            resolvedClaude = QDir::homePath() + QStringLiteral("/.claude");
-
-        if (QFileInfo(sharedProjects).isDir())
-            args << QStringLiteral("-v") << (sharedProjects + QLatin1Char(':') + sharedProjects);
-
-        if (projectsInfo.isSymLink()) {
-            const QString target = projectsInfo.symLinkTarget();
-            const QString bindSpec = target + QLatin1Char(':') + target;
-            if (!target.isEmpty()
-                && !target.startsWith(resolvedClaude + QLatin1Char('/'))
-                && target != resolvedClaude
-                && !args.contains(bindSpec))
-                args << QStringLiteral("-v") << bindSpec;
-        }
-    }
 
     // Container-side path, not the host one -- see launchSpec() for why.
     if (QFileInfo::exists(rec.targetDir + "/gitconfig")) {
@@ -1050,33 +974,16 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
         claudeArgs << "--name" << updated.conversationName;
 
     // If the transcript is missing (box crashed before Claude wrote it,
-    // or the session store was relocated by an account-switch script),
+    // or the session store was relocated),
     // fall back to a fresh session. Claude silently starts a new
     // conversation when --resume gets an unknown UUID, so we detect this
     // explicitly: mint a new UUID and use --session-id, which keeps the
     // record consistent so subsequent reopens find the new transcript.
-    //
-    // Account-switch note: after switching to a new account, ~/.claude
-    // points to that account's directory whose projects/ may still be a
-    // plain empty directory rather than a symlink to ~/.claude-projects-shared.
-    // projectDirFor() would then return a path with no transcripts even though
-    // they exist in the shared store. Check the shared store directly as a
-    // fallback so a valid UUID isn't discarded and the resume isn't lost.
-    const QString projectDir = ConversationCatalog::projectDirFor(updated.targetDir);
-    const QString transcriptPath = projectDir + QLatin1Char('/') + updated.sessionUuid + QStringLiteral(".jsonl");
-    bool hasTranscript = !updated.sessionUuid.isEmpty() && QFile::exists(transcriptPath);
-
-    if (!hasTranscript && !updated.sessionUuid.isEmpty()) {
-        const QString sharedStore = QDir::homePath() + QStringLiteral("/.claude-projects-shared");
-        if (QFileInfo(sharedStore).isDir()) {
-            const QString encodedDir = QFileInfo(projectDir).fileName();
-            if (!encodedDir.isEmpty()) {
-                const QString sharedPath = sharedStore + QLatin1Char('/') + encodedDir
-                                           + QLatin1Char('/') + updated.sessionUuid + QStringLiteral(".jsonl");
-                hasTranscript = QFile::exists(sharedPath);
-            }
-        }
-    }
+    const QString transcriptPath =
+        ConversationCatalog::projectDirFor(updated.targetDir)
+        + QLatin1Char('/') + updated.sessionUuid + QStringLiteral(".jsonl");
+    const bool hasTranscript = !updated.sessionUuid.isEmpty()
+                               && QFile::exists(transcriptPath);
 
     if (!hasTranscript)
         updated.sessionUuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
