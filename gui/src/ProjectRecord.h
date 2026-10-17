@@ -11,7 +11,7 @@
 // `root` is the key. Two boxes whose `target_dir` is the same directory
 // (ignoring a trailing slash) belong to one project.
 struct ProjectRecord {
-    QString id;          // filename; derived from root, see idForRoot()
+    QString id;          // filename: folder name plus a hash of root, see idForRoot()
     QString root;        // absolute path of the project directory
     QString displayName; // empty = use the directory's own name
     // The git repository that conversations get worktrees from. Empty when

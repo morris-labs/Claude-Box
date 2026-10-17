@@ -1009,10 +1009,19 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
             const QString src = from + '/' + forkFromUuid + ".jsonl";
             const QString dst = to + '/' + forkFromUuid + ".jsonl";
             QDir().mkpath(to);
-            if (QFileInfo::exists(src) && !QFileInfo::exists(dst) && !QFile::copy(src, dst)) {
-                if (errorOut)
-                    *errorOut = "could not copy the source transcript to " + dst;
-                return false;
+            if (!QFileInfo::exists(dst)) {
+                // Without it `claude --resume` finds nothing and the fork
+                // would quietly start empty.
+                if (!QFileInfo::exists(src)) {
+                    if (errorOut)
+                        *errorOut = "the conversation being forked has no transcript at " + src;
+                    return false;
+                }
+                if (!QFile::copy(src, dst)) {
+                    if (errorOut)
+                        *errorOut = "could not copy the source transcript to " + dst;
+                    return false;
+                }
             }
         }
     }

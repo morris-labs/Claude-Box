@@ -7,7 +7,8 @@
 // "prompts/" group and fall back to built-in defaults when no custom
 // value has been saved.
 //
-// Placeholders are %N, filled in by expand():
+// Placeholders are %N. The workspace, worktree and starter templates are filled
+// in by expand(); the port hint is still filled in with QString::arg():
 //   Workspace: %1 = folder slug, %2 = conversation name,
 //              %3 = workspace folder path, %4 = this conversation's notes
 //              directory, %5 = the shared INFRA.md path

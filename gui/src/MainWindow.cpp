@@ -1818,48 +1818,88 @@ void MainWindow::onFork()
     });
 }
 
+namespace {
+struct ConvertResult {
+    bool ok = false;
+    QString error;
+};
+} // namespace
+
 // Converts a workspace-subfolder box into a worktree box. plan() inspects
 // without changing anything and its report is shown first; see
-// WorktreeMigration.h for what is and is not touched.
+// WorktreeMigration.h for what is and is not touched. Both steps shell out to
+// git and copy files, so they run on worker threads like the other slow box
+// operations; m_convertingBox keeps the box from being started or converted
+// again while that is going on.
 void MainWindow::onConvertToWorktree()
 {
+    if (!m_convertingBox.isEmpty())
+        return;
     const BoxInfo *info = selectedBoxInfo();
     if (!info)
         return;
-    BoxRecord rec = BoxRecord::load(info->name);
+    const BoxRecord rec = BoxRecord::load(info->name);
     if (!rec.isValid())
         return;
 
-    const WorktreeMigration::Plan plan = WorktreeMigration::plan(rec);
-    if (!plan.ok) {
-        QMessageBox::information(this, QStringLiteral("Convert to Worktree"), plan.report().join('\n'));
-        return;
-    }
-
-    QMessageBox box(QMessageBox::Question, QStringLiteral("Convert to Worktree"),
-                    QStringLiteral("Convert \"%1\" to a git worktree?").arg(rec.conversationName),
-                    QMessageBox::Yes | QMessageBox::Cancel, this);
-    box.setInformativeText(plan.report().join('\n'));
-    box.setDefaultButton(QMessageBox::Cancel);
-    if (box.exec() != QMessageBox::Yes)
-        return;
-
-    QString error;
+    m_convertingBox = rec.name;
     QGuiApplication::setOverrideCursor(Qt::WaitCursor);
-    const bool ok = WorktreeMigration::execute(rec, plan, &error);
-    QGuiApplication::restoreOverrideCursor();
-    if (!ok) {
-        QMessageBox::warning(this, QStringLiteral("Convert to Worktree"),
-                             QStringLiteral("Nothing was changed.\n\n") + error);
-        return;
-    }
-    if (!error.isEmpty())
-        QMessageBox::information(this, QStringLiteral("Convert to Worktree"), error);
-    refreshBoxes();
+
+    auto *planWatcher = new QFutureWatcher<WorktreeMigration::Plan>(this);
+    connect(planWatcher, &QFutureWatcher<WorktreeMigration::Plan>::finished, this,
+            [this, planWatcher, rec]() {
+        const WorktreeMigration::Plan plan = planWatcher->result();
+        planWatcher->deleteLater();
+        QGuiApplication::restoreOverrideCursor();
+
+        if (!plan.ok) {
+            m_convertingBox.clear();
+            QMessageBox::information(this, QStringLiteral("Convert to Worktree"), plan.report().join('\n'));
+            return;
+        }
+
+        QMessageBox box(QMessageBox::Question, QStringLiteral("Convert to Worktree"),
+                        QStringLiteral("Convert \"%1\" to a git worktree?").arg(rec.conversationName),
+                        QMessageBox::Yes | QMessageBox::Cancel, this);
+        box.setInformativeText(plan.report().join('\n'));
+        box.setDefaultButton(QMessageBox::Cancel);
+        if (box.exec() != QMessageBox::Yes) {
+            m_convertingBox.clear();
+            return;
+        }
+
+        QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+        auto *runWatcher = new QFutureWatcher<ConvertResult>(this);
+        connect(runWatcher, &QFutureWatcher<ConvertResult>::finished, this, [this, runWatcher]() {
+            const ConvertResult result = runWatcher->result();
+            runWatcher->deleteLater();
+            QGuiApplication::restoreOverrideCursor();
+            m_convertingBox.clear();
+            if (!result.ok) {
+                QMessageBox::warning(this, QStringLiteral("Convert to Worktree"),
+                                     QStringLiteral("Nothing was changed.\n\n") + result.error);
+            } else if (!result.error.isEmpty()) {
+                QMessageBox::information(this, QStringLiteral("Convert to Worktree"), result.error);
+            }
+            refreshBoxes();
+        });
+        BoxRecord work = rec; // execute() rewrites the record it is given
+        runWatcher->setFuture(QtConcurrent::run([work, plan]() mutable {
+            ConvertResult r;
+            r.ok = WorktreeMigration::execute(work, plan, &r.error);
+            return r;
+        }));
+    });
+    planWatcher->setFuture(QtConcurrent::run([rec]() { return WorktreeMigration::plan(rec); }));
 }
 
 void MainWindow::startBox(const QString &name, bool syncTranscriptTitle)
 {
+    if (name == m_convertingBox) {
+        QMessageBox::information(this, QStringLiteral("Start"),
+                                 name + QStringLiteral(" is being converted to a worktree; start it when that finishes."));
+        return;
+    }
     BoxRecord rec = BoxRecord::load(name);
     if (!rec.isValid()) {
         QMessageBox::warning(this, QStringLiteral("Start"),

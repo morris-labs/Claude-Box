@@ -148,9 +148,14 @@ void SessionWatcher::scan()
         const Entry &e = found.value();
 
         bool changed = false;
+        // What the binding should remember once the record is safely saved.
+        // Advancing it earlier would make a failed save permanent: the next
+        // scan would see no change and never try again.
+        QString seenSession = bound->lastSession;
+        QString seenName = bound->lastName;
 
         if (e.sessionId != bound->lastSession) {
-            bound->lastSession = e.sessionId;
+            seenSession = e.sessionId;
             // Another box holding the new id would mean two records for one
             // transcript; leave this record alone rather than pick a side.
             if (e.sessionId != rec.sessionUuid && !heldByOtherBox(e.sessionId, boxName)) {
@@ -162,7 +167,7 @@ void SessionWatcher::scan()
         // An auto-generated name (no nameSource) is not something the user
         // chose, so it never replaces the one they did.
         if (e.nameIsUser && !e.name.isEmpty() && e.name != bound->lastName) {
-            bound->lastName = e.name;
+            seenName = e.name;
             if (e.name != rec.conversationName) {
                 rec.conversationName = e.name;
                 // The transcript carries this name now, so startBox() should
@@ -172,7 +177,11 @@ void SessionWatcher::scan()
             }
         }
 
-        if (changed && rec.save())
+        if (changed && !rec.save())
+            continue; // keep the old binding state so the next scan retries
+        bound->lastSession = seenSession;
+        bound->lastName = seenName;
+        if (changed)
             emit boxChanged(boxName);
     }
 }

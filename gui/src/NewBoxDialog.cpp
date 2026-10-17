@@ -517,8 +517,17 @@ void NewBoxDialog::loadForFork(const BoxRecord &source)
 
     // Carried over from source as a starting point, not locked -- see the
     // class comment on why a fork stays closer to New Box than to Edit.
-    m_workspaceCheck->setChecked(!source.workspaceDir.isEmpty());
+    // A worktree and a subfolder are exclusive (the checkboxes only enforce
+    // that for clicks), so follow the source's choice and set both together.
+    if (!source.worktreeDir.isEmpty() && !m_primaryRepo.isEmpty()) {
+        m_worktreeCheck->setChecked(true);
+        m_workspaceCheck->setChecked(false);
+    } else if (!source.workspaceDir.isEmpty()) {
+        m_workspaceCheck->setChecked(true);
+        m_worktreeCheck->setChecked(false);
+    }
     m_skipPermsCheck->setChecked(source.skipPermissions);
+    updateWorkspaceHint();
 
     seedExtras(source);
 }
