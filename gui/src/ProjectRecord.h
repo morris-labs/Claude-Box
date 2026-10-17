@@ -32,6 +32,9 @@ struct ProjectRecord {
     static QString projectsDir();
     // Name of the project's shared container. Keeps the `claude-agent-` prefix
     // every docker query filters on.
+    // Up to `count` pool ports that no box of this project holds. `exceptBox`
+    // is not counted as holding any, so an edit can keep its own.
+    QStringList freePorts(int count, const QString &exceptBox = QString()) const;
     QString containerName() const { return QStringLiteral("claude-agent-proj-") + id; }
     // Normalised form used to compare and group directories.
     static QString normalizeRoot(const QString &dir);

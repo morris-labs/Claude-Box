@@ -82,27 +82,6 @@ void commitPortAllocation(const QList<int> &tentativePorts)
     PortAllocator::setNextBase(next);
 }
 
-// Up to `count` ports from a shared project's pool that no box of that project
-// holds. `exceptBox` is left out of the "held" set so an edit can keep its own.
-QStringList freePoolPorts(const ProjectRecord &project, int count, const QString &exceptBox = QString())
-{
-    QSet<QString> held;
-    for (const BoxRecord &rec : BoxRecord::loadAll()) {
-        if (rec.name == exceptBox || rec.containerName() != project.containerName())
-            continue;
-        for (const QString &p : rec.ports)
-            held.insert(p);
-    }
-    QStringList out;
-    for (const QString &p : project.ports) {
-        if (out.size() >= count)
-            break;
-        if (!held.contains(p))
-            out << p;
-    }
-    return out;
-}
-
 // QSettings keys. Grouped under a prefix so the file stays readable if
 // anything else ever needs to persist state.
 const QString kGeometryKey    = QStringLiteral("ui/geometry");
@@ -1660,7 +1639,7 @@ void MainWindow::onNew()
     if (project.sharedContainer) {
         // The container and its published ports exist already: the box takes
         // some of the project's pool, and has no mounts of its own.
-        rec.ports = freePoolPorts(project, 5);
+        rec.ports = project.freePorts(5);
     } else {
         rec.ports = dlg.ports();
         rec.dirs = dlg.dirs();
@@ -1835,7 +1814,7 @@ void MainWindow::onFork()
     rec.model = dlg.model();
     rec.effort = dlg.effort();
     if (project.sharedContainer) {
-        rec.ports = freePoolPorts(project, 5);
+        rec.ports = project.freePorts(5);
     } else {
         rec.ports = dlg.ports();
         rec.dirs = dlg.dirs();
