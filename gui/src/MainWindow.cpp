@@ -2386,10 +2386,18 @@ void MainWindow::offerWorktreeRemoval(const BoxRecord &rec)
     if (QMessageBox::question(this, QStringLiteral("Remove"), msg,
                               QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
         return;
-    QString error;
-    if (!Worktrees::remove(repo, rec.worktreeDir, &error))
-        QMessageBox::information(this, QStringLiteral("Remove"),
-                                 QStringLiteral("The worktree was kept: ") + error);
+    // The git checks and the removal can take a while on a big tree, so they
+    // run off the GUI thread; the answer comes back as a message.
+    const QString path = rec.worktreeDir;
+    (void)QtConcurrent::run([this, repo, path]() {
+        QString error;
+        const bool ok = Worktrees::remove(repo, path, &error);
+        QMetaObject::invokeMethod(this, [this, ok, error]() {
+            if (!ok)
+                QMessageBox::information(this, QStringLiteral("Remove"),
+                                         QStringLiteral("The worktree was kept: ") + error);
+        }, Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::onRemove()

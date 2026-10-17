@@ -38,8 +38,8 @@ which this container lacks.
   then edit a running box and switch its conversation.
 - Run stages 1 and 2 on a host with Docker and a display; then decide on stage 3
   (shared container), which is not started.
-- Code review: 24 of 29 files reviewed, findings fixed; the Worktrees and
-  WorktreeMigration files and plan-projects.md were reviewed in a second pass.
+- Code review: all 29 files reviewed twice over; findings fixed. The Worktrees and
+  WorktreeMigration reviews led to safer Remove (detached HEAD, ignored files) and migration rollback.
 - Fork/rewind button in the Claude desktop app fails: remote-control limitation of
   Claude Code, not claude-box. Nothing to do here.
 - (old) Decide on auto-detecting `/clear` (new session id) on restart. See `PLAN.md`.

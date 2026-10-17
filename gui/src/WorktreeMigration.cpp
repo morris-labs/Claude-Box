@@ -16,18 +16,6 @@ namespace WorktreeMigration {
 
 namespace {
 
-// Ignored directories that are build output or dependency caches: large and
-// reproducible, so they are left in the old folder rather than copied.
-const QSet<QString> &skipNames()
-{
-    static const QSet<QString> names = {
-        QStringLiteral("node_modules"), QStringLiteral("build"), QStringLiteral("dist"),
-        QStringLiteral("target"), QStringLiteral(".gradle"), QStringLiteral("__pycache__"),
-        QStringLiteral(".venv"), QStringLiteral("venv"), QStringLiteral(".cache"),
-        QStringLiteral(".next"), QStringLiteral("out")};
-    return names;
-}
-
 // The notes files an agent keeps at a folder's top level; they move to the
 // notes directory instead of becoming untracked files in the worktree.
 const QStringList &notesNames()
@@ -86,7 +74,10 @@ bool copyTree(const QString &from, const QString &to, QString *error)
     const QFileInfo fi(from);
     if (fi.isSymLink()) {
         QFile::remove(to);
-        if (!QFile::link(fi.symLinkTarget(), to)) {
+        // The link's own text, not the absolute path it resolves to: a
+        // relative link must stay relative, or it breaks when the old folder
+        // is renamed.
+        if (!QFile::link(fi.readSymLink(), to)) {
             if (error)
                 *error = QStringLiteral("could not copy link ") + from;
             return false;
@@ -127,7 +118,7 @@ QStringList Plan::report() const
     r << QStringLiteral("New branch:  %1 (the clone's commits, including any not pushed)").arg(branch);
     r << QStringLiteral("Changes:     %1 file(s) copied over, %2 deletion(s) applied")
              .arg(copyFiles.size()).arg(removeFiles.size());
-    r << QStringLiteral("Notes:       %1 moved to %2").arg(notesFiles.isEmpty() ? QStringLiteral("nothing") : notesFiles.join(QStringLiteral(", ")), notesDir);
+    r << QStringLiteral("Notes:       %1 copied to %2").arg(notesFiles.isEmpty() ? QStringLiteral("nothing") : notesFiles.join(QStringLiteral(", ")), notesDir);
     if (!skippedIgnored.isEmpty())
         r << QStringLiteral("Left behind (build output, still in the old folder): %1").arg(skippedIgnored.join(QStringLiteral(", ")));
     r << QStringLiteral("Transcripts: %1 file(s) copied to %2").arg(transcripts.size()).arg(transcriptTo);
@@ -208,6 +199,14 @@ Plan plan(const BoxRecord &rec)
             p.copyFiles << e.path;
     }
 
+    // A notes file the agent committed is part of the branch and stays in the
+    // worktree, but the new prompt points at the notes directory, so it is
+    // copied there as well.
+    for (const QString &n : notesNames()) {
+        if (!p.notesFiles.contains(n) && QFileInfo::exists(p.oldDir + QLatin1Char('/') + n))
+            p.notesFiles << n;
+    }
+
     // Ignored files (.env and the like) carry real state; build output does not.
     const auto ig = Worktrees::git(p.oldDir, {QStringLiteral("ls-files"), QStringLiteral("-z"), QStringLiteral("--others"),
                                               QStringLiteral("--ignored"), QStringLiteral("--exclude-standard"),
@@ -216,7 +215,7 @@ Plan plan(const BoxRecord &rec)
     if (ig.ok) {
         for (const QString &path : ig.output.split(QChar(0), Qt::SkipEmptyParts)) {
             const QString leaf = QFileInfo(path.endsWith(QLatin1Char('/')) ? path.chopped(1) : path).fileName();
-            if (skipNames().contains(leaf))
+            if (Worktrees::isBuildOutputName(leaf))
                 p.skippedIgnored << path;
             else
                 p.copyFiles << path;
@@ -232,6 +231,7 @@ Plan plan(const BoxRecord &rec)
     p.transcriptFrom = ConversationCatalog::projectDirFor(rec.targetDir);
     p.transcriptTo = ConversationCatalog::projectDirFor(p.worktree);
     QSet<QString> names;
+    p.ownTranscriptFound = false; // nothing to resume unless a transcript is found below
     if (!rec.sessionUuid.isEmpty()) {
         const QString own = rec.sessionUuid + QStringLiteral(".jsonl");
         p.ownTranscriptFound = QFileInfo::exists(p.transcriptFrom + QLatin1Char('/') + own);
@@ -272,7 +272,10 @@ bool execute(BoxRecord &rec, const Plan &plan, QString *error)
     // stay in the clone.
     bool createdBranch = false;
     bool createdWorktree = false;
+    QStringList createdFiles; // notes and transcripts this run copied, removed on rollback
     auto rollback = [&]() {
+        for (const QString &f : std::as_const(createdFiles))
+            QFile::remove(f);
         if (createdWorktree)
             Worktrees::git(plan.repo, {QStringLiteral("worktree"), QStringLiteral("remove"),
                                        QStringLiteral("--force"), plan.worktree});
@@ -311,8 +314,13 @@ bool execute(BoxRecord &rec, const Plan &plan, QString *error)
             return fail(copyErr);
         }
     }
-    for (const QString &rel : plan.removeFiles)
-        QFile::remove(plan.worktree + QLatin1Char('/') + rel);
+    for (const QString &rel : plan.removeFiles) {
+        const QString target = plan.worktree + QLatin1Char('/') + rel;
+        if (QFileInfo::exists(target) && !QFile::remove(target)) {
+            rollback();
+            return fail(QStringLiteral("could not delete ") + target);
+        }
+    }
 
     // 5. Notes go to the project directory.
     QDir().mkpath(plan.notesDir);
@@ -320,9 +328,12 @@ bool execute(BoxRecord &rec, const Plan &plan, QString *error)
         const QString dst = (n == QLatin1String("INFRA.md")) ? Worktrees::infraFile(rec.targetDir)
                                                               : plan.notesDir + QLatin1Char('/') + n;
         QDir().mkpath(QFileInfo(dst).absolutePath());
-        if (!QFileInfo::exists(dst) && !QFile::copy(plan.oldDir + QLatin1Char('/') + n, dst)) {
-            rollback();
-            return fail(QStringLiteral("could not copy ") + n);
+        if (!QFileInfo::exists(dst)) {
+            if (!QFile::copy(plan.oldDir + QLatin1Char('/') + n, dst)) {
+                rollback();
+                return fail(QStringLiteral("could not copy ") + n);
+            }
+            createdFiles << dst;
         }
     }
 
@@ -341,6 +352,7 @@ bool execute(BoxRecord &rec, const Plan &plan, QString *error)
             rollback();
             return fail(QStringLiteral("could not copy the transcript ") + n);
         }
+        createdFiles << dst;
     }
 
     // 7. The record now points at the worktree.

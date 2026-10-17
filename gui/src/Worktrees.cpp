@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QSet>
 #include <QTextStream>
 
 namespace Worktrees {
@@ -110,8 +111,14 @@ bool ensureExcluded(const QString &repo, QString *error)
         QFile in(file);
         if (in.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QTextStream ts(&in);
-            while (!ts.atEnd())
-                have << ts.readLine().trimmed();
+            while (!ts.atEnd()) {
+                // Git ignores trailing spaces but a leading space is part of the
+                // pattern, so only the end is trimmed.
+                QString line = ts.readLine();
+                while (line.endsWith(QLatin1Char(' ')) || line.endsWith(QLatin1Char('\t')))
+                    line.chop(1);
+                have << line;
+            }
         }
     }
     const QStringList want = {kDirName + QLatin1Char('/'), kNotesDirName + QLatin1Char('/')};
@@ -156,23 +163,25 @@ bool add(const QString &repo, const QString &slug, QString *pathOut, QString *er
 
     const QString path = worktreePath(repo, slug);
     const QString branch = branchFor(slug);
-    if (pathOut)
-        *pathOut = path;
 
     QString exErr;
     if (!ensureExcluded(repo, &exErr))
         return fail(QStringLiteral("could not update info/exclude: ") + exErr);
 
     // Already there: a conversation being resumed or re-created.
-    if (QFileInfo(path + QStringLiteral("/.git")).exists())
+    if (QFileInfo(path + QStringLiteral("/.git")).exists()) {
+        if (pathOut)
+            *pathOut = path;
         return true;
+    }
     if (QFileInfo::exists(path))
         return fail(path + QStringLiteral(" exists but is not a git worktree"));
 
 #ifdef Q_OS_WIN
     // See the header: the absolute path in a worktree's .git file is a
     // Windows path the container cannot follow.
-    git(repo, {QStringLiteral("config"), QStringLiteral("worktree.useRelativePaths"), QStringLiteral("true")});
+    if (!git(repo, {QStringLiteral("config"), QStringLiteral("worktree.useRelativePaths"), QStringLiteral("true")}).ok)
+        return fail(QStringLiteral("could not enable relative worktree paths; this needs git 2.48 or later"));
 #endif
 
     const bool branchExists =
@@ -184,7 +193,19 @@ bool add(const QString &repo, const QString &slug, QString *pathOut, QString *er
     const Result r = git(repo, args, 120000);
     if (!r.ok)
         return fail(r.output);
+    if (pathOut)
+        *pathOut = path;
     return true;
+}
+
+bool isBuildOutputName(const QString &name)
+{
+    static const QSet<QString> names = {
+        QStringLiteral("node_modules"), QStringLiteral("build"), QStringLiteral("dist"),
+        QStringLiteral("target"), QStringLiteral(".gradle"), QStringLiteral("__pycache__"),
+        QStringLiteral(".venv"), QStringLiteral("venv"), QStringLiteral(".cache"),
+        QStringLiteral(".next"), QStringLiteral("out")};
+    return names.contains(name);
 }
 
 RemoveCheck checkRemovable(const QString &repo, const QString &path)
@@ -205,21 +226,45 @@ RemoveCheck checkRemovable(const QString &repo, const QString &path)
         return c;
     }
 
+    // `git worktree remove` deletes ignored files too, and those are often the
+    // only copy of a .env or a credentials file.
+    const Result ign = git(path, {QStringLiteral("ls-files"), QStringLiteral("-z"), QStringLiteral("--others"),
+                                  QStringLiteral("--ignored"), QStringLiteral("--exclude-standard"),
+                                  QStringLiteral("--directory")}, 30000, /*trim=*/false);
+    if (!ign.ok) {
+        c.reason = ign.output;
+        return c;
+    }
+    QStringList keep;
+    for (const QString &entry : ign.output.split(QChar(0), Qt::SkipEmptyParts)) {
+        const QString leaf = QFileInfo(entry.endsWith(QLatin1Char('/')) ? entry.chopped(1) : entry).fileName();
+        if (!isBuildOutputName(leaf))
+            keep << entry;
+    }
+    if (!keep.isEmpty()) {
+        c.reason = QStringLiteral("it has ignored files that exist nowhere else (%1)").arg(keep.mid(0, 3).join(QStringLiteral(", ")));
+        return c;
+    }
+
+    // Commits reachable only from here. A detached HEAD has no branch to
+    // name, so check HEAD itself; on a branch, leave that branch out of the
+    // comparison (it trivially contains its own commits).
     const QString branch = currentBranch(path);
-    if (!branch.isEmpty()) {
-        // Commits on this branch that no other branch contains.
-        const Result ahead = git(repo, {QStringLiteral("rev-list"), QStringLiteral("--count"), branch,
-                                        QStringLiteral("--not"), QStringLiteral("--exclude=") + branch, // relative to refs/heads/, not a full ref
-                                        QStringLiteral("--branches"), QStringLiteral("--remotes")});
-        if (!ahead.ok) {
-            c.reason = ahead.output;
-            return c;
-        }
-        if (ahead.output.toInt() > 0) {
-            c.reason = QStringLiteral("branch %1 has %2 commit(s) that are not on any other branch")
-                           .arg(branch, ahead.output);
-            return c;
-        }
+    QStringList revArgs = {QStringLiteral("rev-list"), QStringLiteral("--count"), QStringLiteral("HEAD"),
+                           QStringLiteral("--not")};
+    if (!branch.isEmpty())
+        revArgs << QStringLiteral("--exclude=") + branch; // relative to refs/heads/, not a full ref
+    revArgs << QStringLiteral("--branches") << QStringLiteral("--remotes");
+    const Result ahead = git(path, revArgs);
+    if (!ahead.ok) {
+        c.reason = ahead.output;
+        return c;
+    }
+    if (ahead.output.toInt() > 0) {
+        c.reason = branch.isEmpty()
+            ? QStringLiteral("HEAD is detached and has %1 commit(s) that are not on any branch").arg(ahead.output)
+            : QStringLiteral("branch %1 has %2 commit(s) that are not on any other branch").arg(branch, ahead.output);
+        return c;
     }
     c.safe = true;
     return c;

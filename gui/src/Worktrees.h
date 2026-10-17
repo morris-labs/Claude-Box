@@ -52,18 +52,24 @@ bool ensureExcluded(const QString &repo, QString *error = nullptr);
 // `git worktree add`, creating the branch when it does not exist. Reuses a
 // worktree that is already there. On Windows, turns on relative worktree
 // paths first, because the absolute path in the .git file is a host path the
-// container cannot resolve there.
+// container cannot resolve there. `pathOut` is set only on success.
 bool add(const QString &repo, const QString &slug, QString *pathOut, QString *error);
 
 // Creates the notes directory for a conversation. Returns its path.
 QString ensureNotesDir(const QString &projectRoot, const QString &slug);
 
+// Ignored directories that are build output or dependency caches: large and
+// reproducible, so neither removal nor migration treats them as work worth
+// keeping. Any other ignored file (.env, credentials) is.
+bool isBuildOutputName(const QString &name);
+
 struct RemoveCheck {
     bool safe = false;
     QString reason; // why not, when !safe
 };
-// Whether the worktree can go without losing work: nothing uncommitted and
-// nothing on its branch that is not reachable from another branch.
+// Whether the worktree can go without losing work: nothing uncommitted,
+// no ignored file other than build output, and no commit (on its branch or
+// on a detached HEAD) that is not reachable from another branch or a remote.
 RemoveCheck checkRemovable(const QString &repo, const QString &path);
 // Removes the worktree and its branch, only when checkRemovable() says so.
 bool remove(const QString &repo, const QString &path, QString *error);
