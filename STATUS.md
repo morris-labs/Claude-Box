@@ -5,18 +5,17 @@
 `feature/projects-2-worktrees`, which contains the earlier branches).
 
 ## Current step
-On branch `feature/projects-3-shared-container` (stages 1 to 3 built; contains the
-earlier branches). Stage 3: one container per project, default on, tmux session per
-conversation, keeper state file for status. Host-tested: two boxes in one container,
-a classic box moved in with the right conversation. Not yet host-tested: closing one
-box leaving the other, the container exiting after the last, reopening into a
-recreated container, project mounts, opting out.
+On branch `feature/projects-3-shared-container` (stages 1 to 3 built and host-tested;
+contains the earlier branches). Stage 3: one container per project, default on, a
+tmux session per conversation, a keeper state file for status, mounts and port pool
+at project level, "Move existing boxes", restart prompts for mount changes.
+Host-tested by the user: shared start/stop, container exit after the last box, move of
+a classic box, mount change with and without running boxes.
 
 ## Done since the last checkpoint
-- Stage 3 (commits 7a9994b, 6923ca9, 6933685, 765e656): `SharedContainer` (keeper and
-  session scripts, tested with real tmux), `BoxRecord.container`/`session`, project
-  port pool, "Move existing boxes" with a restart prompt. Do not test it with a fake
-  docker script inside the box: two attempts ended the box's own session.
+- Stage 3 commits 7a9994b to the latest on this branch; `CLAUDE.md` documents it.
+  Do not test it with a fake docker script inside the box (two attempts ended the
+  box's own session; see the `CLAUDE.md` entry).
 - Host test found two bugs, both fixed: removing the account switcher dropped the
   bind mount for the symlinked `~/.claude/projects` (boxes could not resume), and the
   session watch could not work in a shared sessions directory (pid files collide
@@ -44,8 +43,8 @@ recreated container, project mounts, opting out.
 - The GUI compiles (out-of-tree build).
 
 ## Next
-- Finish the stage 3 host checks listed above. Then update `CLAUDE.md` with a
-  `SharedContainer` component entry and merge decisions.
+- Decide on merging: stages 1 to 3 into main (needs approval; no push until told).
+- Not host-tested yet: opt-out for new boxes, Fork in a shared project.
 - Code review: all 29 files reviewed twice over; findings fixed. The Worktrees and
   WorktreeMigration reviews led to safer Remove (detached HEAD, ignored files) and migration rollback.
 - Fork/rewind button in the Claude desktop app fails: remote-control limitation of
