@@ -6,8 +6,10 @@
 #include <QString>
 #include <QStringList>
 #include <QList>
+#include <QMutex>
 
 #include "BoxRecord.h"
+#include "ProjectRecord.h"
 
 // One row of dashboard state, merged from `docker ps`/`docker ps -a` and
 // the on-disk BoxRecord for that name. Status::Stopped covers both "you
@@ -195,6 +197,19 @@ private:
     // See lastPollDaemonUnreachable() above.
     mutable bool m_lastPollDaemonUnreachable = false;
 
+    // Shared (one per project) containers; see SharedContainer.h.
+    // Creates the project's container when it is not running.
+    bool runSharedContainer(const ProjectRecord &project, QString *errorOut) const;
+    // Starts `rec` as a tmux session in its project's shared container,
+    // creating the container first when needed.
+    bool startShared(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const;
+    // Rows for the boxes of every running shared container, replacing the
+    // container's own row. See listBoxes().
+    void expandSharedContainers(QList<BoxInfo> &result, QSet<QString> &seen) const;
+    // One start at a time per backend: two conversations of a project
+    // starting together would both try to create its container.
+    mutable QMutex m_sharedMutex;
+
     // `docker stats --no-stream` takes 1-2 seconds to return no matter how
     // many containers it reports on, because it samples CPU over an
     // interval before printing. So on the CLI path it is asked for every
@@ -241,12 +256,16 @@ private:
     // event loop -- see stopMany(). Returns the subset still not confirmed
     // gone when the 5s timeout is hit (empty means all of them are gone).
     QStringList waitForRemovalMany(const QStringList &names) const;
-    bool runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const;
+    // `commandOverride`, when not empty, replaces the usual claude command as
+    // the container's argv (after the image). A shared container uses it to
+    // run the keeper script; see SharedContainer.h.
+    bool runContainer(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut,
+                      const QStringList &commandOverride = {}) const;
     // The API half of runContainer(): POST /containers/create + /start.
     // Returns false (without having created anything) when the API isn't
     // usable, which is the caller's cue to shell out instead.
     bool runContainerViaApi(const BoxRecord &rec, const QStringList &claudeArgs,
-                            QString *errorOut) const;
+                            QString *errorOut, const QStringList &commandOverride = {}) const;
 
     // The single description of how a box is launched, from which both
     // the CLI flags and the API's JSON body are derived.
@@ -259,7 +278,8 @@ private:
         QString workingDir;
         QString containerUser; // username inside the container (matches host USER)
     };
-    static LaunchSpec launchSpec(const BoxRecord &rec, const QStringList &claudeArgs);
+    static LaunchSpec launchSpec(const BoxRecord &rec, const QStringList &claudeArgs,
+                                 const QStringList &commandOverride = {});
 
     // Flags shared by createNew() and reopen(): --remote-control (always),
     // plus whatever the record asks for.

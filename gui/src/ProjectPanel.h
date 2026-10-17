@@ -32,6 +32,8 @@ signals:
 private:
     void showContextMenu(const QPoint &pos);
     void renameProject(const QString &root);
+    void setSharedContainer(const QString &root, bool on);
+    void editMounts(const QString &root);
 
     QListWidget *m_list = nullptr;
     bool m_rebuilding = false;

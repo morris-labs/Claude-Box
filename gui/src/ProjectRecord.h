@@ -17,11 +17,22 @@ struct ProjectRecord {
     // The git repository that conversations get worktrees from. Empty when
     // the root is not a repository and none has been chosen.
     QString primaryRepo;
+    // One container for every conversation in the project (stage 3 of
+    // plan-projects.md). Off means each box has a container of its own.
+    bool sharedContainer = false;
+    // The shared container's published ports ("HOST:CONTAINER", the pool new
+    // conversations draw from) and extra mounts ("HOST:CONTAINER"). Fixed
+    // when the container is created.
+    QStringList ports;
+    QStringList dirs;
 
     bool isValid() const { return !id.isEmpty() && !root.isEmpty(); }
     QString name() const;
 
     static QString projectsDir();
+    // Name of the project's shared container. Keeps the `claude-agent-` prefix
+    // every docker query filters on.
+    QString containerName() const { return QStringLiteral("claude-agent-proj-") + id; }
     // Normalised form used to compare and group directories.
     static QString normalizeRoot(const QString &dir);
     static QString idForRoot(const QString &root);

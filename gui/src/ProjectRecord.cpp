@@ -98,6 +98,12 @@ ProjectRecord ProjectRecord::forRoot(const QString &rootIn)
             rec.displayName = value;
         else if (key == QLatin1String("primary_repo"))
             rec.primaryRepo = value;
+        else if (key == QLatin1String("shared_container"))
+            rec.sharedContainer = (value == QLatin1String("1"));
+        else if (key == QLatin1String("port"))
+            rec.ports << value;
+        else if (key == QLatin1String("dir"))
+            rec.dirs << value;
     }
     return rec;
 }
@@ -142,6 +148,12 @@ bool ProjectRecord::save() const
         out << "name=" << displayName << '\n';
     if (!primaryRepo.isEmpty())
         out << "primary_repo=" << primaryRepo << '\n';
+    if (sharedContainer)
+        out << "shared_container=1\n";
+    for (const QString &p : ports)
+        out << "port=" << p << '\n';
+    for (const QString &d : dirs)
+        out << "dir=" << d << '\n';
     out.flush();
     return file.commit();
 }

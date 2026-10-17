@@ -82,6 +82,27 @@ void commitPortAllocation(const QList<int> &tentativePorts)
     PortAllocator::setNextBase(next);
 }
 
+// Up to `count` ports from a shared project's pool that no box of that project
+// holds. `exceptBox` is left out of the "held" set so an edit can keep its own.
+QStringList freePoolPorts(const ProjectRecord &project, int count, const QString &exceptBox = QString())
+{
+    QSet<QString> held;
+    for (const BoxRecord &rec : BoxRecord::loadAll()) {
+        if (rec.name == exceptBox || rec.containerName() != project.containerName())
+            continue;
+        for (const QString &p : rec.ports)
+            held.insert(p);
+    }
+    QStringList out;
+    for (const QString &p : project.ports) {
+        if (out.size() >= count)
+            break;
+        if (!held.contains(p))
+            out << p;
+    }
+    return out;
+}
+
 // QSettings keys. Grouped under a prefix so the file stays readable if
 // anything else ever needs to persist state.
 const QString kGeometryKey    = QStringLiteral("ui/geometry");
@@ -1220,7 +1241,12 @@ void MainWindow::openTerminalTab(const QString &name, const QString &title)
     term->setProperty("boxName", name);
     connect(term, &TerminalWidget::sessionFinished, this, &MainWindow::onTerminalSessionFinished);
 
-    if (!term->attachToContainer(name)) {
+    // A box in a shared container attaches to its own tmux session there.
+    const BoxRecord attachRec = BoxRecord::load(name);
+    const bool attached = attachRec.isValid()
+        ? term->attachToContainer(attachRec.containerName(), attachRec.tmuxSession())
+        : term->attachToContainer(name);
+    if (!attached) {
         QMessageBox::warning(this, QStringLiteral("Start"), QStringLiteral("Failed to attach to ") + name);
         term->deleteLater();
         return;
@@ -1620,7 +1646,9 @@ void MainWindow::onNew()
     const QList<int> tentativePorts = setupPortAllocation(dlg);
     if (dlg.exec() != QDialog::Accepted)
         return;
-    commitPortAllocation(tentativePorts);
+    const ProjectRecord project = ProjectRecord::forRoot(dlg.targetDir());
+    if (!project.sharedContainer)
+        commitPortAllocation(tentativePorts);
 
     BoxRecord rec;
     rec.targetDir = dlg.targetDir();
@@ -1629,8 +1657,14 @@ void MainWindow::onNew()
     rec.skipPermissions = dlg.skipPermissions();
     rec.model = dlg.model();
     rec.effort = dlg.effort();
-    rec.ports = dlg.ports();
-    rec.dirs = dlg.dirs();
+    if (project.sharedContainer) {
+        // The container and its published ports exist already: the box takes
+        // some of the project's pool, and has no mounts of its own.
+        rec.ports = freePoolPorts(project, 5);
+    } else {
+        rec.ports = dlg.ports();
+        rec.dirs = dlg.dirs();
+    }
     rec.sshRemoteRefs = dlg.sshRemoteRefs();
 
     if (!rec.sessionUuid.isEmpty() && !confirmConversationAdoption(rec.sessionUuid))
@@ -1712,7 +1746,11 @@ void MainWindow::onEdit()
     if (uuidChanged && !newUuid.isEmpty() && !confirmConversationAdoption(newUuid))
         return;
 
-    const bool needsRestart = uuidChanged || rec.ports != dlg.ports() || rec.dirs != dlg.dirs()
+    // A box in a shared container has no ports or mounts of its own to edit:
+    // they belong to the project's container, so the dialog's are ignored.
+    const bool sharedBox = rec.isShared();
+    const bool needsRestart = uuidChanged
+        || (!sharedBox && (rec.ports != dlg.ports() || rec.dirs != dlg.dirs()))
         || rec.skipPermissions != dlg.skipPermissions() || rec.model != dlg.model()
         || rec.effort != dlg.effort();
 
@@ -1721,8 +1759,10 @@ void MainWindow::onEdit()
     rec.skipPermissions = dlg.skipPermissions();
     rec.model = dlg.model();
     rec.effort = dlg.effort();
-    rec.ports = dlg.ports();
-    rec.dirs = dlg.dirs();
+    if (!sharedBox) {
+        rec.ports = dlg.ports();
+        rec.dirs = dlg.dirs();
+    }
     rec.sshRemoteRefs = dlg.sshRemoteRefs();
 
     if (!rec.save()) {
@@ -1782,7 +1822,9 @@ void MainWindow::onFork()
     const QList<int> tentativePorts = setupPortAllocation(dlg);
     if (dlg.exec() != QDialog::Accepted)
         return;
-    commitPortAllocation(tentativePorts);
+    const ProjectRecord project = ProjectRecord::forRoot(dlg.targetDir());
+    if (!project.sharedContainer)
+        commitPortAllocation(tentativePorts);
 
     BoxRecord rec;
     rec.targetDir = dlg.targetDir();
@@ -1792,8 +1834,12 @@ void MainWindow::onFork()
     rec.skipPermissions = dlg.skipPermissions();
     rec.model = dlg.model();
     rec.effort = dlg.effort();
-    rec.ports = dlg.ports();
-    rec.dirs = dlg.dirs();
+    if (project.sharedContainer) {
+        rec.ports = freePoolPorts(project, 5);
+    } else {
+        rec.ports = dlg.ports();
+        rec.dirs = dlg.dirs();
+    }
     rec.sshRemoteRefs = dlg.sshRemoteRefs();
 
     const bool workspaceSubdir = dlg.workspaceSubdir();
