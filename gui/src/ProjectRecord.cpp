@@ -1,8 +1,10 @@
 #include "ProjectRecord.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QTextStream>
 
 namespace {
@@ -43,7 +45,15 @@ QString ProjectRecord::normalizeRoot(const QString &dir)
 
 QString ProjectRecord::idForRoot(const QString &root)
 {
-    return slug(normalizeRoot(root));
+    const QString norm = normalizeRoot(root);
+    if (norm.isEmpty())
+        return QString();
+    // The readable part alone collides (foo.bar and foo_bar both slug to
+    // foo-bar), and a collision would make two projects share a record.
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(norm.toUtf8(), QCryptographicHash::Sha1).toHex().left(8));
+    const QString readable = slug(QFileInfo(norm).fileName());
+    return (readable.isEmpty() ? QStringLiteral("project") : readable) + QLatin1Char('-') + hash;
 }
 
 QString ProjectRecord::name() const
@@ -121,8 +131,10 @@ bool ProjectRecord::save() const
     if (!isValid())
         return false;
     QDir().mkpath(projectsDir());
-    QFile file(projectsDir() + QLatin1Char('/') + id);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
+    // Written to a temporary file and renamed into place, so a crash cannot
+    // leave a truncated record behind.
+    QSaveFile file(projectsDir() + QLatin1Char('/') + id);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
         return false;
     QTextStream out(&file);
     out << "root=" << root << '\n';
@@ -130,5 +142,6 @@ bool ProjectRecord::save() const
         out << "name=" << displayName << '\n';
     if (!primaryRepo.isEmpty())
         out << "primary_repo=" << primaryRepo << '\n';
-    return true;
+    out.flush();
+    return file.commit();
 }

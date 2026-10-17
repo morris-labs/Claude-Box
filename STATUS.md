@@ -1,7 +1,8 @@
 # Status
 
 ## Active plan
-`PLAN.md`: link existing conversations (branch `fix/link-existing-conversations`).
+`PLAN.md`: link existing conversations, then `plan-projects.md` (branch
+`feature/projects-2-worktrees`, which contains the earlier branches).
 
 ## Current step
 On branch `feature/projects-2-worktrees` (stages 1 and 2 built; stage 3, the shared
@@ -35,8 +36,10 @@ which this container lacks.
 ## Next
 - Test on the host: adopt a conversation whose title matches an existing folder,
   then edit a running box and switch its conversation.
-- Review `plan-projects.md` (now has per-conversation notes and subfolder
-  migration); start stage 1 (project layer) on a new branch.
+- Run stages 1 and 2 on a host with Docker and a display; then decide on stage 3
+  (shared container), which is not started.
+- Code review: 24 of 29 files reviewed, findings fixed; the Worktrees and
+  WorktreeMigration files and plan-projects.md were reviewed in a second pass.
 - Fork/rewind button in the Claude desktop app fails: remote-control limitation of
   Claude Code, not claude-box. Nothing to do here.
 - (old) Decide on auto-detecting `/clear` (new session id) on restart. See `PLAN.md`.

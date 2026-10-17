@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
+#include <QMessageBox>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -156,6 +157,10 @@ void ProjectPanel::renameProject(const QString &root)
     if (!ok)
         return;
     rec.displayName = name;
-    rec.save();
+    if (!rec.save()) {
+        QMessageBox::warning(this, QStringLiteral("Rename project"),
+                             QStringLiteral("Could not save the new name to ") + ProjectRecord::projectsDir());
+        return;
+    }
     emit projectRenamed();
 }

@@ -14,7 +14,7 @@ Installed in the container with `apt`: `qt6-base-dev`, `libvterm-dev`,
 Reinstall them with:
 
 ```bash
-sudo apt-get install -y qt6-base-dev libvterm-dev
+sudo apt-get install -y qt6-base-dev libvterm-dev cmake build-essential pkg-config
 ```
 
 ## Build and check
@@ -31,4 +31,5 @@ cmake --build /tmp/claude-1000/build-chk -j8
 
 - Remote `origin` is GitHub (`morris-labs/Claude-Box`). Do not push without
   explicit instruction.
-- Work branch: `fix/link-existing-conversations`.
+- Work branches: `fix/link-existing-conversations`, then `feature/projects-1-project-layer`
+  and `feature/projects-2-worktrees` stacked on it. Each contains the one before.

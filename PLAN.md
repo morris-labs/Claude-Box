@@ -33,8 +33,9 @@ Branch: `fix/link-existing-conversations`
    fills `%N` by number and prompts carry `~/...` container paths.
 6. [done] Watch `~/.claude/sessions/<pid>.json` (it holds `sessionId` and
    `name`, and changes on `/clear` and `/rename`; checked on Claude Code
-   2.1.300) and update the box record. Match a file to a box by `cwd` and the
-   recorded `sessionId`, then track the pid and `pidDomain`.
+   2.1.300) and update the box record. Match a file to a box by the recorded
+   `sessionId` alone (session ids are unique), then follow the process by
+   `pid`, `pidDomain` and `procStart`.
 7. [planned] Projects, worktrees and one container per project. See
    `plan-projects.md`. This branch ends at step 6.
 

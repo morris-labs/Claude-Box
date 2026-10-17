@@ -137,6 +137,8 @@ private:
     // confirms the expected final state (Running for Starting, non-Running
     // for Stopping).
     QHash<QString, BoxInfo::Status> m_transient;
+    // The box being converted to a worktree, empty when none (see onConvertToWorktree).
+    QString m_convertingBox;
     bool m_hasLoadedOnce = false;
     bool m_dockerStartAttempted = false;
     QLabel *m_statusCounts = nullptr;
