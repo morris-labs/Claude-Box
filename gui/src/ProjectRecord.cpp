@@ -1,4 +1,6 @@
 #include "ProjectRecord.h"
+#include <QSet>
+#include "BoxRecord.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -156,4 +158,23 @@ bool ProjectRecord::save() const
         out << "dir=" << d << '\n';
     out.flush();
     return file.commit();
+}
+
+QStringList ProjectRecord::freePorts(int count, const QString &exceptBox) const
+{
+    QSet<QString> held;
+    for (const BoxRecord &rec : BoxRecord::loadAll()) {
+        if (rec.name == exceptBox || rec.containerName() != containerName())
+            continue;
+        for (const QString &p : rec.ports)
+            held.insert(p);
+    }
+    QStringList out;
+    for (const QString &p : ports) {
+        if (out.size() >= count)
+            break;
+        if (!held.contains(p))
+            out << p;
+    }
+    return out;
 }

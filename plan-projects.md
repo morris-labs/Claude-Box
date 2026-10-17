@@ -143,6 +143,10 @@ So the stages are ordered to keep each one shippable.
    - **Records.** A box record gains `container=` and `session=`. Without
      them the box is a classic per-box container (`container` = its own name,
      session `main`), so nothing existing changes.
+   - **Existing boxes join.** When a project shares one container, a classic
+     box moves into it the next time it is started (not while running): its
+     record gains `container=` and `session=`, its own ports are replaced by
+     pool ports, and its own mounts are added to the project's.
    - **Not in scope:** moving a running classic box into a shared container,
      and per-conversation CPU and memory (the container's totals are shown on
      each of its boxes).
