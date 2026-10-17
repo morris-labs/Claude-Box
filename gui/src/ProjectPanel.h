@@ -28,6 +28,9 @@ signals:
     void projectSelected(const QString &root);
     // A rename was saved; the owner should rebuild the list (setBoxes).
     void projectRenamed();
+    // The user asked to move the project's existing boxes into its shared
+    // container; the owner does it, since it stops and starts boxes.
+    void convertToSharedRequested(const QString &root);
 
 private:
     void showContextMenu(const QPoint &pos);

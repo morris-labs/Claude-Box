@@ -101,7 +101,7 @@ ProjectRecord ProjectRecord::forRoot(const QString &rootIn)
         else if (key == QLatin1String("primary_repo"))
             rec.primaryRepo = value;
         else if (key == QLatin1String("shared_container"))
-            rec.sharedContainer = (value == QLatin1String("1"));
+            rec.sharedContainer = (value != QLatin1String("0"));
         else if (key == QLatin1String("port"))
             rec.ports << value;
         else if (key == QLatin1String("dir"))
@@ -150,8 +150,8 @@ bool ProjectRecord::save() const
         out << "name=" << displayName << '\n';
     if (!primaryRepo.isEmpty())
         out << "primary_repo=" << primaryRepo << '\n';
-    if (sharedContainer)
-        out << "shared_container=1\n";
+    if (!sharedContainer)
+        out << "shared_container=0\n";
     for (const QString &p : ports)
         out << "port=" << p << '\n';
     for (const QString &d : dirs)
@@ -177,4 +177,16 @@ QStringList ProjectRecord::freePorts(int count, const QString &exceptBox) const
             out << p;
     }
     return out;
+}
+
+void ProjectRecord::adopt(BoxRecord &box)
+{
+    for (const QString &d : box.dirs) {
+        if (!dirs.contains(d))
+            dirs << d;
+    }
+    box.dirs.clear();
+    box.container = containerName();
+    box.session = box.name;
+    box.ports = freePorts(5, box.name);
 }

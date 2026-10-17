@@ -5,6 +5,7 @@
 #include "DockerApi.h"
 #include "ProjectRecord.h"
 #include "PromptTemplates.h"
+#include "PortAllocator.h"
 #include "SharedContainer.h"
 #include "Worktrees.h"
 
@@ -980,7 +981,8 @@ bool DockerBackend::startShared(const BoxRecord &rec, const QStringList &claudeA
 {
     QMutexLocker lock(&m_sharedMutex);
 
-    const ProjectRecord project = ProjectRecord::forRoot(rec.targetDir);
+    ProjectRecord project = ProjectRecord::forRoot(rec.targetDir);
+    PortAllocator::ensurePool(project);
     const QString container = rec.containerName();
     const QString workDir = ContainerPaths::hostToContainer(rec.workDir());
 
@@ -1305,31 +1307,6 @@ QStringList DockerBackend::baseClaudeArgs(const BoxRecord &rec)
 bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
 {
     BoxRecord updated = rec;
-
-    // A project that now shares one container takes this box in when it is
-    // next started, so a project never ends up with a container of its own
-    // for each box that predates the setting. The box's own ports belonged to
-    // its old container and are replaced by pool ports; its own mounts are
-    // added to the project's, where they apply the next time the container is
-    // created.
-    if (!updated.isShared()) {
-        ProjectRecord project = ProjectRecord::forRoot(updated.targetDir);
-        if (project.sharedContainer) {
-            bool projectChanged = false;
-            for (const QString &d : updated.dirs) {
-                if (!project.dirs.contains(d)) {
-                    project.dirs << d;
-                    projectChanged = true;
-                }
-            }
-            if (projectChanged)
-                project.save();
-            updated.dirs.clear();
-            updated.container = project.containerName();
-            updated.session = updated.name;
-            updated.ports = project.freePorts(5, updated.name);
-        }
-    }
 
     QStringList claudeArgs = baseClaudeArgs(updated);
 

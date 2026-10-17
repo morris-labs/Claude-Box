@@ -1,5 +1,6 @@
 #include "ProjectPanel.h"
 
+#include "BoxRecord.h"
 #include "PortAllocator.h"
 #include "ProjectRecord.h"
 #include "Theme.h"
@@ -142,9 +143,16 @@ void ProjectPanel::showContextMenu(const QPoint &pos)
     QAction *rename = menu.addAction(QStringLiteral("Rename project…"));
     QAction *open = menu.addAction(QStringLiteral("Open folder"));
     menu.addSeparator();
-    QAction *share = menu.addAction(QStringLiteral("Share one container for this project"));
+    QAction *share = menu.addAction(QStringLiteral("One container for this project"));
     share->setCheckable(true);
     share->setChecked(project.sharedContainer);
+    int classic = 0;
+    for (const BoxRecord &box : BoxRecord::loadAll()) {
+        if (ProjectRecord::normalizeRoot(box.targetDir) == root && !box.isShared())
+            ++classic;
+    }
+    QAction *convert = menu.addAction(QStringLiteral("Move %1 existing box(es) into the shared container…").arg(classic));
+    convert->setEnabled(project.sharedContainer && classic > 0);
     QAction *mounts = menu.addAction(QStringLiteral("Project mounts…"));
     mounts->setEnabled(project.sharedContainer);
     QAction *chosen = menu.exec(m_list->viewport()->mapToGlobal(pos));
@@ -154,6 +162,8 @@ void ProjectPanel::showContextMenu(const QPoint &pos)
         QDesktopServices::openUrl(QUrl::fromLocalFile(root));
     else if (chosen == share)
         setSharedContainer(root, share->isChecked());
+    else if (chosen == convert)
+        emit convertToSharedRequested(root);
     else if (chosen == mounts)
         editMounts(root);
 }
@@ -177,34 +187,11 @@ void ProjectPanel::renameProject(const QString &root)
     emit projectRenamed();
 }
 
-// Turning sharing on reserves the project's pool of ten host ports once; they
-// stay reserved when it is turned off, so a conversation already holding one
-// keeps it. Boxes that exist keep running as they are: sharing applies to
-// conversations started afterwards.
+// Sharing is the default; this is the opt-out. Turning it off affects only
+// conversations started afterwards, and the project keeps its pool of ports.
 void ProjectPanel::setSharedContainer(const QString &root, bool on)
 {
     ProjectRecord rec = ProjectRecord::forRoot(root);
-    if (on) {
-        const QString msg = QStringLiteral(
-            "New conversations in \"%1\" will run together in one container, sharing its tools, "
-            "caches, ports and mounts. Existing boxes are not changed.\n\n"
-            "The container's ports and mounts are fixed when it is created, so changing them "
-            "later restarts every conversation in it.\n\nTurn this on?").arg(rec.name());
-        if (QMessageBox::question(this, QStringLiteral("Shared container"), msg) != QMessageBox::Yes)
-            return;
-        if (rec.ports.isEmpty()) {
-            const QList<int> ports = PortAllocator::tentativeAllocate(10, BoxRecord::loadAll());
-            if (ports.size() < 10) {
-                QMessageBox::warning(this, QStringLiteral("Shared container"),
-                                     QStringLiteral("Not enough free ports in the reserved range."));
-                return;
-            }
-            for (int port : ports)
-                rec.ports << QStringLiteral("%1:%1").arg(port);
-            PortAllocator::setNextBase(ports.last() + 1 > PortAllocator::kRangeEnd
-                                           ? PortAllocator::kRangeStart : ports.last() + 1);
-        }
-    }
     rec.sharedContainer = on;
     if (!rec.save()) {
         QMessageBox::warning(this, QStringLiteral("Shared container"),

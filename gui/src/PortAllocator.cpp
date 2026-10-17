@@ -126,3 +126,17 @@ QList<int> PortAllocator::tentativeAllocate(int count, const QList<BoxRecord> &e
         return {};
     return computeAllocation(count, reservedPorts(existing), nextBase()).first;
 }
+
+bool PortAllocator::ensurePool(ProjectRecord &project)
+{
+    if (!project.sharedContainer || !project.ports.isEmpty())
+        return true;
+    const QList<int> ports = tentativeAllocate(10, BoxRecord::loadAll());
+    if (ports.size() < 10)
+        return false;
+    for (int port : ports)
+        project.ports << QStringLiteral("%1:%1").arg(port);
+    setNextBase(ports.last() + 1 > kRangeEnd ? kRangeStart : ports.last() + 1);
+    project.save();
+    return true;
+}
