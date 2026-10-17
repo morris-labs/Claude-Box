@@ -5,12 +5,18 @@
 `feature/projects-2-worktrees`, which contains the earlier branches).
 
 ## Current step
-On branch `feature/projects-2-worktrees` (stages 1 and 2 built; stage 3, the shared
-container, not started). Needs a run on the host with Docker.
-Step 4 of 7: verify the picker flows in the running GUI. Needs a display and Docker,
-which this container lacks.
+On branch `feature/projects-3-shared-container` (stages 1 to 3 built; contains the
+earlier branches). Stage 3: one container per project, default on, tmux session per
+conversation, keeper state file for status. Host-tested: two boxes in one container,
+a classic box moved in with the right conversation. Not yet host-tested: closing one
+box leaving the other, the container exiting after the last, reopening into a
+recreated container, project mounts, opting out.
 
 ## Done since the last checkpoint
+- Stage 3 (commits 7a9994b, 6923ca9, 6933685, 765e656): `SharedContainer` (keeper and
+  session scripts, tested with real tmux), `BoxRecord.container`/`session`, project
+  port pool, "Move existing boxes" with a restart prompt. Do not test it with a fake
+  docker script inside the box: two attempts ended the box's own session.
 - Host test found two bugs, both fixed: removing the account switcher dropped the
   bind mount for the symlinked `~/.claude/projects` (boxes could not resume), and the
   session watch could not work in a shared sessions directory (pid files collide
@@ -38,10 +44,8 @@ which this container lacks.
 - The GUI compiles (out-of-tree build).
 
 ## Next
-- Test on the host: adopt a conversation whose title matches an existing folder,
-  then edit a running box and switch its conversation.
-- Run stages 1 and 2 on a host with Docker and a display; then decide on stage 3
-  (shared container), which is not started.
+- Finish the stage 3 host checks listed above. Then update `CLAUDE.md` with a
+  `SharedContainer` component entry and merge decisions.
 - Code review: all 29 files reviewed twice over; findings fixed. The Worktrees and
   WorktreeMigration reviews led to safer Remove (detached HEAD, ignored files) and migration rollback.
 - Fork/rewind button in the Claude desktop app fails: remote-control limitation of
@@ -50,7 +54,7 @@ which this container lacks.
 - Merge the branch when the user approves. No push until told.
 
 ## Blockers and pending decisions
-- Not tested at runtime. No Docker or display here.
+- Docker-touching code can only be tested on the host. No Docker or display here.
 - Earlier pending items: PR #3 prompt templates, Windows phase 4 fold-in, macOS
   DMG is x86_64 only.
 - The v3.3.1 to v3.3.4 tags and releases still contain the account-switch code.
