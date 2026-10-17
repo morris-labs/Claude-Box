@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BoxRecord.h"
+#include "ProjectRecord.h"
 #include <QList>
 #include <QSet>
 
@@ -25,6 +26,12 @@ public:
     // This way cancelling the dialog does not permanently consume the ports.
     static QList<int> tentativeAllocate(int count, const QList<BoxRecord> &existing);
     static void setNextBase(int port);
+
+    // Gives a project that shares a container its pool of ten host ports, once
+    // (saving the project). The ports stay with the project if it later opts
+    // out. Returns false when the range has no ten free ports; the project
+    // then runs without published ports.
+    static bool ensurePool(ProjectRecord &project);
 
 private:
     static QSet<int> reservedPorts(const QList<BoxRecord> &existing);

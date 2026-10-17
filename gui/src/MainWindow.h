@@ -63,6 +63,7 @@ private slots:
     void onNew();
     void onEdit();
     void offerResumeAfterReboot();
+    void onConvertToShared(const QString &root);
     void onFork();
     void onSetupWizard();
     void onManageSshRemotes();

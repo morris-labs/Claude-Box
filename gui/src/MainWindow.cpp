@@ -398,6 +398,8 @@ void MainWindow::buildUi()
     });
     connect(m_projectPanel, &ProjectPanel::projectRenamed, this,
             [this] { m_projectPanel->setBoxes(m_lastBoxes); });
+    connect(m_projectPanel, &ProjectPanel::convertToSharedRequested, this,
+            &MainWindow::onConvertToShared);
 
     m_projectSplitter = new QSplitter(Qt::Horizontal, this);
     m_projectSplitter->addWidget(m_projectPanel);
@@ -1625,7 +1627,8 @@ void MainWindow::onNew()
     const QList<int> tentativePorts = setupPortAllocation(dlg);
     if (dlg.exec() != QDialog::Accepted)
         return;
-    const ProjectRecord project = ProjectRecord::forRoot(dlg.targetDir());
+    ProjectRecord project = ProjectRecord::forRoot(dlg.targetDir());
+    PortAllocator::ensurePool(project);
     if (!project.sharedContainer)
         commitPortAllocation(tentativePorts);
 
@@ -1773,6 +1776,85 @@ void MainWindow::onEdit()
     syncTunnels(); // pick up an SSH-forward change immediately rather than waiting for the next poll
 }
 
+// Moves a project's classic boxes into its shared container. A box that is
+// running keeps its own container until it is stopped, so the choice is
+// whether to restart those now: yes stops each one and starts it again inside
+// the shared container, no moves only the stopped boxes and leaves the running
+// ones as they are.
+void MainWindow::onConvertToShared(const QString &root)
+{
+    ProjectRecord project = ProjectRecord::forRoot(root);
+    if (!project.sharedContainer)
+        return;
+
+    QStringList stopped, running;
+    for (const BoxRecord &rec : BoxRecord::loadAll()) {
+        if (ProjectRecord::normalizeRoot(rec.targetDir) != root || rec.isShared())
+            continue;
+        (m_docker.isRunning(rec.name) ? running : stopped) << rec.name;
+    }
+    if (stopped.isEmpty() && running.isEmpty())
+        return;
+
+    bool restart = false;
+    if (running.isEmpty()) {
+        const QString msg = QStringLiteral("Move %1 stopped box(es) of \"%2\" into its shared container?\n\n"
+                                           "They start there the next time you open them.")
+                                .arg(stopped.size()).arg(project.name());
+        if (QMessageBox::question(this, QStringLiteral("Shared container"), msg) != QMessageBox::Yes)
+            return;
+    } else {
+        const QString msg = QStringLiteral(
+            "%1 box(es) of \"%2\" are running:\n\n%3\n\n"
+            "A running box cannot change containers. Restart them now to move them into the shared "
+            "container? Each one stops, then resumes its conversation there.\n\n"
+            "Yes: restart the running boxes and move all %4.\n"
+            "No: move only the %5 stopped box(es); the running ones keep their own containers.")
+                                .arg(running.size()).arg(project.name()).arg(running.join('\n'))
+                                .arg(running.size() + stopped.size()).arg(stopped.size());
+        const auto answer = QMessageBox::question(
+            this, QStringLiteral("Shared container"), msg,
+            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+        if (answer == QMessageBox::Cancel)
+            return;
+        restart = (answer == QMessageBox::Yes);
+    }
+
+    PortAllocator::ensurePool(project);
+
+    QStringList failures;
+    QStringList toMove = stopped;
+    if (restart)
+        toMove += running;
+    for (const QString &name : toMove) {
+        const bool wasRunning = running.contains(name);
+        QString error;
+        if (wasRunning) {
+            if (!m_docker.stop(name, &error)) {
+                failures << name + QStringLiteral(": could not stop: ") + error;
+                continue;
+            }
+            closeTabForBox(name);
+        }
+        BoxRecord rec = BoxRecord::load(name);
+        if (!rec.isValid())
+            continue;
+        project.adopt(rec);
+        if (!rec.save()) {
+            failures << name + QStringLiteral(": could not save its record");
+            continue;
+        }
+        if (wasRunning)
+            startBox(name, false);
+    }
+    project.save();
+
+    if (!failures.isEmpty())
+        QMessageBox::warning(this, QStringLiteral("Shared container"),
+                             QStringLiteral("Some boxes were not moved:\n\n") + failures.join('\n'));
+    refreshBoxes();
+}
+
 // Creates a brand-new box whose conversation starts as a copy of the
 // selected box's history (DockerBackend::createNew's forkFromUuid). No
 // confirmConversationAdoption() check here: unlike adopting an existing
@@ -1801,7 +1883,8 @@ void MainWindow::onFork()
     const QList<int> tentativePorts = setupPortAllocation(dlg);
     if (dlg.exec() != QDialog::Accepted)
         return;
-    const ProjectRecord project = ProjectRecord::forRoot(dlg.targetDir());
+    ProjectRecord project = ProjectRecord::forRoot(dlg.targetDir());
+    PortAllocator::ensurePool(project);
     if (!project.sharedContainer)
         commitPortAllocation(tentativePorts);
 
