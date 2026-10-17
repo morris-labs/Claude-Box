@@ -60,6 +60,8 @@ add_executable(claude-box-gui WIN32
     src/ProjectPanel.cpp
     src/ProjectPanel.h
     src/BoxFilterProxy.h
+    src/SharedContainer.cpp
+    src/SharedContainer.h
     src/SessionWatcher.cpp
     src/SessionWatcher.h
     src/SingleInstanceGuard.h

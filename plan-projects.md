@@ -113,11 +113,39 @@ So the stages are ordered to keep each one shippable.
    (`ConversationCatalog::projectDirFor`). Removal refuses when the worktree
    has uncommitted work or an unmerged branch. Includes the per-conversation
    notes and the "Convert to worktree" action described above.
-3. Shared container. One container per project, with the pool of 10 ports.
-   Each conversation is a `docker exec -w WORKTREE` into its own tmux
-   session. Running state comes from the tmux sessions and
-   `~/.claude/sessions`, not `docker ps`. Ports and mounts move to the
-   project, so changing them restarts every conversation in it.
+3. Shared container (built on `feature/projects-3-shared-container`, opt-in per
+   project; per-box containers remain the default).
+
+   - **Container.** `claude-agent-<project id>`, one per project, running a
+     keeper script as PID 1 instead of one claude. The keeper rewrites a state
+     file every second with the names of the live tmux sessions
+     (`tmux list-sessions -F '#S'`) and exits when none are left after a
+     30 second grace period for the first session to start.
+   - **Conversation = tmux session.** Starting one is
+     `docker exec -u USER CONTAINER bash -c 'tmux new-session -d -s SESSION -c WORKDIR -- claude ...'`,
+     stopping one is `tmux kill-session`, and a terminal tab attaches with
+     `docker exec -it CONTAINER ... tmux attach -t SESSION`. The container
+     never stops while any session lives, and stops itself after the last.
+   - **Status.** A box is Running when its container is running (docker) and
+     its session is in a state file less than 6 seconds old. The state
+     directory is mounted from the host (`~/.claude-box/state/CONTAINER`), so
+     polling costs a file read, not a `docker exec` per project per tick.
+   - **Sessions directory.** One per container, not per box
+     (`~/.claude-box/sessions/CONTAINER`): inside one container pids are
+     unique, so a file belongs to one process and `SessionWatcher` finds a
+     box's file by its session id within that directory.
+   - **Settings.** The project record holds the port pool (10 host ports,
+     published when the container is created), mounts and SSH remotes. A
+     conversation takes ports from the pool and the opening prompt names
+     them. Changing the pool or mounts needs the container recreated, which
+     ends every conversation in it, so it is a deliberate action with a
+     warning.
+   - **Records.** A box record gains `container=` and `session=`. Without
+     them the box is a classic per-box container (`container` = its own name,
+     session `main`), so nothing existing changes.
+   - **Not in scope:** moving a running classic box into a shared container,
+     and per-conversation CPU and memory (the container's totals are shown on
+     each of its boxes).
 
 ## Open questions
 
