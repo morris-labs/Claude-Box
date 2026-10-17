@@ -11,6 +11,10 @@ Step 4 of 7: verify the picker flows in the running GUI. Needs a display and Doc
 which this container lacks.
 
 ## Done since the last checkpoint
+- Host test found two bugs, both fixed: removing the account switcher dropped the
+  bind mount for the symlinked `~/.claude/projects` (boxes could not resume), and the
+  session watch could not work in a shared sessions directory (pid files collide
+  across containers). Each box now has its own sessions directory.
 - Stage 2: git worktrees per conversation (New Box checkbox, default on for git
   projects), notes in `.claude-box/conversations/SLUG/`, Remove/Purge handling,
   and Box > Convert to Worktree. Worktree and migration logic tested against real

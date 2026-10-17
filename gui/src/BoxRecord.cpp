@@ -11,6 +11,11 @@ QString BoxRecord::knownDir()
     return QDir::homePath() + "/.claude-box/known";
 }
 
+QString BoxRecord::sessionsDir(const QString &boxName)
+{
+    return QDir::homePath() + "/.claude-box/sessions/" + boxName;
+}
+
 QList<BoxRecord> BoxRecord::loadAll()
 {
     QList<BoxRecord> records;
@@ -157,6 +162,7 @@ bool BoxRecord::remove() const
 {
     if (name.isEmpty())
         return true;
+    QDir(sessionsDir(name)).removeRecursively();
     QFile file(knownDir() + "/" + name);
     if (!file.exists())
         return true;

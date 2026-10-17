@@ -24,7 +24,7 @@ SessionWatcher::SessionWatcher(QObject *parent)
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, &m_debounce, qOverload<>(&QTimer::start));
 }
 
-QString SessionWatcher::sessionsDir()
+QString SessionWatcher::sharedSessionsDir()
 {
     return QDir::homePath() + QStringLiteral("/.claude/sessions");
 }
@@ -35,10 +35,10 @@ void SessionWatcher::setRunning(const QStringList &names)
     scan();
 }
 
-QHash<QString, SessionWatcher::Entry> SessionWatcher::readEntries(QStringList *filesOut)
+QHash<QString, SessionWatcher::Entry> SessionWatcher::readEntries(const QString &dir, QStringList *filesOut)
 {
     QHash<QString, Entry> entries;
-    const QFileInfoList files = QDir(sessionsDir()).entryInfoList({QStringLiteral("*.json")}, QDir::Files);
+    const QFileInfoList files = QDir(dir).entryInfoList({QStringLiteral("*.json")}, QDir::Files);
     for (const QFileInfo &fi : files) {
         if (filesOut)
             *filesOut << fi.absoluteFilePath();
@@ -57,6 +57,8 @@ QHash<QString, SessionWatcher::Entry> SessionWatcher::readEntries(QStringList *f
         e.procStart = obj.value("procStart").toString();
         e.sessionId = obj.value("sessionId").toString();
         e.name = obj.value("name").toString();
+        e.entrypoint = obj.value("entrypoint").toString();
+        e.updatedAt = static_cast<qint64>(obj.value("updatedAt").toDouble());
         e.nameIsUser = obj.value("nameSource").toString() == QLatin1String("user");
         if (e.pid > 0 && !e.sessionId.isEmpty())
             entries.insert(e.key(), e);
@@ -76,11 +78,16 @@ bool SessionWatcher::heldByOtherBox(const QString &sessionId, const QString &box
 // QFileSystemWatcher reports a change to a file's contents only for paths
 // added individually, and an atomic replace (write new file, rename over the
 // old) drops the path, so the set is topped up after every scan.
-void SessionWatcher::watchFiles(const QStringList &files)
+void SessionWatcher::watchPaths(const QStringList &dirs, const QStringList &files)
 {
-    const QString dir = sessionsDir();
-    if (QFileInfo(dir).isDir() && !m_watcher.directories().contains(dir))
-        m_watcher.addPath(dir);
+    QStringList addDirs;
+    const QStringList haveDirs = m_watcher.directories();
+    for (const QString &d : dirs) {
+        if (QFileInfo(d).isDir() && !haveDirs.contains(d))
+            addDirs << d;
+    }
+    if (!addDirs.isEmpty())
+        m_watcher.addPaths(addDirs);
 
     const QStringList have = m_watcher.files();
     QStringList add;
@@ -94,94 +101,137 @@ void SessionWatcher::watchFiles(const QStringList &files)
 
 void SessionWatcher::scan()
 {
-    QStringList files;
-    const QHash<QString, Entry> entries = readEntries(&files);
-    watchFiles(files);
+    QStringList watchDirs = {sharedSessionsDir()};
+    QStringList watchFiles;
 
-    // A box that stopped has no process to follow; it is matched afresh when
-    // it runs again.
+    // The shared directory is read lazily: only boxes without a directory of
+    // their own need it.
+    QHash<QString, Entry> shared;
+    bool sharedRead = false;
+    auto readShared = [&]() -> const QHash<QString, Entry> & {
+        if (!sharedRead) {
+            shared = readEntries(sharedSessionsDir(), &watchFiles);
+            sharedRead = true;
+        }
+        return shared;
+    };
+
+    // A box that stopped has nothing to follow; it is read afresh when it
+    // runs again.
     for (auto it = m_bindings.begin(); it != m_bindings.end();) {
         it = m_running.contains(it.key()) ? std::next(it) : m_bindings.erase(it);
     }
 
-    QSet<QString> claimed;
-    for (const Binding &b : std::as_const(m_bindings))
-        claimed.insert(b.key);
+    QSet<QString> claimed; // shared-directory processes already taken by a box
+    for (const Binding &b : std::as_const(m_bindings)) {
+        if (!b.key.isEmpty())
+            claimed.insert(b.key);
+    }
 
     for (const QString &boxName : std::as_const(m_running)) {
         BoxRecord rec = BoxRecord::load(boxName);
         if (!rec.isValid())
             continue;
 
-        auto bound = m_bindings.find(boxName);
-        if (bound == m_bindings.end()) {
-            // Session ids are unique, so exactly one unclaimed process with the
-            // recorded id is the box's claude. Anything else stays unbound
-            // until it is unambiguous.
-            if (rec.sessionUuid.isEmpty())
-                continue;
-            const Entry *match = nullptr;
-            int count = 0;
-            for (const Entry &e : entries) {
-                if (e.sessionId == rec.sessionUuid && !claimed.contains(e.key())) {
-                    match = &e;
-                    ++count;
+        Binding &binding = m_bindings[boxName];
+        const Entry *live = nullptr;
+        bool ownDir = false;
+
+        // The box's own directory: whatever is in it is this box's, and the
+        // newest file is the live process.
+        const QString boxDir = BoxRecord::sessionsDir(boxName);
+        watchDirs << boxDir;
+        const QHash<QString, Entry> mine = readEntries(boxDir, &watchFiles);
+        if (!mine.isEmpty()) {
+            ownDir = true;
+            for (const Entry &e : mine) {
+                if (!live || e.updatedAt > live->updatedAt)
+                    live = &e;
+            }
+        } else {
+            // Started before boxes had their own directory: find the process
+            // by the recorded session id, but only when exactly one live-looking
+            // candidate has it. Desktop-app entries share ids with the sessions
+            // they display, and a killed container leaves stale files, so
+            // several matches are expected and settled in favour of the newest
+            // command-line process.
+            const QHash<QString, Entry> &all = readShared();
+            if (!binding.key.isEmpty()) {
+                const auto found = all.constFind(binding.key);
+                if (found != all.constEnd())
+                    live = &found.value();
+                else
+                    binding = Binding(); // the process is gone; find it again
+            }
+            if (!live && !rec.sessionUuid.isEmpty()) {
+                const Entry *best = nullptr;
+                for (const Entry &e : all) {
+                    if (e.sessionId != rec.sessionUuid || claimed.contains(e.key())
+                        || e.entrypoint == QLatin1String("claude-desktop"))
+                        continue;
+                    if (!best || e.updatedAt > best->updatedAt)
+                        best = &e;
+                }
+                if (best) {
+                    live = best;
+                    binding.key = best->key();
+                    binding.seen = true;
+                    binding.lastSession = best->sessionId;
+                    binding.lastName = best->nameIsUser ? best->name : rec.conversationName;
+                    claimed.insert(best->key());
+                    continue; // matched by the record itself, nothing to change yet
                 }
             }
-            if (count != 1)
-                continue;
-
-            Binding b;
-            b.key = match->key();
-            b.lastSession = match->sessionId;
-            b.lastName = match->nameIsUser ? match->name : rec.conversationName;
-            m_bindings.insert(boxName, b);
-            claimed.insert(b.key);
-            continue;
         }
-
-        const auto found = entries.constFind(bound->key);
-        if (found == entries.constEnd()) {
-            m_bindings.erase(bound); // the process is gone; rebind on the next scan
+        if (!live)
             continue;
-        }
-        const Entry &e = found.value();
 
+        // Only changes since the previous reading are applied, so an Edit Box
+        // change that is waiting for a restart is not reverted by the
+        // still-running old process. A box's own directory is certain, so its
+        // first reading is taken as the truth (a /clear may have happened
+        // while this app was closed).
+        const bool first = !binding.seen;
         bool changed = false;
-        // What the binding should remember once the record is safely saved.
-        // Advancing it earlier would make a failed save permanent: the next
-        // scan would see no change and never try again.
-        QString seenSession = bound->lastSession;
-        QString seenName = bound->lastName;
+        QString seenSession = binding.lastSession;
+        QString seenName = binding.lastName;
 
-        if (e.sessionId != bound->lastSession) {
-            seenSession = e.sessionId;
+        if (first ? ownDir : live->sessionId != binding.lastSession) {
+            seenSession = live->sessionId;
             // Another box holding the new id would mean two records for one
             // transcript; leave this record alone rather than pick a side.
-            if (e.sessionId != rec.sessionUuid && !heldByOtherBox(e.sessionId, boxName)) {
-                rec.sessionUuid = e.sessionId;
+            if (live->sessionId != rec.sessionUuid && !heldByOtherBox(live->sessionId, boxName)) {
+                rec.sessionUuid = live->sessionId;
                 changed = true;
             }
+        } else if (first) {
+            seenSession = live->sessionId;
         }
 
         // An auto-generated name (no nameSource) is not something the user
         // chose, so it never replaces the one they did.
-        if (e.nameIsUser && !e.name.isEmpty() && e.name != bound->lastName) {
-            seenName = e.name;
-            if (e.name != rec.conversationName) {
-                rec.conversationName = e.name;
+        if (live->nameIsUser && !live->name.isEmpty()
+            && (first ? ownDir : live->name != binding.lastName)) {
+            seenName = live->name;
+            if (live->name != rec.conversationName) {
+                rec.conversationName = live->name;
                 // The transcript carries this name now, so startBox() should
                 // treat the two as in step.
-                rec.transcriptSyncedName = e.name;
+                rec.transcriptSyncedName = live->name;
                 changed = true;
             }
+        } else if (first) {
+            seenName = rec.conversationName;
         }
 
         if (changed && !rec.save())
-            continue; // keep the old binding state so the next scan retries
-        bound->lastSession = seenSession;
-        bound->lastName = seenName;
+            continue; // keep the old state so the next scan retries
+        binding.seen = true;
+        binding.lastSession = seenSession;
+        binding.lastName = seenName;
         if (changed)
             emit boxChanged(boxName);
     }
+
+    watchPaths(watchDirs, watchFiles);
 }

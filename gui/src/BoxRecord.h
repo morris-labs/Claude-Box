@@ -106,6 +106,10 @@ struct BoxRecord {
 
     // Base ~/.claude-box/known directory (created on demand by save()).
     static QString knownDir();
+    // Host directory mounted over the container's ~/.claude/sessions, so this
+    // box's Claude process writes its pid file where no other box can overwrite
+    // it. See SessionWatcher.
+    static QString sessionsDir(const QString &boxName);
 
     // Every record currently on disk under knownDir().
     static QList<BoxRecord> loadAll();

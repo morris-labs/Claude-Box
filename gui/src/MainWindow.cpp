@@ -2485,6 +2485,8 @@ void MainWindow::onPurge()
         if (rec.targetDir != dir)
             continue;
         toRemove << (BoxRecord::knownDir() + "/" + rec.name);
+        if (QDir(BoxRecord::sessionsDir(rec.name)).exists())
+            toRemove << BoxRecord::sessionsDir(rec.name);
         // A worktree box's transcripts are keyed to its worktree. The
         // worktree itself is git work and is never purged.
         if (!rec.worktreeDir.isEmpty()) {
