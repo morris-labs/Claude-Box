@@ -317,9 +317,16 @@ QString DockerBackend::uniqueBoxName(const QString &base) const
     for (const BoxRecord &rec : BoxRecord::loadAll())
         existing << rec.name;
     existing += SharedContainer::allLiveSessions();
+    // tmux rewrites "." and ":" in session names, so compare the candidate in
+    // that form too.
+    auto asSession = [](QString name) {
+        name.replace(QLatin1Char('.'), QLatin1Char('_'));
+        name.replace(QLatin1Char(':'), QLatin1Char('_'));
+        return name;
+    };
 
     int n = 1;
-    while (existing.contains(candidate)) {
+    while (existing.contains(candidate) || existing.contains(asSession(candidate))) {
         ++n;
         candidate = QString("claude-agent-%1-%2").arg(sanitizedBase).arg(n);
     }

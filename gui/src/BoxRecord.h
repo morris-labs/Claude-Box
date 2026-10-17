@@ -111,7 +111,17 @@ struct BoxRecord {
     QString workDir() const { return worktreeDir.isEmpty() ? targetDir : worktreeDir; }
     bool isShared() const { return !container.isEmpty() && container != name; }
     QString containerName() const { return container.isEmpty() ? name : container; }
-    QString tmuxSession() const { return session.isEmpty() ? QStringLiteral("main") : session; }
+    // tmux turns "." and ":" in a session name into "_" (they separate window
+    // and pane in a target), so a box named after a folder like app.odinhelp.com
+    // is only ever found under its rewritten name. The record keeps the name as
+    // it was; this is what every tmux command and state-file comparison uses.
+    QString tmuxSession() const
+    {
+        QString name = session.isEmpty() ? QStringLiteral("main") : session;
+        name.replace(QLatin1Char('.'), QLatin1Char('_'));
+        name.replace(QLatin1Char(':'), QLatin1Char('_'));
+        return name;
+    }
 
     // Base ~/.claude-box/known directory (created on demand by save()).
     static QString knownDir();
