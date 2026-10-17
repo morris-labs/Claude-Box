@@ -21,7 +21,7 @@ PromptsDialog::PromptsDialog(QWidget *parent)
         QStringLiteral("Workspace subfolder"),
         QStringLiteral("Sent as the opening message when a new box is created with a workspace "
                        "subfolder. The agent receives this before any user input."),
-        QStringLiteral("Placeholders: %1 = folder slug,  %2 = conversation name"),
+        QStringLiteral("Placeholders: %1 = folder slug,  %2 = conversation name,  %3 = workspace folder path"),
         PromptTemplates::workspace(),
         PromptTemplates::defaultWorkspace());
 
@@ -39,7 +39,7 @@ PromptsDialog::PromptsDialog(QWidget *parent)
         QStringLiteral("Sent as the opening message for new boxes that have no workspace "
                        "subfolder. Clear the field to send no opening message. Port hints are "
                        "appended after this when ports are also mapped."),
-        QStringLiteral("Placeholders: %1 = conversation name,  %2 = target directory"),
+        QStringLiteral("Placeholders: %1 = conversation name,  %2 = target directory path"),
         PromptTemplates::starter(),
         PromptTemplates::defaultStarter());
 

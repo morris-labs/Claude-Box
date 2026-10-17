@@ -43,6 +43,16 @@ static QString shellQuote(const QString &s)
 // (exits the docker-exec session) without killing PID 1, so the container
 // stays alive. The loop exits when claude's tmux session ends (tmux's
 // exit-empty is on by default), which is the normal shutdown path.
+// A host path as the agent should be told about it: the container-side
+// location (they differ on Windows), with the container user's home written
+// as "~". A full path rather than a folder name, so the agent doesn't have
+// to guess where it is relative to.
+static QString promptPath(const QString &hostPath)
+{
+    return PromptTemplates::displayPath(ContainerPaths::hostToContainer(hostPath),
+                                        QStringLiteral("/home/") + DockerBackend::containerUsername());
+}
+
 static QString buildContainerCmd(const QString &gitSetup, const QStringList &claudeArgs)
 {
     QStringList quotedParts;
@@ -881,7 +891,9 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
 
         rec.workspaceDir = slug;
 
-        openingPrompt = PromptTemplates::workspace().arg(slug, rec.conversationName);
+        openingPrompt = PromptTemplates::expand(
+            PromptTemplates::workspace(),
+            {slug, rec.conversationName, promptPath(workspacePath)});
 
         // One name for everything: the folder, the box, the record and
         // claude's own session name all become the slug, so a row in the
@@ -895,7 +907,8 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
     if (!resumeExisting && !provisionWorkspace) {
         const QString s = PromptTemplates::starter();
         if (!s.isEmpty())
-            openingPrompt = s.arg(rec.conversationName, rec.targetDir);
+            openingPrompt = PromptTemplates::expand(
+                s, {rec.conversationName, promptPath(rec.targetDir)});
     }
 
     // Tell the agent which ports it can use for services the host needs to

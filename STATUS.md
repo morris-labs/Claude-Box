@@ -4,7 +4,7 @@
 `PLAN.md`: link existing conversations (branch `fix/link-existing-conversations`).
 
 ## Current step
-Step 4 of 5: verify both flows in the running GUI. Needs a display and Docker,
+Step 4 of 7: verify the picker flows in the running GUI. Needs a display and Docker,
 which this container lacks.
 
 ## Done since the last checkpoint
@@ -14,13 +14,21 @@ which this container lacks.
   conversation combo, so a picked conversation now reaches `createNew()`.
 - Edit Box can re-select the conversation. A change asks for a restart, runs the
   adoption check, and "Start a new conversation on next restart" clears the link.
+- Prompts now give `~/...` paths and fill placeholders by number (fixes the
+  starter prompt that said "working in <conversation name>").
+- Branches kept for earlier work: feature/account-switch, async-open-close,
+  release-workflow, update-claude-code, update-packages, fix/remove-stopped-boxes.
 - `CLAUDE.md` documents both. `INFRA.md` and `PLAN.md` are new.
 - The GUI compiles (out-of-tree build).
 
 ## Next
 - Test on the host: adopt a conversation whose title matches an existing folder,
   then edit a running box and switch its conversation.
-- Decide on auto-detecting `/clear` (new session id) on restart. See `PLAN.md`.
+- Build the session-file watch (PLAN step 6).
+- Decide on one container per project directory (PLAN step 7).
+- Fork/rewind "not available in this session": likely Claude Code's remote-control
+  limit, not ours; confirm where the user triggers it.
+- (old) Decide on auto-detecting `/clear` (new session id) on restart. See `PLAN.md`.
 - Merge the branch when the user approves. No push until told.
 
 ## Blockers and pending decisions

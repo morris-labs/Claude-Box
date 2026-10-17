@@ -1,4 +1,5 @@
 #include "PromptTemplates.h"
+#include <QRegularExpression>
 #include <QSettings>
 
 namespace {
@@ -10,13 +11,13 @@ const QString kStarterKey   = QStringLiteral("prompts/starter");
 QString PromptTemplates::defaultWorkspace()
 {
     return QStringLiteral(
-        "Your workspace for this conversation is the %1/ folder. It already exists.\n"
+        "Your workspace for this conversation is %3. It already exists.\n"
         "\n"
         "Before making any changes, read CLAUDE.md if it exists, then read and maintain "
-        "INFRA.md, PLAN.md, and %1/STATUS.md — creating any that do not exist based on "
+        "INFRA.md, PLAN.md, and %3/STATUS.md — creating any that do not exist based on "
         "the project and the conversation.\n"
         "\n"
-        "Do your work inside %1/ rather than in the directory above it.\n"
+        "Do your work inside %3 rather than in the directory above it.\n"
         "\n"
         "Use git for versioning. Create local branches and commit your work as you go. "
         "Do not push to any remote without explicit instruction.\n"
@@ -25,7 +26,7 @@ QString PromptTemplates::defaultWorkspace()
         "asking. Any files that must survive a container rebuild must be saved inside "
         "the project directory.\n"
         "\n"
-        "When you stop work or are asked to checkpoint, update %1/STATUS.md with: the "
+        "When you stop work or are asked to checkpoint, update %3/STATUS.md with: the "
         "active plan, your current step, what you have done since the last checkpoint, "
         "what comes next, and any blockers. Keep STATUS.md under 60 lines.\n"
         "\n"
@@ -43,7 +44,7 @@ QString PromptTemplates::defaultPortHint()
 QString PromptTemplates::defaultStarter()
 {
     return QStringLiteral(
-        "You are working in %2. Before doing anything else, read CLAUDE.md if it exists, "
+        "Your working directory is %2. Before doing anything else, read CLAUDE.md if it exists, "
         "then read and maintain INFRA.md, PLAN.md, and STATUS.md — creating any that do "
         "not exist based on the project and the conversation.\n"
         "\n"
@@ -101,4 +102,32 @@ void PromptTemplates::setStarter(const QString &t)
         s.remove(kStarterKey);
     else
         s.setValue(kStarterKey, t);
+}
+
+QString PromptTemplates::expand(const QString &tmpl, const QStringList &values)
+{
+    static const QRegularExpression marker(QStringLiteral("%(\\d+)"));
+    QString out;
+    qsizetype last = 0;
+    auto it = marker.globalMatch(tmpl);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        const int n = m.captured(1).toInt();
+        if (n < 1 || n > values.size())
+            continue; // leave an unknown marker as written
+        out += QStringView(tmpl).mid(last, m.capturedStart() - last);
+        out += values.at(n - 1);
+        last = m.capturedEnd();
+    }
+    out += QStringView(tmpl).mid(last);
+    return out;
+}
+
+QString PromptTemplates::displayPath(const QString &containerPath, const QString &containerHome)
+{
+    if (containerPath == containerHome)
+        return QStringLiteral("~");
+    if (containerPath.startsWith(containerHome + QLatin1Char('/')))
+        return QStringLiteral("~") + containerPath.mid(containerHome.size());
+    return containerPath;
 }
