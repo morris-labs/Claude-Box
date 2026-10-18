@@ -1,5 +1,6 @@
 #include "Worktrees.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -84,6 +85,63 @@ QString notesDir(const QString &projectRoot, const QString &slug)
 QString infraFile(const QString &projectRoot)
 {
     return QDir::cleanPath(projectRoot + QLatin1Char('/') + kNotesDirName + QStringLiteral("/INFRA.md"));
+}
+
+QString worktreeNotesDir(const QString &worktree)
+{
+    return QDir::cleanPath(worktree + QLatin1Char('/') + kNotesDirName);
+}
+
+QString ensureWorktreeNotesDir(const QString &worktree)
+{
+    const QString dir = worktreeNotesDir(worktree);
+    QDir().mkpath(dir);
+    return dir;
+}
+
+static QString commonExcludeFile(const QString &repo)
+{
+    const Result r = git(repo, {QStringLiteral("rev-parse"), QStringLiteral("--git-common-dir")});
+    if (!r.ok)
+        return QString();
+    QString common = r.output;
+    if (QDir::isRelativePath(common))
+        common = QDir(repo).absoluteFilePath(common);
+    return QDir::cleanPath(common + QStringLiteral("/info/exclude"));
+}
+
+int mergeExcludeRules(const QString &repo, const QString &fromExcludeFile)
+{
+    const QString target = commonExcludeFile(repo);
+    if (target.isEmpty())
+        return 0;
+    auto readLines = [](const QString &path) {
+        QStringList lines;
+        QFile f(path);
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream ts(&f);
+            while (!ts.atEnd())
+                lines << ts.readLine();
+        }
+        return lines;
+    };
+    const QStringList have = readLines(target);
+    QStringList add;
+    for (const QString &line : readLines(fromExcludeFile)) {
+        if (line.trimmed().isEmpty() || line.startsWith(QLatin1Char('#')) || have.contains(line) || add.contains(line))
+            continue;
+        add << line;
+    }
+    if (add.isEmpty())
+        return 0;
+    QDir().mkpath(QFileInfo(target).absolutePath());
+    QFile out(target);
+    if (!out.open(QIODevice::Append | QIODevice::Text))
+        return 0;
+    QTextStream ts(&out);
+    for (const QString &line : add)
+        ts << line << '\n';
+    return add.size();
 }
 
 QString ensureNotesDir(const QString &projectRoot, const QString &slug)
@@ -238,7 +296,8 @@ RemoveCheck checkRemovable(const QString &repo, const QString &path)
     QStringList keep;
     for (const QString &entry : ign.output.split(QChar(0), Qt::SkipEmptyParts)) {
         const QString leaf = QFileInfo(entry.endsWith(QLatin1Char('/')) ? entry.chopped(1) : entry).fileName();
-        if (!isBuildOutputName(leaf))
+        // The notes folder is archived by remove(), not lost.
+        if (!isBuildOutputName(leaf) && leaf != kNotesDirName)
             keep << entry;
     }
     if (!keep.isEmpty()) {
@@ -280,6 +339,18 @@ bool remove(const QString &repo, const QString &path, QString *error)
     const RemoveCheck c = checkRemovable(repo, path);
     if (!c.safe)
         return fail(c.reason);
+
+    // The conversation's notes live in the worktree. Move them out of the way
+    // first so removing the worktree cannot lose them.
+    const QString notes = worktreeNotesDir(path);
+    if (QFileInfo(notes).isDir() && !QDir(notes).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot)) {
+        const QString archive = QDir::cleanPath(repo + QLatin1Char('/') + kNotesDirName + QStringLiteral("/archive/")
+                                                + QFileInfo(path).fileName() + QLatin1Char('-')
+                                                + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMddHHmmss")));
+        QDir().mkpath(QFileInfo(archive).absolutePath());
+        if (!QDir().rename(notes, archive))
+            return fail(QStringLiteral("could not move the notes in %1 to %2").arg(notes, archive));
+    }
 
     const QString branch = currentBranch(path);
     const Result r = git(repo, {QStringLiteral("worktree"), QStringLiteral("remove"), path});

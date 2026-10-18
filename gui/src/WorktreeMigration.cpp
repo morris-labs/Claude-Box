@@ -1,5 +1,7 @@
 #include "WorktreeMigration.h"
 
+#include <functional>
+
 #include "ConversationCatalog.h"
 #include "ProjectRecord.h"
 #include "Worktrees.h"
@@ -119,12 +121,23 @@ QStringList Plan::report() const
     r << QStringLiteral("Changes:     %1 file(s) copied over, %2 deletion(s) applied")
              .arg(copyFiles.size()).arg(removeFiles.size());
     r << QStringLiteral("Notes:       %1 copied to %2").arg(notesFiles.isEmpty() ? QStringLiteral("nothing") : notesFiles.join(QStringLiteral(", ")), notesDir);
+    if (!keepBranches.isEmpty() || !keepTags.isEmpty() || !keepStashes.isEmpty())
+        r << QStringLiteral("Also kept:   %1 other branch(es), %2 tag(s), %3 stash(es), as branches and tags under %4 in the repository")
+                 .arg(keepBranches.size()).arg(keepTags.size()).arg(keepStashes.size()).arg(keepPrefix);
+    if (excludeRules > 0)
+        r << QStringLiteral("Ignore rules: %1 line(s) from the clone's own exclude file are added to the repository's").arg(excludeRules);
     if (!skippedIgnored.isEmpty())
-        r << QStringLiteral("Left behind (build output, still in the old folder): %1").arg(skippedIgnored.join(QStringLiteral(", ")));
+        r << QStringLiteral("Build output: %1 (%2 MB) %3")
+                 .arg(skippedIgnored.join(QStringLiteral(", ")))
+                 .arg(skippedBytes / (1024 * 1024))
+                 .arg(includeBuildOutput ? QStringLiteral("will be copied") : QStringLiteral("is NOT copied; rebuild it, or tick the box to copy it"));
     r << QStringLiteral("Transcripts: %1 file(s) copied to %2").arg(transcripts.size()).arg(transcriptTo);
     if (!ownTranscriptFound)
         r << QStringLiteral("Warning:     this box's own transcript was not found, so it will start a new session.");
-    r << QStringLiteral("Afterwards the old folder is renamed to %1.pre-worktree. Nothing is deleted.").arg(slug);
+    if (!cloneOnly.isEmpty())
+        r << QStringLiteral("NOT carried over (set up again if you need them): %1").arg(cloneOnly.join(QStringLiteral(", ")));
+    r << QStringLiteral("Afterwards the old folder is renamed to %1.pre-worktree. Once this finishes, nothing in it is needed "
+                        "except what this report says was not carried over.").arg(slug);
     r << QStringLiteral("Staged changes become unstaged changes in the worktree.");
     return r;
 }
@@ -168,12 +181,91 @@ Plan plan(const BoxRecord &rec)
     p.cloneBranch = Worktrees::currentBranch(p.oldDir);
     if (p.cloneBranch.isEmpty())
         return fail(QStringLiteral("the clone has a detached HEAD; check out a branch first"));
-    if (!Worktrees::git(p.oldDir, {QStringLiteral("stash"), QStringLiteral("list")}).output.isEmpty())
-        return fail(QStringLiteral("the clone has stashed changes, which would not carry over; apply or drop them first"));
 
     p.branch = Worktrees::branchFor(p.slug);
     p.worktree = Worktrees::worktreePath(p.repo, p.slug);
-    p.notesDir = Worktrees::notesDir(rec.targetDir, p.slug);
+    p.notesDir = Worktrees::worktreeNotesDir(p.worktree);
+    p.keepPrefix = QStringLiteral("claude-keep/") + p.slug + QLatin1Char('/');
+
+    // Commits that exist only in the clone: its other branches, local tags and
+    // stashes. A commit already reachable from a branch or remote of the
+    // repository is safe and skipped.
+    auto preserved = [&](const QString &sha) {
+        if (!Worktrees::git(p.repo, {QStringLiteral("cat-file"), QStringLiteral("-e"), sha + QStringLiteral("^{commit}")}).ok)
+            return false;
+        const auto c = Worktrees::git(p.repo, {QStringLiteral("for-each-ref"), QStringLiteral("--contains"), sha,
+                                              QStringLiteral("--count=1"), QStringLiteral("--format=%(refname)"),
+                                              QStringLiteral("refs/heads"), QStringLiteral("refs/remotes")});
+        return c.ok && !c.output.isEmpty();
+    };
+    const auto branches = Worktrees::git(p.oldDir, {QStringLiteral("for-each-ref"),
+                                                    QStringLiteral("--format=%(refname:short) %(objectname)"),
+                                                    QStringLiteral("refs/heads")});
+    for (const QString &line : branches.output.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+        const int sp = line.lastIndexOf(QLatin1Char(' '));
+        const QString name = line.left(sp), sha = line.mid(sp + 1);
+        if (name != p.cloneBranch && !preserved(sha))
+            p.keepBranches << name;
+    }
+    const auto tags = Worktrees::git(p.oldDir, {QStringLiteral("for-each-ref"),
+                                                QStringLiteral("--format=%(refname:short)"), QStringLiteral("refs/tags")});
+    for (const QString &t : tags.output.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+        if (!Worktrees::git(p.repo, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                                     QStringLiteral("refs/tags/") + t}).ok)
+            p.keepTags << t;
+    }
+    const auto stashes = Worktrees::git(p.oldDir, {QStringLiteral("stash"), QStringLiteral("list"),
+                                                   QStringLiteral("--format=%H")});
+    p.keepStashes = stashes.output.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+
+    // The clone's own ignore rules, so copied ignored files stay ignored.
+    {
+        QFile ex(p.oldDir + QStringLiteral("/.git/info/exclude"));
+        if (ex.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QStringList have = [&]() {
+                QStringList h;
+                const auto rp = Worktrees::git(p.repo, {QStringLiteral("rev-parse"), QStringLiteral("--git-common-dir")});
+                QString common = rp.output;
+                if (QDir::isRelativePath(common))
+                    common = QDir(p.repo).absoluteFilePath(common);
+                QFile f(common + QStringLiteral("/info/exclude"));
+                if (f.open(QIODevice::ReadOnly | QIODevice::Text))
+                    while (!f.atEnd())
+                        h << QString::fromUtf8(f.readLine()).trimmed();
+                return h;
+            }();
+            while (!ex.atEnd()) {
+                const QString line = QString::fromUtf8(ex.readLine()).trimmed();
+                if (!line.isEmpty() && !line.startsWith(QLatin1Char('#')) && !have.contains(line))
+                    ++p.excludeRules;
+            }
+        }
+    }
+
+    // What cannot be carried over: hooks and git settings only the clone has.
+    const QDir hooks(p.oldDir + QStringLiteral("/.git/hooks"));
+    for (const QString &h : hooks.entryList(QDir::Files)) {
+        if (!h.endsWith(QLatin1String(".sample")))
+            p.cloneOnly << QStringLiteral("hook %1").arg(h);
+    }
+    auto configKeys = [](const QString &dir) {
+        QSet<QString> keys;
+        const auto c = Worktrees::git(dir, {QStringLiteral("config"), QStringLiteral("--local"), QStringLiteral("--name-only"),
+                                             QStringLiteral("--list")});
+        for (const QString &k : c.output.split(QLatin1Char('\n'), Qt::SkipEmptyParts))
+            keys.insert(k);
+        return keys;
+    };
+    const QSet<QString> repoKeys = configKeys(p.repo);
+    for (const QString &k : configKeys(p.oldDir)) {
+        if (repoKeys.contains(k) || k.startsWith(QLatin1String("remote.")) || k.startsWith(QLatin1String("branch."))
+            || k.startsWith(QLatin1String("core.repositoryformatversion")) || k.startsWith(QLatin1String("core.filemode"))
+            || k.startsWith(QLatin1String("core.bare")) || k.startsWith(QLatin1String("core.logallrefupdates"))
+            || k.startsWith(QLatin1String("core.ignorecase")) || k.startsWith(QLatin1String("core.symlinks"))
+            || k.startsWith(QLatin1String("core.precomposeunicode")) || k.startsWith(QLatin1String("submodule.")))
+            continue;
+        p.cloneOnly << QStringLiteral("git setting %1").arg(k);
+    }
     if (QFileInfo::exists(p.worktree))
         return fail(p.worktree + QStringLiteral(" already exists"));
     if (Worktrees::git(p.repo, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
@@ -215,8 +307,15 @@ Plan plan(const BoxRecord &rec)
     if (ig.ok) {
         for (const QString &path : ig.output.split(QChar(0), Qt::SkipEmptyParts)) {
             const QString leaf = QFileInfo(path.endsWith(QLatin1Char('/')) ? path.chopped(1) : path).fileName();
-            if (Worktrees::isBuildOutputName(leaf))
+            if (Worktrees::isBuildOutputName(leaf)) {
                 p.skippedIgnored << path;
+                const QString full = p.oldDir + QLatin1Char('/') + (path.endsWith(QLatin1Char('/')) ? path.chopped(1) : path);
+                QDirIterator it(full, QDir::Files | QDir::NoSymLinks | QDir::Hidden, QDirIterator::Subdirectories);
+                while (it.hasNext()) {
+                    it.next();
+                    p.skippedBytes += it.fileInfo().size();
+                }
+            }
             else
                 p.copyFiles << path;
         }
@@ -273,7 +372,7 @@ bool execute(BoxRecord &rec, const Plan &plan, QString *error)
     bool createdBranch = false;
     bool createdWorktree = false;
     QStringList createdFiles; // notes and transcripts this run copied, removed on rollback
-    auto rollback = [&]() {
+    std::function<void()> rollback = [&]() {
         for (const QString &f : std::as_const(createdFiles))
             QFile::remove(f);
         if (createdWorktree)
@@ -292,6 +391,51 @@ bool execute(BoxRecord &rec, const Plan &plan, QString *error)
     if (!fetched.ok)
         return fail(QStringLiteral("could not fetch the clone's branch: ") + fetched.output);
     createdBranch = true;
+
+    // 2b. Everything else only the clone has: other branches, tags, stashes.
+    QStringList createdRefs;
+    auto dropRefs = [&]() {
+        for (const QString &ref : std::as_const(createdRefs))
+            Worktrees::git(plan.repo, {QStringLiteral("update-ref"), QStringLiteral("-d"), ref});
+    };
+    auto keepRef = [&](const QString &source, const QString &ref) {
+        const auto r = Worktrees::git(plan.repo, {QStringLiteral("fetch"), plan.oldDir, source + QLatin1Char(':') + ref}, 300000);
+        if (r.ok)
+            createdRefs << ref;
+        return r;
+    };
+    for (const QString &b : plan.keepBranches) {
+        const auto r = keepRef(QStringLiteral("refs/heads/") + b, QStringLiteral("refs/heads/") + plan.keepPrefix + b);
+        if (!r.ok) {
+            dropRefs();
+            rollback();
+            return fail(QStringLiteral("could not keep the branch %1: %2").arg(b, r.output));
+        }
+    }
+    for (const QString &t : plan.keepTags) {
+        const auto r = keepRef(QStringLiteral("refs/tags/") + t, QStringLiteral("refs/tags/") + t);
+        if (!r.ok) {
+            dropRefs();
+            rollback();
+            return fail(QStringLiteral("could not keep the tag %1: %2").arg(t, r.output));
+        }
+    }
+    for (int i = 0; i < plan.keepStashes.size(); ++i) {
+        const auto r = keepRef(plan.keepStashes.at(i),
+                               QStringLiteral("refs/heads/") + plan.keepPrefix + QStringLiteral("stash-%1").arg(i));
+        if (!r.ok) {
+            dropRefs();
+            rollback();
+            return fail(QStringLiteral("could not keep stash %1: %2").arg(i).arg(r.output));
+        }
+    }
+    Worktrees::mergeExcludeRules(plan.repo, plan.oldDir + QStringLiteral("/.git/info/exclude"));
+    // The extra refs go with the branch on rollback.
+    const auto baseRollback = rollback;
+    rollback = [&, baseRollback]() {
+        dropRefs();
+        baseRollback();
+    };
 
     // 3. The worktree on that branch.
     QString wt;
@@ -314,6 +458,18 @@ bool execute(BoxRecord &rec, const Plan &plan, QString *error)
             return fail(copyErr);
         }
     }
+    if (plan.includeBuildOutput) {
+        for (const QString &rel : plan.skippedIgnored) {
+            const QString bare = rel.endsWith(QLatin1Char('/')) ? rel.chopped(1) : rel;
+            const QString src = plan.oldDir + QLatin1Char('/') + bare;
+            if (!QFileInfo(src).exists() && !QFileInfo(src).isSymLink())
+                continue;
+            if (!copyTree(src, plan.worktree + QLatin1Char('/') + bare, &copyErr)) {
+                rollback();
+                return fail(copyErr);
+            }
+        }
+    }
     for (const QString &rel : plan.removeFiles) {
         const QString target = plan.worktree + QLatin1Char('/') + rel;
         if (QFileInfo::exists(target) && !QFile::remove(target)) {
@@ -322,7 +478,8 @@ bool execute(BoxRecord &rec, const Plan &plan, QString *error)
         }
     }
 
-    // 5. Notes go to the project directory.
+    // 5. PLAN.md and STATUS.md go to the worktree's .claude-box folder; INFRA.md
+    // is the project's shared file.
     QDir().mkpath(plan.notesDir);
     for (const QString &n : plan.notesFiles) {
         const QString dst = (n == QLatin1String("INFRA.md")) ? Worktrees::infraFile(rec.targetDir)

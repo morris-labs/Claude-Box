@@ -25,6 +25,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QNetworkAccessManager>
 #include <QCloseEvent>
 #include <QDateTime>
@@ -2013,7 +2014,7 @@ void MainWindow::onConvertToWorktree()
     auto *planWatcher = new QFutureWatcher<WorktreeMigration::Plan>(this);
     connect(planWatcher, &QFutureWatcher<WorktreeMigration::Plan>::finished, this,
             [this, planWatcher, rec]() {
-        const WorktreeMigration::Plan plan = planWatcher->result();
+        WorktreeMigration::Plan plan = planWatcher->result();
         planWatcher->deleteLater();
         QGuiApplication::restoreOverrideCursor();
 
@@ -2028,10 +2029,17 @@ void MainWindow::onConvertToWorktree()
                         QMessageBox::Yes | QMessageBox::Cancel, this);
         box.setInformativeText(plan.report().join('\n'));
         box.setDefaultButton(QMessageBox::Cancel);
+        QCheckBox *buildOutput = nullptr;
+        if (!plan.skippedIgnored.isEmpty()) {
+            buildOutput = new QCheckBox(
+                QStringLiteral("Also copy build output (%1 MB)").arg(plan.skippedBytes / (1024 * 1024)), &box);
+            box.setCheckBox(buildOutput);
+        }
         if (box.exec() != QMessageBox::Yes) {
             m_convertingBox.clear();
             return;
         }
+        plan.includeBuildOutput = buildOutput && buildOutput->isChecked();
 
         QGuiApplication::setOverrideCursor(Qt::WaitCursor);
         auto *runWatcher = new QFutureWatcher<ConvertResult>(this);
