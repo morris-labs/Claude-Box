@@ -76,6 +76,8 @@ BoxRecord BoxRecord::load(const QString &name)
             rec.worktreeDir = value;
         else if (key == "branch")
             rec.branch = value;
+        else if (key == "moved_from")
+            rec.movedFrom = value;
         else if (key == "container")
             rec.container = value;
         else if (key == "session")
@@ -143,6 +145,8 @@ bool BoxRecord::save() const
         out << "worktree=" << worktreeDir << '\n';
     if (!branch.isEmpty())
         out << "branch=" << branch << '\n';
+    if (!movedFrom.isEmpty())
+        out << "moved_from=" << movedFrom << '\n';
     if (!container.isEmpty())
         out << "container=" << container << '\n';
     if (!session.isEmpty())

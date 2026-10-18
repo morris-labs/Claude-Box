@@ -360,6 +360,7 @@ bool execute(BoxRecord &rec, const Plan &plan, QString *error)
     rec.worktreeDir = plan.worktree;
     rec.branch = plan.branch;
     rec.workspaceDir.clear();
+    rec.movedFrom = plan.oldDir;
     if (!rec.save()) {
         rec = before;
         rollback();
