@@ -1,5 +1,7 @@
 #include "NewBoxDialog.h"
 
+#include "ModelCatalog.h"
+
 #include "BoxRecord.h"
 #include "CollapsibleSection.h"
 #include "ConversationCatalog.h"
@@ -53,21 +55,9 @@ const char *kWorktreeDirsKey = "newBox/worktreeDirs";
 // `claude --effort <level>` accepts exactly these, per `claude --help`.
 const QStringList kEffortLevels = {"low", "medium", "high", "xhigh", "max"};
 
-// Full model IDs, newest first.
-const QStringList kModelIds = {
-    QStringLiteral("claude-fable-5"),
-    QStringLiteral("claude-opus-5"),
-    QStringLiteral("claude-sonnet-5"),
-    QStringLiteral("claude-opus-4-8"),
-    QStringLiteral("claude-opus-4-7"),
-    QStringLiteral("claude-opus-4-6"),
-    QStringLiteral("claude-sonnet-4-6"),
-    QStringLiteral("claude-haiku-4-5"),
-};
-
 // Used only when the settings files name nothing at all, so that the
 // combos always open on a real value rather than a placeholder.
-const QString kFallbackModel = QStringLiteral("claude-opus-5");
+const QString kFallbackModel = QStringLiteral("claude-opus-5-5");
 const QString kFallbackEffort = QStringLiteral("high");
 
 // What `claude` itself would pick for `key`, read from the same files it
@@ -275,14 +265,14 @@ NewBoxDialog::NewBoxDialog(QWidget *parent)
     // with, and a placeholder makes you go and look that up elsewhere.
     // The flag is then always passed explicitly.
     m_modelCombo = new QComboBox(this);
-    // Editable: kModelIds is a list of convenient suggestions, not an
+    // Editable: ModelCatalog::known() is a list of convenient suggestions, not an
     // exhaustive list -- --model also accepts a dated snapshot or any
     // model released after this list was last updated, typed straight in.
     // NoInsert keeps a typed value from also being appended as a permanent
     // new dropdown item.
     m_modelCombo->setEditable(true);
     m_modelCombo->setInsertPolicy(QComboBox::NoInsert);
-    for (const QString &id : kModelIds)
+    for (const QString &id : ModelCatalog::known())
         m_modelCombo->addItem(id, id);
     form->addRow("Model:", m_modelCombo);
 
