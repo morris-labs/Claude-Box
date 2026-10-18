@@ -116,6 +116,12 @@ public:
     // container's mounts are fixed when it is created). Empty when the
     // container is not running or has them all.
     QStringList staleSharedMounts(const ProjectRecord &project) const;
+    // Brings a box's record in line with its live session: the conversation
+    // name Claude shows (set with /rename) and the model and effort in use (set
+    // with /model and /effort). Called as a box stops, while its session files
+    // and transcript are still current. Returns true if the record changed and
+    // was saved. A setting edited since the box started is left alone.
+    static bool syncRecordFromSession(const QString &boxName);
     bool isRunning(const QString &name) const;
 
     // Returns the @anthropic-ai/claude-code version baked into the
