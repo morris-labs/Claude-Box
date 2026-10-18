@@ -68,6 +68,9 @@ struct BoxRecord {
     // while targetDir stays the mounted project root. Always use workDir()
     // to find the transcripts, never targetDir.
     QString worktreeDir;
+    // Set by Convert to Worktree: the folder the conversation used to work in.
+    // The next start tells the agent about the move once, then clears it.
+    QString movedFrom;
     QString branch;
 
     // A box in a project's shared container: the container it runs in and

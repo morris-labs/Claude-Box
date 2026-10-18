@@ -1386,6 +1386,25 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
                                  : QStringLiteral("--session-id"))
                << updated.sessionUuid;
 
+    // A conversation converted to a worktree still has its old paths in its
+    // history, and the notes moved too. Say so once, as the first message of
+    // the resumed session.
+    const bool tellMoved = hasTranscript && !updated.movedFrom.isEmpty() && !updated.worktreeDir.isEmpty();
+    if (tellMoved) {
+        const QString slug = QFileInfo(updated.worktreeDir).fileName();
+        claudeArgs << QStringLiteral(
+            "This conversation was moved into a git worktree. Your working directory is now %1 "
+            "(branch %2). The folder you used before, %3, was renamed to %4 and must not be used "
+            "any more. Your PLAN.md and STATUS.md are now in %5, and the shared INFRA.md is %6. "
+            "Read them there, keep updating them there, and use these paths in place of any earlier "
+            "ones from this conversation. Reply with one line to confirm, then carry on.")
+            .arg(promptPath(updated.worktreeDir), updated.branch, promptPath(updated.movedFrom),
+                 promptPath(updated.movedFrom + QStringLiteral(".pre-worktree")),
+                 promptPath(Worktrees::notesDir(updated.targetDir, slug)),
+                 promptPath(Worktrees::infraFile(updated.targetDir)));
+    }
+    updated.movedFrom.clear(); // told, or nothing to tell (a fresh session has no old paths)
+
     if (!(updated.isShared() ? startShared(updated, claudeArgs, errorOut)
                              : runContainer(updated, claudeArgs, errorOut)))
         return false;
