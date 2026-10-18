@@ -736,10 +736,10 @@ void NewBoxDialog::updateWorkspaceHint()
         }
         m_workspaceHint->setText(QStringLiteral(
             "A worktree of %1 on the new branch %2 will be created at %3, and the agent works there. "
-            "Its PLAN.md and STATUS.md go in %4.")
+            "Its PLAN.md and STATUS.md go in %4, inside the worktree and ignored by git.")
             .arg(m_primaryRepo, Worktrees::branchFor(slug),
                  Worktrees::worktreePath(m_primaryRepo, slug),
-                 Worktrees::notesDir(m_dirEdit->text().trimmed(), slug)));
+                 Worktrees::worktreeNotesDir(Worktrees::worktreePath(m_primaryRepo, slug))));
         return;
     }
 

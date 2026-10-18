@@ -44,6 +44,16 @@ QString branchFor(const QString &slug);
 QString notesDir(const QString &projectRoot, const QString &slug);
 QString infraFile(const QString &projectRoot);
 
+// A worktree conversation keeps its notes inside the worktree, WORKTREE/.claude-box,
+// so they travel with the branch. Git ignores that folder (see ensureExcluded).
+QString worktreeNotesDir(const QString &worktree);
+QString ensureWorktreeNotesDir(const QString &worktree);
+
+// Adds the lines of `fromExcludeFile` (a clone's .git/info/exclude) that the
+// repository's own info/exclude lacks, so ignored files copied from the clone
+// stay ignored. Returns how many were added.
+int mergeExcludeRules(const QString &repo, const QString &fromExcludeFile);
+
 // Adds `.worktrees/` and `.claude-box/` to the repository's info/exclude so
 // neither shows up as untracked. info/exclude lives in the common git
 // directory, so one entry covers every worktree. Idempotent.

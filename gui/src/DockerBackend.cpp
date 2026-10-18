@@ -1204,10 +1204,11 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
             rec.workspaceDir = slug;
         }
 
-        // The notes for this conversation live in the project directory, not
-        // in the workspace, so they are easy to find and are not touched
-        // when a worktree goes away.
-        const QString notes = Worktrees::ensureNotesDir(rec.targetDir, slug);
+        // A worktree keeps its notes inside itself (ignored by git), so they
+        // travel with the branch. A plain workspace subfolder keeps them in the
+        // project directory, where they are easy to find.
+        const QString notes = provisionWorktree ? Worktrees::ensureWorktreeNotesDir(workPath)
+                                                : Worktrees::ensureNotesDir(rec.targetDir, slug);
         const QString repoForExclude = ProjectRecord::forRoot(rec.targetDir).primaryRepo;
         if (!repoForExclude.isEmpty())
             Worktrees::ensureExcluded(repoForExclude);
@@ -1391,7 +1392,6 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
     // the resumed session.
     const bool tellMoved = hasTranscript && !updated.movedFrom.isEmpty() && !updated.worktreeDir.isEmpty();
     if (tellMoved) {
-        const QString slug = QFileInfo(updated.worktreeDir).fileName();
         claudeArgs << QStringLiteral(
             "This conversation was moved into a git worktree. Your working directory is now %1 "
             "(branch %2). The folder you used before, %3, was renamed to %4 and must not be used "
@@ -1400,7 +1400,7 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
             "ones from this conversation. Reply with one line to confirm, then carry on.")
             .arg(promptPath(updated.worktreeDir), updated.branch, promptPath(updated.movedFrom),
                  promptPath(updated.movedFrom + QStringLiteral(".pre-worktree")),
-                 promptPath(Worktrees::notesDir(updated.targetDir, slug)),
+                 promptPath(Worktrees::worktreeNotesDir(updated.worktreeDir)),
                  promptPath(Worktrees::infraFile(updated.targetDir)));
     }
     updated.movedFrom.clear(); // told, or nothing to tell (a fresh session has no old paths)
