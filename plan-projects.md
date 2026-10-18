@@ -33,24 +33,27 @@ container.
 ## Per-conversation notes
 
 `PLAN.md` and `STATUS.md` describe one line of work, so each conversation
-gets its own pair. They live in the project directory, outside any worktree,
-so you can find them without knowing where a worktree is:
+gets its own pair. For a worktree they live **inside it**, so a robot or
+feature is self-contained and its notes travel with its branch, whether it is
+merged into main or stays an offshoot:
 
 ```
-PROJECT/.claude-box/INFRA.md                    shared environment notes
-PROJECT/.claude-box/conversations/SLUG/PLAN.md
-PROJECT/.claude-box/conversations/SLUG/STATUS.md
+PROJECT/.claude-box/INFRA.md                    shared environment notes (main checkout)
+PROJECT/.worktrees/SLUG/.claude-box/PLAN.md     this conversation's plan
+PROJECT/.worktrees/SLUG/.claude-box/STATUS.md   this conversation's status
 ```
 
 - `.claude-box/` is added to the repository's `info/exclude`, which every
   worktree shares, so the notes are never committed and branches never
   conflict over them.
 - The opening prompt names the exact paths, so the agent does not rely on the
-  files being in its working directory. A project without worktrees or
-  subfolders keeps the root-level files, as today.
-- The notes are not inside the worktree, so removing a worktree never removes
-  them. The directory name is a single constant, so renaming it is a
-  one-line change.
+  files being in its working directory. A plain workspace subfolder (no
+  worktree) keeps its notes in `PROJECT/.claude-box/conversations/SLUG/`.
+- Removing a worktree moves its `.claude-box/` to
+  `REPO/.claude-box/archive/SLUG-TIME/` first, so removal never loses notes.
+- The main checkout is the reference copy and local cache: the Worktree
+  prompt tells the agent to read it freely and not edit it. Work on the
+  framework itself is a box without a worktree.
 
 ## Migrating existing subfolders
 
