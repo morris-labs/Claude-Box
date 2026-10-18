@@ -8,6 +8,7 @@
 #include "Icons.h"
 #include "ConversationCatalog.h"
 #include "ManageSshRemotesDialog.h"
+#include "ModelCatalog.h"
 #include "NewBoxDialog.h"
 #include "PromptsDialog.h"
 #include "PortAllocator.h"
@@ -131,6 +132,9 @@ MainWindow::MainWindow(QWidget *parent)
         }
         refreshBoxes();
     });
+
+    // Learn which model IDs the image's Claude Code knows (cached per image).
+    QTimer::singleShot(3000, this, [] { ModelCatalog::refreshIfStale(); });
 
     m_refreshTimer = new QTimer(this);
     m_refreshTimer->setInterval(kRefreshIntervalMs);

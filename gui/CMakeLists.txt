@@ -87,6 +87,8 @@ add_executable(claude-box-gui WIN32
     src/PtySession.h
     src/TerminalWidget.cpp
     src/TerminalWidget.h
+    src/ModelCatalog.cpp
+    src/ModelCatalog.h
     src/NewBoxDialog.cpp
     src/NewBoxDialog.h
     src/PortAllocator.cpp
