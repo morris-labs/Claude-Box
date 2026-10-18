@@ -1322,6 +1322,8 @@ bool DockerBackend::createNew(BoxRecord &rec, bool workspaceSubdir, QString *err
     }
 
     rec.wasRunning = true;
+    rec.launchedModel = rec.model;
+    rec.launchedEffort = rec.effort;
     rec.save();
     return true;
 }
@@ -1410,6 +1412,8 @@ bool DockerBackend::reopen(const BoxRecord &rec, QString *errorOut) const
         return false;
 
     updated.wasRunning = true;
+    updated.launchedModel = updated.model;
+    updated.launchedEffort = updated.effort;
     updated.save();
     return true;
 }
@@ -1431,6 +1435,105 @@ bool DockerBackend::stop(const QString &name, QString *errorOut) const
     return true;
 }
 
+// The last assistant entry of a transcript carries the model and effort the
+// session was using. Only the tail is read: transcripts run to tens of MB and
+// the newest entry is at the end.
+static void liveModelAndEffort(const QString &transcript, QString *model, QString *effort)
+{
+    QFile f(transcript);
+    if (!f.open(QIODevice::ReadOnly))
+        return;
+    const qint64 tail = 4 * 1024 * 1024;
+    if (f.size() > tail)
+        f.seek(f.size() - tail);
+    const QList<QByteArray> lines = f.readAll().split('\n');
+    for (int i = lines.size() - 1; i >= 0; --i) {
+        const QByteArray &line = lines.at(i);
+        if (!line.contains("\"type\":\"assistant\""))
+            continue;
+        const QJsonObject obj = QJsonDocument::fromJson(line).object();
+        if (obj.value("type").toString() != QLatin1String("assistant"))
+            continue; // a partial first line or an unrelated entry
+        QString m = obj.value("requestedModel").toString();
+        if (m.isEmpty())
+            m = obj.value("message").toObject().value("model").toString();
+        if (m.isEmpty() || m.startsWith(QLatin1Char('<')))
+            continue; // "<synthetic>": not a real model reply
+        *model = m;
+        *effort = obj.value("effort").toString();
+        return;
+    }
+}
+
+// "opus" and "opus[1m]" name the same model as claude-opus-5-5: an alias the
+// record uses on purpose must not be replaced by the id it resolves to.
+static bool sameModel(QString recorded, const QString &live)
+{
+    const int bracket = recorded.indexOf(QLatin1Char('['));
+    if (bracket >= 0)
+        recorded.truncate(bracket);
+    if (recorded.isEmpty() || recorded == live)
+        return true;
+    return !recorded.startsWith(QLatin1String("claude-")) && live.contains(recorded, Qt::CaseInsensitive);
+}
+
+bool DockerBackend::syncRecordFromSession(const QString &boxName)
+{
+    BoxRecord rec = BoxRecord::load(boxName);
+    if (!rec.isValid())
+        return false;
+    bool changed = false;
+
+    // The name: Claude's session file for this box. In a shared container the
+    // directory is the container's, so the box's file is found by session id;
+    // otherwise whatever is in the box's own directory is its process.
+    const QString dir = BoxRecord::sessionsDir(rec.containerName() == rec.name ? rec.name : rec.containerName());
+    QString liveName;
+    QString liveSession;
+    qint64 newest = -1;
+    for (const QFileInfo &fi : QDir(dir).entryInfoList({QStringLiteral("*.json")}, QDir::Files)) {
+        QFile f(fi.absoluteFilePath());
+        if (!f.open(QIODevice::ReadOnly))
+            continue;
+        const QJsonObject obj = QJsonDocument::fromJson(f.readAll()).object();
+        const QString sid = obj.value("sessionId").toString();
+        if (sid.isEmpty() || (rec.isShared() && sid != rec.sessionUuid))
+            continue;
+        const qint64 updated = static_cast<qint64>(obj.value("updatedAt").toDouble());
+        if (updated >= newest) {
+            newest = updated;
+            liveSession = sid;
+            liveName = obj.value("nameSource").toString() == QLatin1String("user")
+                ? obj.value("name").toString() : QString();
+        }
+    }
+    if (!liveName.isEmpty() && liveName != rec.conversationName) {
+        rec.conversationName = liveName;
+        changed = true;
+    }
+
+    // Model and effort, from the transcript of the session that ran. Skipped
+    // for a setting edited since launch (pending a restart), and for a record
+    // that leaves it to the settings files.
+    const QString uuid = !liveSession.isEmpty() ? liveSession : rec.sessionUuid;
+    if (!uuid.isEmpty()) {
+        QString model, effort;
+        liveModelAndEffort(ConversationCatalog::projectDirFor(rec.workDir()) + QLatin1Char('/') + uuid
+                               + QStringLiteral(".jsonl"), &model, &effort);
+        const bool modelUntouched = rec.launchedModel.isEmpty() || rec.model == rec.launchedModel;
+        if (!model.isEmpty() && !rec.model.isEmpty() && modelUntouched && !sameModel(rec.model, model)) {
+            rec.model = model;
+            changed = true;
+        }
+        const bool effortUntouched = rec.launchedEffort.isEmpty() || rec.effort == rec.launchedEffort;
+        if (!effort.isEmpty() && !rec.effort.isEmpty() && effortUntouched && rec.effort != effort) {
+            rec.effort = effort;
+            changed = true;
+        }
+    }
+    return changed && rec.save();
+}
+
 void DockerBackend::stopMany(const QStringList &names, QHash<QString, QString> *errorsOut) const
 {
     // Issue every stop request up front. The old version followed each stop
@@ -1441,6 +1544,7 @@ void DockerBackend::stopMany(const QStringList &names, QHash<QString, QString> *
     for (const QString &name : names) {
         bool ok = false;
         QString error;
+        syncRecordFromSession(name); // while the session and its files are still there
         const BoxRecord shared = BoxRecord::load(name);
         if (shared.isValid() && shared.isShared()) {
             // Ending the conversation's tmux session is the whole stop; the

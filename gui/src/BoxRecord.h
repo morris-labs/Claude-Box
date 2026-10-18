@@ -50,6 +50,11 @@ struct BoxRecord {
     // change into conversationName in the first case -- otherwise a
     // deliberate rename would get silently reverted on the next Start.
     QString transcriptSyncedName;
+    // The model and effort the running claude was started with. When the
+    // record has since been edited (a change waiting for a restart), stopping
+    // the box must not overwrite it with what the session was using.
+    QString launchedModel;
+    QString launchedEffort;
     // `claude --dangerously-skip-permissions`. Still stored under the old
     // `yolo=` key so existing records keep working; only the name here
     // and in the UI changed, to say what the flag actually does.
