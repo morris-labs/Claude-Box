@@ -2274,20 +2274,24 @@ void MainWindow::onOpenExternalClaude()
     const BoxInfo *info = selectedBoxInfo();
     if (!info || info->status != BoxInfo::Status::Running)
         return;
+    // A box in a shared container is a tmux session in the project's container.
+    const BoxRecord rec = BoxRecord::load(info->name);
+    const QString container = rec.isValid() ? rec.containerName() : info->name;
+    const QString session = rec.isValid() ? rec.tmuxSession() : QStringLiteral("main");
 
 #ifdef Q_OS_WIN
     // Route through wt.exe/conhost.exe -- direct docker.exe is NOT used because
     // a GUI app has no console and docker's -it attach fails silently without one.
     // See the launchInWindowsTerminal() comment above.
     const QStringList dockerArgs = {
-        "exec", "-it", info->name,
+        "exec", "-it", container,
         "bash", "-c",
         QStringLiteral("count=0; "
-            "until tmux has-session -t main 2>/dev/null; do "
+            "until tmux has-session -t =%1 2>/dev/null; do "
               "sleep 0.5; count=$((count+1)); "
               "[ $count -ge 60 ] && exit 1; "
             "done; "
-            "exec tmux attach -t main")
+            "exec tmux attach -t =%1").arg(session)
     };
     if (launchInWindowsTerminal(dockerArgs))
         return;
@@ -2317,12 +2321,12 @@ void MainWindow::onOpenExternalClaude()
     const QString dockerCmd = QStringLiteral(
         "%1 exec -it %2 bash -c "
         "'count=0; "
-        "until tmux has-session -t main 2>/dev/null; do "
+        "until tmux has-session -t =%3 2>/dev/null; do "
           "sleep 0.5; count=$((count+1)); "
           "[ $count -ge 60 ] && exit 1; "
         "done; "
-        "exec tmux attach -t main'"
-    ).arg(quotedDockerBin, info->name);
+        "exec tmux attach -t =%3'"
+    ).arg(quotedDockerBin, container, session);
 
     const QStringList iterm2Paths = {
         QStringLiteral("/Applications/iTerm.app"),
@@ -2348,7 +2352,7 @@ void MainWindow::onOpenExternalClaude()
         // invocations for different containers overwrite the same script
         // before Terminal.app has read the first one.
         const QString tmpPath = QDir::tempPath()
-            + QStringLiteral("/claude-box-attach-%1.sh").arg(info->name);
+            + QStringLiteral("/claude-box-attach-%1.sh").arg(container + QLatin1Char('-') + session);
         QFile f(tmpPath);
         if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream s(&f);
@@ -2384,12 +2388,12 @@ void MainWindow::onOpenExternalClaude()
         "bash", "-c",
         QStringLiteral("docker exec -it %1 bash -c "
                        "'count=0; "
-                       "until tmux has-session -t main 2>/dev/null; do "
+                       "until tmux has-session -t =%2 2>/dev/null; do "
                          "sleep 0.5; count=$((count+1)); "
                          "[ $count -ge 60 ] && exit 1; "
                        "done; "
-                       "exec tmux attach -t main'")
-            .arg(info->name)
+                       "exec tmux attach -t =%2'")
+            .arg(container, session)
     };
 
     struct Spec { QString term; bool gnomeStyle; };
@@ -2423,6 +2427,8 @@ void MainWindow::onOpenExternal()
     const BoxInfo *info = selectedBoxInfo();
     if (!info || info->status != BoxInfo::Status::Running)
         return;
+    const BoxRecord rec = BoxRecord::load(info->name);
+    const QString container = rec.isValid() ? rec.containerName() : info->name;
 
 #ifdef Q_OS_WIN
     // Confirmed working (phase 4 follow-up): docker exec -it bash runs
@@ -2431,7 +2437,7 @@ void MainWindow::onOpenExternal()
     // launchInWindowsTerminal() (wt.exe/conhost.exe) rather than direct
     // docker.exe because a GUI app has no console -- see that helper.
     const QStringList dockerArgs = {
-        "exec", "-it", info->name, "bash"
+        "exec", "-it", container, "bash"
     };
     if (launchInWindowsTerminal(dockerArgs))
         return;
@@ -2456,7 +2462,7 @@ void MainWindow::onOpenExternal()
         + QString(dockerBin).replace(QLatin1Char('\''), QStringLiteral("'\\''"))
         + QLatin1Char('\'');
     const QString dockerCmd = QStringLiteral("%1 exec -it %2 bash")
-        .arg(quotedDockerBin, info->name);
+        .arg(quotedDockerBin, container);
 
     // iTerm2 -- check common install locations before attempting the
     // AppleScript, so osascript doesn't report a "can't find application"
@@ -2488,7 +2494,7 @@ void MainWindow::onOpenExternal()
     // the same script before Terminal.app has read the first one.
     {
         const QString tmpPath = QDir::tempPath()
-            + QStringLiteral("/claude-box-open-%1.sh").arg(info->name);
+            + QStringLiteral("/claude-box-open-%1.sh").arg(container);
         QFile f(tmpPath);
         if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream s(&f);
@@ -2518,7 +2524,7 @@ void MainWindow::onOpenExternal()
     // Open a plain interactive shell in the container.
     const QStringList innerCmd = {
         "bash", "-c",
-        QStringLiteral("docker exec -it %1 bash").arg(info->name)
+        QStringLiteral("docker exec -it %1 bash").arg(container)
     };
 
     // Try terminals in preference order: $TERMINAL env var, then common ones.
