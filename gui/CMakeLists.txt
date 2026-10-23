@@ -56,6 +56,7 @@ add_executable(claude-box-gui WIN32
     src/Worktrees.cpp
     src/Worktrees.h
     src/ProjectRecord.cpp
+    src/GlobalMounts.cpp
     src/ProjectRecord.h
     src/ProjectPanel.cpp
     src/ProjectPanel.h

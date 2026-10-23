@@ -6,7 +6,9 @@
 #include "BoxRecord.h"
 #include "ClaudeCodeUpdateChecker.h"
 #include "Icons.h"
+#include "ContainerPaths.h"
 #include "ConversationCatalog.h"
+#include "GlobalMounts.h"
 #include "ManageSshRemotesDialog.h"
 #include "ModelCatalog.h"
 #include "NewBoxDialog.h"
@@ -38,6 +40,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QItemSelectionModel>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -523,6 +526,7 @@ void MainWindow::buildMenus()
         PromptsDialog dlg(this);
         dlg.exec();
     });
+    fileMenu->addAction(QStringLiteral("Global &Mounts..."), this, &MainWindow::onEditGlobalMounts);
     fileMenu->addSeparator();
     QAction *quit = fileMenu->addAction(QStringLiteral("&Quit"), this, &QWidget::close);
     quit->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Q")));
@@ -1834,6 +1838,61 @@ bool MainWindow::confirmSharedMounts(const ProjectRecord &project, const QString
             startBox(name, false);
     }
     return true;
+}
+
+// Mounts every box gets, like the Claude directories. Saving checks the host
+// directories exist; then each running shared container that lacks them
+// offers to restart its boxes, and running classic boxes are listed, since
+// they pick the mounts up only when next started.
+void MainWindow::onEditGlobalMounts()
+{
+    bool ok = false;
+    const QString text = QInputDialog::getMultiLineText(
+        this, QStringLiteral("Global mounts"),
+        QStringLiteral("Mounted into every box, one per line, HOST_PATH or HOST_PATH:CONTAINER_PATH.\n"
+                       "A box's or project's own mount at the same container path takes precedence.\n"
+                       "Applied when a container is next created."),
+        GlobalMounts::load().join('\n'), &ok);
+    if (!ok)
+        return;
+    QStringList dirs, missing;
+    for (const QString &line : text.split('\n', Qt::SkipEmptyParts)) {
+        const QString t = line.trimmed();
+        if (t.isEmpty())
+            continue;
+        QString hostRaw, containerPath;
+        ContainerPaths::splitMountSpec(t, hostRaw, containerPath);
+        // Docker would create a missing directory owned by root.
+        if (!QFileInfo(hostRaw).isDir())
+            missing << hostRaw;
+        dirs << t;
+    }
+    if (!missing.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Global mounts"),
+                             QStringLiteral("These directories do not exist on the host:\n\n")
+                                 + missing.join('\n') + QStringLiteral("\n\nNothing was saved."));
+        return;
+    }
+    if (!GlobalMounts::save(dirs)) {
+        QMessageBox::warning(this, QStringLiteral("Global mounts"),
+                             QStringLiteral("Could not save ") + GlobalMounts::filePath());
+        return;
+    }
+
+    for (const ProjectRecord &project : ProjectRecord::loadAll()) {
+        if (!confirmSharedMounts(project))
+            break;
+    }
+    QStringList classic;
+    for (const BoxRecord &rec : BoxRecord::loadAll()) {
+        if (!rec.isShared() && m_docker.isRunning(rec.name))
+            classic << rec.name;
+    }
+    if (!classic.isEmpty())
+        QMessageBox::information(this, QStringLiteral("Global mounts"),
+                                 QStringLiteral("These boxes have their own container and get the change "
+                                                "when they are next started:\n\n") + classic.join('\n'));
+    refreshBoxes();
 }
 
 // Moves a project's classic boxes into its shared container. A box that is
