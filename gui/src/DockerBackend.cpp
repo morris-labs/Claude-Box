@@ -3,6 +3,7 @@
 #include "ContainerPaths.h"
 #include "ConversationCatalog.h"
 #include "DockerApi.h"
+#include "GlobalMounts.h"
 #include "ProjectRecord.h"
 #include "PromptTemplates.h"
 #include "PortAllocator.h"
@@ -785,7 +786,7 @@ DockerBackend::LaunchSpec DockerBackend::launchSpec(const BoxRecord &rec,
         spec.envFile.clear();
 
     spec.ports = rec.ports;
-    for (const QString &d : rec.dirs) {
+    for (const QString &d : GlobalMounts::mergedWith(rec.dirs)) {
         QString hostRaw, containerPath;
         ContainerPaths::splitMountSpec(d, hostRaw, containerPath);
         const QString hostAbs = QFileInfo(hostRaw).absoluteFilePath();
@@ -854,7 +855,7 @@ bool DockerBackend::runContainer(const BoxRecord &rec, const QStringList &claude
     for (const QString &p : rec.ports)
         args << "-p" << p;
 
-    for (const QString &d : rec.dirs) {
+    for (const QString &d : GlobalMounts::mergedWith(rec.dirs)) {
         QString hostRaw, containerPath;
         ContainerPaths::splitMountSpec(d, hostRaw, containerPath);
         const QString hostPath = QFileInfo(hostRaw).absoluteFilePath();
@@ -993,7 +994,8 @@ bool DockerBackend::runSharedContainer(const ProjectRecord &project, QString *er
 QStringList DockerBackend::staleSharedMounts(const ProjectRecord &project) const
 {
     const QString container = project.containerName();
-    if (project.dirs.isEmpty() || !isRunning(container))
+    const QStringList wanted = GlobalMounts::mergedWith(project.dirs);
+    if (wanted.isEmpty() || !isRunning(container))
         return {};
 
     QStringList have;
@@ -1010,7 +1012,7 @@ QStringList DockerBackend::staleSharedMounts(const ProjectRecord &project) const
     }
 
     QStringList missing;
-    for (const QString &d : project.dirs) {
+    for (const QString &d : wanted) {
         QString hostRaw, containerPath;
         ContainerPaths::splitMountSpec(d, hostRaw, containerPath);
         const QString hostPath = QFileInfo(hostRaw).absoluteFilePath();

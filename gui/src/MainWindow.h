@@ -64,6 +64,7 @@ private slots:
     void onEdit();
     void offerResumeAfterReboot();
     void onConvertToShared(const QString &root);
+    void onEditGlobalMounts();
     // False if the user cancels. When the project's shared container is running
     // without mounts the project now lists and boxes are live in it, asks to
     // restart them all so the change applies; `starting` is a box the caller is
