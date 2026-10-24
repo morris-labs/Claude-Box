@@ -42,6 +42,7 @@
 #include <QItemSelectionModel>
 #include <QInputDialog>
 #include <QLabel>
+#include <QPushButton>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
@@ -1627,7 +1628,15 @@ void MainWindow::offerResumeAfterReboot()
     msg.setInformativeText(detail);
     msg.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
     msg.setDefaultButton(QMessageBox::Yes);
-    if (msg.exec() != QMessageBox::Yes)
+    // The boxes are all stopped here, which is the moment to update the
+    // image; the list survives the rebuild, so nothing has to be reopened
+    // by hand afterwards.
+    QPushButton *rebuild = msg.addButton(QStringLiteral("Rebuild Image First..."),
+                                         QMessageBox::ActionRole);
+    msg.exec();
+    if (msg.clickedButton() == rebuild)
+        onSetupWizard();
+    else if (msg.result() != QMessageBox::Yes)
         return;
 
     for (const QString &name : resumable)
@@ -1646,6 +1655,20 @@ void MainWindow::onNew()
         return;
     ProjectRecord project = ProjectRecord::forRoot(dlg.targetDir());
     PortAllocator::ensurePool(project);
+    if (project.sharedContainer) {
+        // The box shares the project's container, so its mounts are the project's.
+        bool added = false;
+        for (const QString &d : dlg.dirs()) {
+            if (!project.dirs.contains(d)) {
+                project.dirs << d;
+                added = true;
+            }
+        }
+        if (added && !project.save()) {
+            QMessageBox::warning(this, QStringLiteral("New Box"), QStringLiteral("Could not save the project's mounts."));
+            return;
+        }
+    }
     if (!confirmSharedMounts(project))
         return;
     if (!project.sharedContainer)
@@ -1713,8 +1736,13 @@ void MainWindow::onEdit()
     // copies `name` out before its confirmation box, below).
     const bool wasRunning = info->status == BoxInfo::Status::Running;
 
+    // A box in a shared container uses its project's mounts, so those are
+    // what the dialog shows and what saving changes.
+    BoxRecord shown = rec;
+    if (rec.isShared())
+        shown.dirs = ProjectRecord::forRoot(rec.targetDir).dirs;
     NewBoxDialog dlg(this);
-    dlg.loadForEdit(rec);
+    dlg.loadForEdit(shown);
     const QString shownUuid = rec.sessionUuid;
     const QString shownName = rec.conversationName;
     if (dlg.exec() != QDialog::Accepted)
@@ -1747,9 +1775,23 @@ void MainWindow::onEdit()
     if (uuidChanged && !newUuid.isEmpty() && !confirmConversationAdoption(newUuid))
         return;
 
-    // A box in a shared container has no ports or mounts of its own to edit:
-    // they belong to the project's container, so the dialog's are ignored.
+    // A box in a shared container has no ports or mounts of its own: its
+    // ports come from the project's pool and its mounts are the project's,
+    // which are saved here and applied by recreating the container.
     const bool sharedBox = rec.isShared();
+    if (sharedBox) {
+        ProjectRecord project = ProjectRecord::forRoot(rec.targetDir);
+        if (project.dirs != dlg.dirs()) {
+            project.dirs = dlg.dirs();
+            if (!project.save()) {
+                QMessageBox::warning(this, QStringLiteral("Edit Box"),
+                                     QStringLiteral("Could not save the project's mounts."));
+                return;
+            }
+            if (!confirmSharedMounts(project))
+                return;
+        }
+    }
     const bool needsRestart = uuidChanged
         || (!sharedBox && (rec.ports != dlg.ports() || rec.dirs != dlg.dirs()))
         || rec.skipPermissions != dlg.skipPermissions() || rec.model != dlg.model()
@@ -1812,11 +1854,10 @@ bool MainWindow::confirmSharedMounts(const ProjectRecord &project, const QString
             boxes << rec.name;
     }
     const QString msg = QStringLiteral(
-        "The project's container is running without these mounts:\n\n%1\n\n"
+        "The project's container is running with different mounts. Changes:\n\n%1\n\n"
         "A container's mounts are fixed when it is created. Restarting recreates it, which stops "
         "and resumes every box in it:\n\n%2\n\n"
-        "Yes: restart them now.\nNo: leave the container as it is; the mounts are missing until it "
-        "is next recreated.").arg(missing.join('\n'), boxes.join('\n'));
+        "Yes: restart them now.\nNo: leave the container as it is until it is next recreated.").arg(missing.join('\n'), boxes.join('\n'));
     const auto answer = QMessageBox::question(this, QStringLiteral("Project mounts"), msg,
                                               QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
     if (answer == QMessageBox::Cancel)

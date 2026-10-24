@@ -988,14 +988,38 @@ bool DockerBackend::runSharedContainer(const ProjectRecord &project, QString *er
     stand.ports = project.ports;
     stand.dirs = project.dirs;
     stand.skipPermissions = false;
-    return runContainer(stand, {}, errorOut, sharedKeeperCommand());
+    if (!runContainer(stand, {}, errorOut, sharedKeeperCommand()))
+        return false;
+    // What the container was created with, so staleSharedMounts can also
+    // tell when a mount was removed (docker cannot say which of its binds
+    // came from the project's list).
+    QFile file(SharedContainer::stateDir(stand.name) + QStringLiteral("/mounts"));
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+        file.write((GlobalMounts::mergedWith(project.dirs).join('\n') + '\n').toUtf8());
+    return true;
 }
 
 QStringList DockerBackend::staleSharedMounts(const ProjectRecord &project) const
 {
     const QString container = project.containerName();
     const QStringList wanted = GlobalMounts::mergedWith(project.dirs);
-    if (wanted.isEmpty() || !isRunning(container))
+    if (!isRunning(container))
+        return {};
+
+    // Containers created since the mounts file exists: compare both ways.
+    QFile recorded(SharedContainer::stateDir(container) + QStringLiteral("/mounts"));
+    if (recorded.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QStringList had = QString::fromUtf8(recorded.readAll()).split('\n', Qt::SkipEmptyParts);
+        QStringList changed;
+        for (const QString &d : wanted)
+            if (!had.contains(d))
+                changed << d;
+        for (const QString &d : had)
+            if (!wanted.contains(d))
+                changed << d + QStringLiteral(" (removed)");
+        return changed;
+    }
+    if (wanted.isEmpty())
         return {};
 
     QStringList have;
