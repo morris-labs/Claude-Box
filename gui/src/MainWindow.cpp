@@ -238,7 +238,8 @@ void MainWindow::buildActions()
     m_openAllAction->setStatusTip(QStringLiteral("Start every stopped box that was running before the last reboot or crash"));
     connect(m_openAllAction, &QAction::triggered, this, &MainWindow::onOpenAll);
 
-    m_restartAllAction = new QAction(QStringLiteral("&Restart All Running..."), this);
+    m_restartAllAction = new QAction(Icons::refresh(), QStringLiteral("&Restart All Running..."), this);
+    m_restartAllAction->setIconText(QStringLiteral("Restart All"));
     m_restartAllAction->setStatusTip(QStringLiteral("Stop every running box and start it again, optionally after rebuilding the image"));
     connect(m_restartAllAction, &QAction::triggered, this, &MainWindow::onRestartAll);
 
@@ -595,6 +596,7 @@ void MainWindow::buildToolBar()
     toolbar->addAction(m_editAction);
     toolbar->addAction(m_forkAction);
     toolbar->addAction(m_closeAction);
+    toolbar->addAction(m_restartAllAction);
     toolbar->addAction(m_openExternalClaudeAction);
     toolbar->addAction(m_openExternalAction);
     toolbar->addSeparator();
