@@ -999,6 +999,24 @@ bool DockerBackend::runSharedContainer(const ProjectRecord &project, QString *er
     return true;
 }
 
+// True when the container was created from an older build of the
+// claude-code image than the one tagged now.
+bool DockerBackend::runsOldImage(const QString &container) const
+{
+    QString have, want;
+    if (DockerApi::isAvailable()) {
+        const QString base = QStringLiteral("/") + DockerApi::kApiVersion;
+        have = DockerApi::get(base + "/containers/" + container + "/json").object().value("Image").toString();
+        want = DockerApi::get(base + "/images/claude-code/json").object().value("Id").toString();
+    } else {
+        runDocker({"inspect", "-f", "{{.Image}}", container}, &have, nullptr, 5000);
+        runDocker({"image", "inspect", "-f", "{{.Id}}", "claude-code"}, &want, nullptr, 5000);
+    }
+    have = have.trimmed();
+    want = want.trimmed();
+    return !have.isEmpty() && !want.isEmpty() && have != want;
+}
+
 QStringList DockerBackend::staleSharedMounts(const ProjectRecord &project) const
 {
     const QString container = project.containerName();
@@ -1068,8 +1086,9 @@ bool DockerBackend::startShared(const BoxRecord &rec, const QStringList &claudeA
     // A container that is only lingering after its last session, with mounts
     // the project has since changed, is replaced rather than reused: nothing is
     // running in it, and reusing it would silently ignore the change.
+    // The same goes for one created from an image that has since been rebuilt.
     if (isRunning(container) && SharedContainer::liveSessions(container).isEmpty()
-        && !staleSharedMounts(project).isEmpty()) {
+        && (!staleSharedMounts(project).isEmpty() || runsOldImage(container))) {
         stopMany({container}, nullptr);
         waitForRemoval(container);
     }
@@ -1365,7 +1384,12 @@ QStringList DockerBackend::baseClaudeArgs(const BoxRecord &rec)
     // Unconditional, and not recorded per box: remote control is how you
     // pick a conversation up on another device, and there is no reason to
     // run a sandbox without that available.
+    // The optional name is what the Claude apps list the session as;
+    // without it they show an auto-generated hostname-based name, since
+    // --name only sets the name inside Claude Code itself.
     args << "--remote-control";
+    if (!rec.conversationName.isEmpty())
+        args << rec.conversationName;
 
     if (rec.skipPermissions)
         args << "--dangerously-skip-permissions";
