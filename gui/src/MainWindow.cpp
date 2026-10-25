@@ -238,6 +238,10 @@ void MainWindow::buildActions()
     m_openAllAction->setStatusTip(QStringLiteral("Start every stopped box that was running before the last reboot or crash"));
     connect(m_openAllAction, &QAction::triggered, this, &MainWindow::onOpenAll);
 
+    m_restartAllAction = new QAction(QStringLiteral("&Restart All Running..."), this);
+    m_restartAllAction->setStatusTip(QStringLiteral("Stop every running box and start it again, optionally after rebuilding the image"));
+    connect(m_restartAllAction, &QAction::triggered, this, &MainWindow::onRestartAll);
+
     m_openExternalAction = new QAction(QStringLiteral("Open Shell in &Container"), this);
     m_openExternalAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+T")));
     m_openExternalAction->setStatusTip(QStringLiteral("Open an interactive shell inside this container in an external terminal"));
@@ -541,6 +545,7 @@ void MainWindow::buildMenus()
     boxMenu->addAction(m_closeAction);
     boxMenu->addAction(m_stopAllAction);
     boxMenu->addAction(m_openAllAction);
+    boxMenu->addAction(m_restartAllAction);
     boxMenu->addAction(m_openExternalClaudeAction);
     boxMenu->addAction(m_openExternalAction);
     boxMenu->addSeparator();
@@ -960,6 +965,7 @@ void MainWindow::updateActionStates()
     // Multi-item actions: any matching selection is enough.
     m_openAction->setEnabled(anyStopped);
     m_closeAction->setEnabled(anyRunning);
+    m_restartAllAction->setEnabled(anyRunning);
     // Remove is available for any non-running box. For Exited containers
     // (stuck in Docker's exited state, rare with --rm) it also does docker rm.
     // For Stopped boxes (BoxRecord only, container already gone) it just
@@ -1631,12 +1637,18 @@ void MainWindow::offerResumeAfterReboot()
     // The boxes are all stopped here, which is the moment to update the
     // image; the list survives the rebuild, so nothing has to be reopened
     // by hand afterwards.
-    QPushButton *rebuild = msg.addButton(QStringLiteral("Rebuild Image First..."),
+    // The wizard opens over this prompt, which stays open so the choice to
+    // resume is made after the rebuild.
+    QPushButton *rebuild = msg.addButton(QStringLiteral("Rebuild Image..."),
                                          QMessageBox::ActionRole);
-    msg.exec();
-    if (msg.clickedButton() == rebuild)
-        onSetupWizard();
-    else if (msg.result() != QMessageBox::Yes)
+    rebuild->disconnect(&msg); // keep the prompt open when it is clicked
+    connect(rebuild, &QPushButton::clicked, &msg, [this, &msg] {
+        SetupWizard dlg(&msg);
+        dlg.exec();
+        if (m_claudeCodeChecker)
+            m_claudeCodeChecker->checkNow();
+    });
+    if (msg.exec() != QMessageBox::Yes)
         return;
 
     for (const QString &name : resumable)
@@ -2323,6 +2335,71 @@ void MainWindow::onStopAll()
                     stopTunnelsForBox(name);
                 }
             }
+            refreshBoxes();
+        }, Qt::QueuedConnection);
+    });
+}
+
+// Restarts every running box, which is how a rebuilt image or changed
+// mounts reach boxes that are already running. The prompt can open the
+// setup wizard over itself to rebuild the image first.
+void MainWindow::onRestartAll()
+{
+    QStringList names;
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        if (const BoxInfo *row = m_model->boxAt(i);
+            row && row->status == BoxInfo::Status::Running)
+            names << row->name;
+    }
+    if (names.isEmpty())
+        return;
+
+    QMessageBox msg(this);
+    msg.setWindowTitle(QStringLiteral("Restart All"));
+    msg.setText(QStringLiteral("Restart %1 running box(es)?").arg(names.size()));
+    msg.setInformativeText(QStringLiteral("Each conversation resumes where it left off.\n\n  ")
+                           + names.join(QStringLiteral("\n  ")));
+    msg.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    msg.setDefaultButton(QMessageBox::Yes);
+    QPushButton *rebuild = msg.addButton(QStringLiteral("Rebuild Image..."), QMessageBox::ActionRole);
+    rebuild->disconnect(&msg); // keep the prompt open when it is clicked
+    connect(rebuild, &QPushButton::clicked, &msg, [this, &msg] {
+        SetupWizard dlg(&msg);
+        dlg.exec();
+        if (m_claudeCodeChecker)
+            m_claudeCodeChecker->checkNow();
+    });
+    if (msg.exec() != QMessageBox::Yes)
+        return;
+
+    for (const QString &name : names)
+        m_transient.insert(name, BoxInfo::Status::Stopping);
+    applyTransientToModel();
+
+    (void)QtConcurrent::run([this, names]() {
+        QHash<QString, QString> errors;
+        m_docker.stopMany(names, &errors);
+        // A classic box's container must be gone before one of the same
+        // name can start.
+        m_docker.waitForRemovalMany(names);
+        QMetaObject::invokeMethod(this, [this, names, errors]() {
+            QStringList failed;
+            for (const QString &name : names) {
+                m_transient.remove(name);
+                if (errors.contains(name)) {
+                    failed << name + QStringLiteral(": ") + errors.value(name);
+                    continue;
+                }
+                closeTabForBox(name);
+                stopTunnelsForBox(name);
+            }
+            for (const QString &name : names) {
+                if (!errors.contains(name))
+                    startBox(name, /*syncTranscriptTitle=*/false);
+            }
+            if (!failed.isEmpty())
+                QMessageBox::warning(this, QStringLiteral("Restart All"),
+                                     QStringLiteral("Could not stop:\n\n") + failed.join('\n'));
             refreshBoxes();
         }, Qt::QueuedConnection);
     });

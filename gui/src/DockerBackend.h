@@ -194,6 +194,10 @@ public:
     // stop() for onEdit's stop-then-restart flow) do so separately. Failures
     // are reported per name via errorsOut (keyed by name; absent = success).
     void stopMany(const QStringList &names, QHash<QString, QString> *errorsOut) const;
+    // Same polling logic, shared across an arbitrary set of names in one
+    // event loop -- see stopMany(). Returns the subset still not confirmed
+    // gone when the 5s timeout is hit (empty means all of them are gone).
+    QStringList waitForRemovalMany(const QStringList &names) const;
 
 private:
     // Everything here has two implementations: the Engine API (see
@@ -210,6 +214,7 @@ private:
     // Shared (one per project) containers; see SharedContainer.h.
     // Creates the project's container when it is not running.
     bool runSharedContainer(const ProjectRecord &project, QString *errorOut) const;
+    bool runsOldImage(const QString &container) const;
     // Starts `rec` as a tmux session in its project's shared container,
     // creating the container first when needed.
     bool startShared(const BoxRecord &rec, const QStringList &claudeArgs, QString *errorOut) const;
@@ -262,10 +267,6 @@ private:
     // wait here or they'll get "name already in use". Returns true when gone,
     // false on timeout (5 s).
     bool waitForRemoval(const QString &name) const;
-    // Same polling logic, shared across an arbitrary set of names in one
-    // event loop -- see stopMany(). Returns the subset still not confirmed
-    // gone when the 5s timeout is hit (empty means all of them are gone).
-    QStringList waitForRemovalMany(const QStringList &names) const;
     // `commandOverride`, when not empty, replaces the usual claude command as
     // the container's argv (after the image). A shared container uses it to
     // run the keeper script; see SharedContainer.h.

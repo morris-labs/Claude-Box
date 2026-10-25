@@ -77,6 +77,7 @@ private slots:
     void onClose();
     void onStopAll();
     void onOpenAll();
+    void onRestartAll();
     void onOpenExternal();
     void onOpenExternalClaude();
     void onRemove();
@@ -161,6 +162,7 @@ private:
     QAction *m_closeAction = nullptr;
     QAction *m_stopAllAction = nullptr;
     QAction *m_openAllAction = nullptr;
+    QAction *m_restartAllAction = nullptr;
     QAction *m_openExternalAction = nullptr;
     QAction *m_openExternalClaudeAction = nullptr;
     QAction *m_removeAction = nullptr;
